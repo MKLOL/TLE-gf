@@ -12,7 +12,7 @@ from tle.util import codeforces_common as cf_common
 
 # ruff: noqa: N815
 
-API_BASE_URL = 'https://codeforces.com/api/'
+API_BASE_URL = 'https://mirror.codeforces.com/api/'
 CONTEST_BASE_URL = 'https://codeforces.com/contest/'
 CONTESTS_BASE_URL = 'https://codeforces.com/contests/'
 GYM_BASE_URL = 'https://codeforces.com/gym/'

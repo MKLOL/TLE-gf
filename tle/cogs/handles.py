@@ -352,7 +352,7 @@ class Handles(commands.Cog):
         if role_to_assign is not None:
             role_names_to_remove.discard(role_to_assign.name)
             if role_to_assign.name not in ['Unrated', 'Newbie', 'Pupil', 'Specialist', 'Expert']:
-                role_names_to_remove.add('Purgatory')
+                role_names_to_remove.add('Shadow Realm')
         to_remove = [role for role in member.roles if role.name in role_names_to_remove]
         if to_remove:
             await member.remove_roles(*to_remove, reason=reason)
@@ -767,7 +767,7 @@ class Handles(commands.Cog):
                                for user_id, handle in user_id_handle_pairs]
         def ispurg(member):
             # TODO: temporary code, todo properly later
-            return any(role.name == 'Purgatory' for role in member.roles)
+            return any(role.name == 'Shadow Realm' for role in member.roles)
 
         member_change_pairs = [(member, change_by_handle[handle])
                                for member, handle in member_handle_pairs
