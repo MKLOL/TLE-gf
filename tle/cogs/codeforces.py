@@ -147,7 +147,7 @@ class Codeforces(commands.Cog):
             paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)   
 
     @commands.command(brief='Recommend a problem',
-                      usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2]')
+                      usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     @cf_common.user_guard(group='gitgud')
     async def gimme(self, ctx, *args):
         handle, = await cf_common.resolve_handles(ctx, self.converter, ('!' + str(ctx.author),))
@@ -157,6 +157,7 @@ class Codeforces(commands.Cog):
 
         srating = round(cf_common.user_db.fetch_cf_user(handle).effective_rating, -2)
         erating = srating 
+        dlo,dhi = cf_common.parse_daterange(args)
         for arg in args:
             if arg[0:3].isdigit():
                 ratings = arg.split("-")
@@ -173,7 +174,8 @@ class Codeforces(commands.Cog):
                     if prob.rating >= srating and prob.rating <= erating and prob.name not in solved
                     and not cf_common.is_contest_writer(prob.contestId, handle)
                     and prob.matches_all_tags(tags)
-                    and not prob.matches_any_tag(bantags)]
+                    and not prob.matches_any_tag(bantags)
+                    and dlo <= cf_common.cache2.contest_cache.get_contest(prob.contestId).startTimeSeconds < dhi]
 
         if not problems:
             raise CodeforcesCogError('Problems not found within the search parameters')
