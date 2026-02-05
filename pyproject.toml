@@ -7,7 +7,7 @@ authors = ["meooow25 <soumiksarkar.3120@gmail.com>"]
 [tool.poetry.dependencies]
 python = "^3.8"
 "discord.py" = "^2.1.1"
-seaborn = "^0.10.1"
+seaborn = "^0.13.0"
 lxml = "^4.6"
 pillow = "^9.0"
 pycairo = "^1.19.1"
