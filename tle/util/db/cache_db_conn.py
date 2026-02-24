@@ -6,6 +6,7 @@ from tle.util import codeforces_api as cf
 
 class CacheDbConn:
     def __init__(self, db_file):
+        self.db_file = db_file
         self.conn = sqlite3.connect(db_file)
         self.create_tables()
 
@@ -153,6 +154,22 @@ class CacheDbConn:
                  'ORDER BY rating_update_time')
         res = self.conn.execute(query)
         return (cf.RatingChange._make(change) for change in res)
+
+    def get_handle_rating_mapping(self):
+        """Returns a dict mapping each handle to their most recent new_rating.
+
+        Uses a separate read-only connection so it can safely run in a background thread.
+        Much faster than get_all_rating_changes() since it returns one row per handle
+        (~900k rows) instead of all rating changes (~10M+ rows), and avoids the JOIN.
+        """
+        conn = sqlite3.connect(f'file:{self.db_file}?mode=ro', uri=True)
+        try:
+            query = ('SELECT handle, new_rating, MAX(rating_update_time) '
+                     'FROM rating_change '
+                     'GROUP BY handle')
+            return {handle: new_rating for handle, new_rating, _ in conn.execute(query)}
+        finally:
+            conn.close()
 
     def get_rating_changes_for_contest(self, contest_id):
         query = ('SELECT contest_id, name, handle, rank, rating_update_time, old_rating, new_rating '

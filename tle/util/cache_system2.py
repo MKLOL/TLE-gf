@@ -390,7 +390,7 @@ class RatingChangesCache:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def run(self):
-        self._refresh_handle_cache()
+        await self._refresh_handle_cache()
         if not self.handle_rating_cache:
             self.logger.warning('Rating changes cache on disk is empty. This must be populated '
                                 'manually before use.')
@@ -401,7 +401,7 @@ class RatingChangesCache:
         contest = self.cache_master.contest_cache.contest_by_id[contest_id]
         changes = await self._fetch([contest])
         self.cache_master.conn.clear_rating_changes(contest_id=contest_id)
-        self._save_changes(changes)
+        await self._save_changes(changes)
         return len(changes)
 
     async def fetch_all_contests(self):
@@ -418,7 +418,7 @@ class RatingChangesCache:
         total_changes = 0
         for contests_chunk in paginator.chunkify(contests, _CONTESTS_PER_BATCH_IN_CACHE_UPDATES):
             contests_chunk = await self._fetch(contests_chunk)
-            self._save_changes(contests_chunk)
+            await self._save_changes(contests_chunk)
             total_changes += len(contests_chunk)
         return total_changes
 
@@ -473,7 +473,7 @@ class RatingChangesCache:
         # Sort by the rating update time of the first change in the list of changes, assuming
         # every change in the list has the same time.
         contest_changes_pairs.sort(key=lambda pair: pair[1][0].ratingUpdateTimeSeconds)
-        self._save_changes(contest_changes_pairs)
+        await self._save_changes(contest_changes_pairs)
         for contest, changes in contest_changes_pairs:
             cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
                                          rating_changes=changes)
@@ -491,30 +491,22 @@ class RatingChangesCache:
                 pass
         return all_changes
 
-    def _save_changes(self, contest_changes_pairs):
+    async def _save_changes(self, contest_changes_pairs):
         flattened = [change for _, changes in contest_changes_pairs for change in changes]
         if not flattened:
             return
         rc = self.cache_master.conn.save_rating_changes(flattened)
         self.logger.info(f'Saved {rc} changes to database.')
-        self._refresh_handle_cache()
+        await self._refresh_handle_cache()
 
-    def _refresh_handle_cache(self):
+    async def _refresh_handle_cache(self):
         t0 = time.time()
-        changes = self.cache_master.conn.get_all_rating_changes()
-        t1 = time.time()
-        self.logger.info(f'get_all_rating_changes() query executed in {t1-t0:.2f}s')
-
-        handle_rating_cache = {}
-        count = 0
-        for change in changes:
-            handle_rating_cache[change.handle] = change.newRating
-            count += 1
-        t2 = time.time()
-        self.logger.info(f'Iterated {count} rating changes in {t2-t1:.2f}s')
-
+        loop = asyncio.get_event_loop()
+        handle_rating_cache = await loop.run_in_executor(
+            None, self.cache_master.conn.get_handle_rating_mapping)
         self.handle_rating_cache = handle_rating_cache
-        self.logger.info(f'Ratings for {len(handle_rating_cache)} handles cached (total: {t2-t0:.2f}s)')
+        elapsed = time.time() - t0
+        self.logger.info(f'Ratings for {len(handle_rating_cache)} handles cached in {elapsed:.2f}s')
 
     def get_users_with_more_than_n_contests(self, time_cutoff, n):
         return self.cache_master.conn.get_users_with_more_than_n_contests(time_cutoff, n)
