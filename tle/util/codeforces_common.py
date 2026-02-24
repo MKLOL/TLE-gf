@@ -45,26 +45,38 @@ async def initialize(nodb):
         # when it reconnects.
         return
 
-    await cf.initialize()
+    init_start = time.time()
+    logger.info('Initialization started')
 
+    t = time.time()
+    await cf.initialize()
+    logger.info(f'cf.initialize() completed in {time.time()-t:.2f}s')
+
+    t = time.time()
     if nodb:
         user_db = db.DummyUserDbConn()
     else:
         user_db = db.UserDbConn(constants.USER_DB_FILE_PATH)
+    logger.info(f'UserDbConn created in {time.time()-t:.2f}s')
 
+    t = time.time()
     cache_db = db.CacheDbConn(constants.CACHE_DB_FILE_PATH)
+    logger.info(f'CacheDbConn created in {time.time()-t:.2f}s')
+
     cache2 = cache_system2.CacheSystem(cache_db)
     await cache2.run()
 
+    t = time.time()
     try:
         with open(constants.CONTEST_WRITERS_JSON_FILE_PATH) as f:
             data = json.load(f)
         _contest_id_to_writers_map = {contest['id']: [s.lower() for s in contest['writers']] for contest in data}
-        logger.info('Contest writers loaded from JSON file')
+        logger.info(f'Contest writers loaded from JSON file in {time.time()-t:.2f}s')
     except FileNotFoundError:
         logger.warning('JSON file containing contest writers not found')
 
     _initialize_done = True
+    logger.info(f'Initialization completed in {time.time()-init_start:.2f}s')
 
 
 # algmyr's guard idea:

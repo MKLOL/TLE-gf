@@ -500,12 +500,21 @@ class RatingChangesCache:
         self._refresh_handle_cache()
 
     def _refresh_handle_cache(self):
+        t0 = time.time()
         changes = self.cache_master.conn.get_all_rating_changes()
+        t1 = time.time()
+        self.logger.info(f'get_all_rating_changes() query executed in {t1-t0:.2f}s')
+
         handle_rating_cache = {}
+        count = 0
         for change in changes:
             handle_rating_cache[change.handle] = change.newRating
+            count += 1
+        t2 = time.time()
+        self.logger.info(f'Iterated {count} rating changes in {t2-t1:.2f}s')
+
         self.handle_rating_cache = handle_rating_cache
-        self.logger.info(f'Ratings for {len(handle_rating_cache)} handles cached')
+        self.logger.info(f'Ratings for {len(handle_rating_cache)} handles cached (total: {t2-t0:.2f}s)')
 
     def get_users_with_more_than_n_contests(self, time_cutoff, n):
         return self.cache_master.conn.get_users_with_more_than_n_contests(time_cutoff, n)
@@ -740,11 +749,30 @@ class CacheSystem:
         self.problemset_cache = ProblemsetCache(self)
 
     async def run(self):
+        run_start = time.time()
+        logger.info('CacheSystem.run() started')
+
+        t = time.time()
         await self.rating_changes_cache.run()
+        logger.info(f'rating_changes_cache.run() completed in {time.time()-t:.2f}s')
+
+        t = time.time()
         await self.ranklist_cache.run()
+        logger.info(f'ranklist_cache.run() completed in {time.time()-t:.2f}s')
+
+        t = time.time()
         await self.contest_cache.run()
+        logger.info(f'contest_cache.run() completed in {time.time()-t:.2f}s')
+
+        t = time.time()
         await self.problem_cache.run()
+        logger.info(f'problem_cache.run() completed in {time.time()-t:.2f}s')
+
+        t = time.time()
         await self.problemset_cache.run()
+        logger.info(f'problemset_cache.run() completed in {time.time()-t:.2f}s')
+
+        logger.info(f'CacheSystem.run() completed in {time.time()-run_start:.2f}s')
 
     @staticmethod
     @cached(ttl=30 * 60)

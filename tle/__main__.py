@@ -79,7 +79,9 @@ async def main():
     # on_ready event handler rather than an on_ready listener.
     @discord_common.on_ready_event_once(bot)
     async def init():
+        logging.info('on_ready fired, starting initialization')
         await cf_common.initialize(args.nodb)
+        logging.info('Initialization complete, bot is ready')
         asyncio.create_task(discord_common.presence(bot))
 
     bot.add_listener(discord_common.bot_error_handler, name='on_command_error')
