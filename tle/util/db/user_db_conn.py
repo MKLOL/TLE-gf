@@ -74,7 +74,8 @@ class UniqueConstraintFailed(UserDbError):
 
 def namedtuple_factory(cursor, row):
     """Returns sqlite rows as named tuples."""
-    fields = [col[0] for col in cursor.description if col[0].isidentifier()]
+    fields = [col[0] if col[0].isidentifier() else f'col_{i}'
+              for i, col in enumerate(cursor.description)]
     Row = namedtuple("Row", fields)
     return Row(*row)
 
@@ -695,12 +696,16 @@ class UserDbConn:
         return rc
 
     def add_starboard_emoji(self, guild_id, emoji, threshold, color):
-        """Add or update an emoji configuration for a guild's starboard."""
+        """Add or update an emoji configuration for a guild's starboard.
+        Uses ON CONFLICT upsert to preserve channel_id when updating."""
         guild_id = str(guild_id)
-        self.conn.execute(
-            'INSERT OR REPLACE INTO starboard_emoji_v1 (guild_id, emoji, threshold, color) VALUES (?, ?, ?, ?)',
-            (guild_id, emoji, threshold, color)
-        )
+        self.conn.execute('''
+            INSERT INTO starboard_emoji_v1 (guild_id, emoji, threshold, color)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, emoji) DO UPDATE SET
+                threshold = excluded.threshold,
+                color = excluded.color
+        ''', (guild_id, emoji, threshold, color))
         self.conn.commit()
 
     def remove_starboard_emoji(self, guild_id, emoji):
@@ -795,24 +800,29 @@ class UserDbConn:
         self.conn.commit()
 
     def get_starboard_leaderboard(self, guild_id, emoji):
-        """Get leaderboard by number of starboarded messages per author."""
+        """Get leaderboard by number of starboarded messages per author.
+        Excludes rows with NULL or sentinel author_id (unfetchable during backfill)."""
         guild_id = str(guild_id)
         query = '''
             SELECT author_id, COUNT(*) as message_count
             FROM starboard_message_v1
-            WHERE guild_id = ? AND emoji = ? AND author_id IS NOT NULL
+            WHERE guild_id = ? AND emoji = ?
+                AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
             GROUP BY author_id
             ORDER BY message_count DESC
         '''
         return self.conn.execute(query, (guild_id, emoji)).fetchall()
 
     def get_starboard_star_leaderboard(self, guild_id, emoji):
-        """Get leaderboard by total star count per author."""
+        """Get leaderboard by total star count per author.
+        Excludes rows with NULL or sentinel author_id (unfetchable during backfill)."""
         guild_id = str(guild_id)
         query = '''
             SELECT author_id, SUM(star_count) as total_stars
             FROM starboard_message_v1
-            WHERE guild_id = ? AND emoji = ? AND author_id IS NOT NULL AND star_count > 0
+            WHERE guild_id = ? AND emoji = ?
+                AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
+                AND star_count > 0
             GROUP BY author_id
             ORDER BY total_stars DESC
         '''

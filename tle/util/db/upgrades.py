@@ -63,10 +63,22 @@ class UpgradeRegistry:
 
         start_index = 0
         if current_version:
+            found = False
             for i, (version, _, _) in enumerate(self.upgrades):
                 if version == current_version:
                     start_index = i + 1
+                    found = True
                     break
+            if not found:
+                logger.error(
+                    f"[{self.version_table}] Current version {current_version!r} not found "
+                    f"in upgrade registry! Refusing to re-run all upgrades. "
+                    f"Known versions: {[v for v, _, _ in self.upgrades]}"
+                )
+                raise RuntimeError(
+                    f"Database version {current_version!r} is not recognized by the upgrade "
+                    f"registry. This may indicate a downgrade or corruption. Aborting."
+                )
 
         pending = self.upgrades[start_index:]
         if pending:

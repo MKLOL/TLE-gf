@@ -11,6 +11,10 @@ from tle.util import paginator
 
 logger = logging.getLogger(__name__)
 
+# Sentinel value for author_id when a message could not be fetched during backfill.
+# This prevents infinite retry loops on restart. Excluded from leaderboard queries.
+_BACKFILL_UNKNOWN = '__UNKNOWN__'
+
 
 class StarboardCogError(commands.CommandError):
     pass
@@ -113,7 +117,10 @@ class Starboard(commands.Cog):
         embed.title = header
 
         if message.content:
-            embed.add_field(name='Content', value=message.content, inline=False)
+            content = message.content
+            if len(content) > 1024:
+                content = content[:1021] + '...'
+            embed.add_field(name='Content', value=content, inline=False)
 
         if message.embeds:
             data = message.embeds[0]
@@ -217,6 +224,10 @@ class Starboard(commands.Cog):
                         if msg.emoji not in emoji_set:
                             logger.debug(f'Backfill: skipping msg={msg.original_msg_id}, '
                                          f'emoji {msg.emoji} no longer tracked')
+                            # Mark as done so we don't retry on next restart
+                            cf_common.user_db.update_starboard_author_and_count(
+                                msg.original_msg_id, msg.emoji, _BACKFILL_UNKNOWN, 0
+                            )
                             self.backfill_done += 1
                             continue
 
@@ -264,6 +275,10 @@ class Starboard(commands.Cog):
                             logger.warning(f'Backfill: FAILED to find msg={msg.original_msg_id} '
                                            f'in any channel of guild={guild.id} '
                                            f'(message may have been deleted)')
+                            # Mark with sentinel so we don't retry on next restart
+                            cf_common.user_db.update_starboard_author_and_count(
+                                msg.original_msg_id, msg.emoji, _BACKFILL_UNKNOWN, 0
+                            )
                             self.backfill_failed += 1
                             self.backfill_done += 1
                             await asyncio.sleep(0.5)
@@ -285,6 +300,13 @@ class Starboard(commands.Cog):
                     except Exception as e:
                         logger.error(f'Backfill: EXCEPTION for msg={msg.original_msg_id} '
                                      f'emoji={msg.emoji}: {e}', exc_info=True)
+                        # Mark with sentinel so a persistent crash doesn't retry forever
+                        try:
+                            cf_common.user_db.update_starboard_author_and_count(
+                                msg.original_msg_id, msg.emoji, _BACKFILL_UNKNOWN, 0
+                            )
+                        except Exception:
+                            logger.debug(f'Backfill: could not set sentinel for msg={msg.original_msg_id}')
                         self.backfill_failed += 1
                         self.backfill_done += 1
                         await asyncio.sleep(1)
