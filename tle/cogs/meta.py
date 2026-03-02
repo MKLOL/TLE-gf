@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -7,7 +8,13 @@ import textwrap
 from discord.ext import commands
 
 from tle import constants
+from tle.util import codeforces_common as cf_common
 from tle.util.codeforces_common import pretty_time_format
+from tle.util import discord_common
+
+logger = logging.getLogger(__name__)
+
+_KNOWN_FEATURES = ['starboard_leaderboard']
 
 RESTART = 42
 
@@ -97,6 +104,44 @@ class Meta(commands.Cog):
         msg = [f'Guild ID: {guild.id} | Name: {guild.name} | Owner: {guild.owner.id} | Icon: {guild.icon}'
                 for guild in self.bot.guilds]
         await ctx.send('```' + '\n'.join(msg) + '```')
+
+    @meta.group(brief='Feature configuration', invoke_without_command=True)
+    @commands.has_role(constants.TLE_ADMIN)
+    async def config(self, ctx):
+        """List or toggle feature flags for this guild.
+        Known features: starboard_leaderboard"""
+        configs = cf_common.user_db.get_all_guild_configs(ctx.guild.id)
+        if not configs:
+            await ctx.send(embed=discord_common.embed_neutral('No features enabled.'))
+            return
+        lines = [f'`{c.key}` = `{c.value}`' for c in configs]
+        await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
+
+    @config.command(brief='Enable a feature')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def enable(self, ctx, feature: str):
+        """Enable a feature for this guild."""
+        if feature not in _KNOWN_FEATURES:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Unknown feature `{feature}`. Known features: {", ".join(_KNOWN_FEATURES)}'
+            ))
+            return
+        cf_common.user_db.set_guild_config(ctx.guild.id, feature, '1')
+        logger.info(f'CMD config enable: guild={ctx.guild.id} feature={feature} by user={ctx.author.id}')
+        await ctx.send(embed=discord_common.embed_success(f'Feature `{feature}` enabled.'))
+
+    @config.command(brief='Disable a feature')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def disable(self, ctx, feature: str):
+        """Disable a feature for this guild."""
+        if feature not in _KNOWN_FEATURES:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Unknown feature `{feature}`. Known features: {", ".join(_KNOWN_FEATURES)}'
+            ))
+            return
+        cf_common.user_db.delete_guild_config(ctx.guild.id, feature)
+        logger.info(f'CMD config disable: guild={ctx.guild.id} feature={feature} by user={ctx.author.id}')
+        await ctx.send(embed=discord_common.embed_success(f'Feature `{feature}` disabled.'))
 
 
 async def setup(bot):
