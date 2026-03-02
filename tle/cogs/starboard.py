@@ -77,7 +77,7 @@ class Starboard(commands.Cog):
             return
         logger.debug(f'Reaction remove: emoji={emoji_str} guild={payload.guild_id} '
                      f'msg={payload.message_id} user={payload.user_id}')
-        # Update star count if the message is tracked
+        # Update star count and author if the message is tracked
         if cf_common.user_db.check_exists_starboard_message_v1(payload.message_id, emoji_str):
             try:
                 channel = self.bot.get_channel(payload.channel_id)
@@ -86,9 +86,11 @@ class Starboard(commands.Cog):
                     return
                 message = await channel.fetch_message(payload.message_id)
                 count = sum(r.count for r in message.reactions if _emoji_str(r) == emoji_str)
-                cf_common.user_db.update_starboard_star_count(payload.message_id, emoji_str, count)
+                cf_common.user_db.update_starboard_author_and_count(
+                    payload.message_id, emoji_str, str(message.author.id), count
+                )
                 logger.info(f'Updated star count for msg={payload.message_id} emoji={emoji_str} '
-                            f'new_count={count}')
+                            f'author={message.author.id} new_count={count}')
             except discord.NotFound:
                 logger.warning(f'Reaction remove: message {payload.message_id} not found '
                                f'(may have been deleted)')
@@ -165,10 +167,13 @@ class Starboard(commands.Cog):
         async with lock:
             already_exists = cf_common.user_db.check_exists_starboard_message_v1(message.id, emoji_str)
             if already_exists:
-                # Update star count for existing entry
-                cf_common.user_db.update_starboard_star_count(message.id, emoji_str, reaction_count)
+                # Update star count AND author_id for existing entry.
+                # author_id may be NULL if this message was created before backfill ran.
+                cf_common.user_db.update_starboard_author_and_count(
+                    message.id, emoji_str, str(message.author.id), reaction_count
+                )
                 logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
-                             f'count={reaction_count}')
+                             f'author={message.author.id} count={reaction_count}')
                 return
             embed = self.prepare_embed(message, color, emoji_str, reaction_count)
             starboard_message = await starboard_channel.send(embed=embed)

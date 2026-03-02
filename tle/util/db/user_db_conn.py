@@ -792,9 +792,10 @@ class UserDbConn:
         self.conn.commit()
 
     def update_starboard_author_and_count(self, original_msg_id, emoji, author_id, count):
-        """Update both author_id and star_count (used during backfill)."""
+        """Update both author_id and star_count (used by live reactions and backfill)."""
         self.conn.execute(
-            'UPDATE starboard_message_v1 SET author_id = ?, star_count = ? WHERE original_msg_id = ? AND emoji = ?',
+            'UPDATE starboard_message_v1 SET author_id = ?, star_count = ? '
+            'WHERE original_msg_id = ? AND emoji = ?',
             (str(author_id), count, str(original_msg_id), emoji)
         )
         self.conn.commit()
