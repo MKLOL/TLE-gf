@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import discord
 from discord.ext import commands
@@ -23,6 +24,21 @@ class StarboardCogError(commands.CommandError):
 def _emoji_str(emoji):
     """Normalize a discord emoji to its string representation."""
     return str(emoji)
+
+
+_JUMP_URL_PATTERN = re.compile(r'discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)')
+
+
+def _parse_jump_url(text):
+    """Extract (guild_id, channel_id, message_id) from a Discord jump URL string.
+
+    Returns a tuple of ints (guild_id, channel_id, message_id) or None.
+    Works with both discord.com and discordapp.com URLs.
+    """
+    match = _JUMP_URL_PATTERN.search(text)
+    if match:
+        return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    return None
 
 
 class Starboard(commands.Cog):
@@ -77,8 +93,10 @@ class Starboard(commands.Cog):
             return
         logger.debug(f'Reaction remove: emoji={emoji_str} guild={payload.guild_id} '
                      f'msg={payload.message_id} user={payload.user_id}')
-        # Update star count and author if the message is tracked
+        # Update star count, author, and reactors if the message is tracked
         if cf_common.user_db.check_exists_starboard_message_v1(payload.message_id, emoji_str):
+            # Remove the reactor immediately (doesn't need API call)
+            cf_common.user_db.remove_reactor(payload.message_id, emoji_str, payload.user_id)
             try:
                 channel = self.bot.get_channel(payload.channel_id)
                 if channel is None:
@@ -172,6 +190,8 @@ class Starboard(commands.Cog):
                 cf_common.user_db.update_starboard_author_and_count(
                     message.id, emoji_str, str(message.author.id), reaction_count
                 )
+                # Track the individual reactor
+                cf_common.user_db.add_reactor(message.id, emoji_str, payload.user_id)
                 logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
                              f'author={message.author.id} count={reaction_count}')
                 return
@@ -183,6 +203,12 @@ class Starboard(commands.Cog):
                 channel_id=str(channel.id)
             )
             cf_common.user_db.update_starboard_star_count(message.id, emoji_str, reaction_count)
+            # Collect all current reactors for this emoji
+            for r in message.reactions:
+                if _emoji_str(r) == emoji_str:
+                    user_ids = [str(user.id) async for user in r.users()]
+                    cf_common.user_db.bulk_add_reactors(message.id, emoji_str, user_ids)
+                    break
             logger.info(f'NEW starboard entry: original_msg={message.id} starboard_msg={starboard_message.id} '
                         f'guild={guild.id} emoji={emoji_str} author={message.author} ({message.author.id}) '
                         f'channel={channel.id} count={reaction_count} '
@@ -221,6 +247,13 @@ class Starboard(commands.Cog):
             for guild, messages in guild_work.items():
                 emojis = cf_common.user_db.get_starboard_emojis_for_guild(str(guild.id))
                 emoji_set = {e.emoji for e in emojis}
+                # Build map of emoji -> starboard channel for embed lookup
+                emoji_sb_channels = {}
+                for e in emojis:
+                    if e.channel_id:
+                        ch = self.bot.get_channel(int(e.channel_id))
+                        if ch:
+                            emoji_sb_channels[e.emoji] = ch
                 logger.info(f'Backfill: processing guild={guild.name} ({guild.id}), '
                             f'{len(messages)} messages, tracked emojis={emoji_set}')
 
@@ -256,7 +289,46 @@ class Starboard(commands.Cog):
                             else:
                                 logger.debug(f'Backfill: stored channel={stored_channel_id} not in bot cache')
 
-                        # Fallback: scan all text channels
+                        # Try to find original channel via the starboard embed's "Jump to" link
+                        if original_msg is None and msg.starboard_msg_id:
+                            sb_channel = emoji_sb_channels.get(msg.emoji)
+                            if sb_channel:
+                                try:
+                                    sb_msg = await sb_channel.fetch_message(int(msg.starboard_msg_id))
+                                    for embed in sb_msg.embeds:
+                                        for field in embed.fields:
+                                            if field.name == 'Jump to':
+                                                parsed = _parse_jump_url(field.value)
+                                                if parsed:
+                                                    _, orig_ch_id, _ = parsed
+                                                    orig_ch = self.bot.get_channel(orig_ch_id)
+                                                    if orig_ch:
+                                                        try:
+                                                            original_msg = await orig_ch.fetch_message(
+                                                                int(msg.original_msg_id)
+                                                            )
+                                                            logger.debug(
+                                                                f'Backfill: fetched msg={msg.original_msg_id} '
+                                                                f'via starboard embed (channel={orig_ch_id})'
+                                                            )
+                                                        except (discord.NotFound, discord.Forbidden):
+                                                            logger.debug(
+                                                                f'Backfill: original msg={msg.original_msg_id} '
+                                                                f'not found via embed link (channel={orig_ch_id})'
+                                                            )
+                                                break  # Only check the first embed
+                                except (discord.NotFound, discord.Forbidden):
+                                    logger.debug(
+                                        f'Backfill: starboard embed {msg.starboard_msg_id} not found '
+                                        f'in channel={sb_channel.id}'
+                                    )
+                                except discord.HTTPException as e:
+                                    logger.debug(
+                                        f'Backfill: HTTP error fetching starboard embed '
+                                        f'{msg.starboard_msg_id}: {e}'
+                                    )
+
+                        # Last resort: scan all text channels
                         if original_msg is None:
                             logger.debug(f'Backfill: scanning channels for msg={msg.original_msg_id} '
                                          f'in guild={guild.id}')
@@ -295,6 +367,14 @@ class Starboard(commands.Cog):
                             msg.original_msg_id, msg.emoji,
                             str(original_msg.author.id), count
                         )
+                        # Collect all reactors for this emoji
+                        for r in original_msg.reactions:
+                            if _emoji_str(r) == msg.emoji:
+                                user_ids = [str(user.id) async for user in r.users()]
+                                cf_common.user_db.bulk_add_reactors(
+                                    msg.original_msg_id, msg.emoji, user_ids
+                                )
+                                break
                         logger.info(f'Backfill: updated msg={msg.original_msg_id} '
                                     f'author={original_msg.author} ({original_msg.author.id}) '
                                     f'emoji={msg.emoji} star_count={count} '

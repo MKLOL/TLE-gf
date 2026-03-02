@@ -45,6 +45,14 @@ class FakeUserDb:
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_reactors (
+                original_msg_id TEXT,
+                emoji           TEXT,
+                user_id         TEXT,
+                PRIMARY KEY (original_msg_id, emoji, user_id)
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS guild_config (
                 guild_id    TEXT,
                 key         TEXT,
@@ -100,6 +108,13 @@ class FakeUserDb:
 
     def remove_starboard_emoji(self, guild_id, emoji):
         guild_id = str(guild_id)
+        self.conn.execute('''
+            DELETE FROM starboard_reactors
+            WHERE emoji = ? AND original_msg_id IN (
+                SELECT original_msg_id FROM starboard_message_v1
+                WHERE guild_id = ? AND emoji = ?
+            )
+        ''', (emoji, guild_id, emoji))
         self.conn.execute(
             'DELETE FROM starboard_emoji_v1 WHERE guild_id = ? AND emoji = ?',
             (guild_id, emoji)
@@ -147,12 +162,29 @@ class FakeUserDb:
 
     def remove_starboard_message(self, *, original_msg_id=None, emoji=None, starboard_msg_id=None):
         if starboard_msg_id is not None:
+            msg = self.conn.execute(
+                'SELECT original_msg_id, emoji FROM starboard_message_v1 WHERE starboard_msg_id = ?',
+                (str(starboard_msg_id),)
+            ).fetchone()
+            if msg:
+                self.conn.execute(
+                    'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?',
+                    (msg.original_msg_id, msg.emoji)
+                )
             query = 'DELETE FROM starboard_message_v1 WHERE starboard_msg_id = ?'
             rc = self.conn.execute(query, (str(starboard_msg_id),)).rowcount
         elif original_msg_id is not None and emoji is not None:
+            self.conn.execute(
+                'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?',
+                (str(original_msg_id), emoji)
+            )
             query = 'DELETE FROM starboard_message_v1 WHERE original_msg_id = ? AND emoji = ?'
             rc = self.conn.execute(query, (str(original_msg_id), emoji)).rowcount
         elif original_msg_id is not None:
+            self.conn.execute(
+                'DELETE FROM starboard_reactors WHERE original_msg_id = ?',
+                (str(original_msg_id),)
+            )
             query = 'DELETE FROM starboard_message_v1 WHERE original_msg_id = ?'
             rc = self.conn.execute(query, (str(original_msg_id),)).rowcount
         else:
@@ -207,8 +239,51 @@ class FakeUserDb:
 
     def get_starboard_emojis_for_guild(self, guild_id):
         guild_id = str(guild_id)
-        query = 'SELECT emoji, threshold, color FROM starboard_emoji_v1 WHERE guild_id = ?'
+        query = 'SELECT emoji, threshold, color, channel_id FROM starboard_emoji_v1 WHERE guild_id = ?'
         return self.conn.execute(query, (guild_id,)).fetchall()
+
+    # --- Reactor methods ---
+
+    def add_reactor(self, original_msg_id, emoji, user_id):
+        self.conn.execute(
+            'INSERT OR IGNORE INTO starboard_reactors (original_msg_id, emoji, user_id) '
+            'VALUES (?, ?, ?)',
+            (str(original_msg_id), emoji, str(user_id))
+        )
+        self.conn.commit()
+
+    def remove_reactor(self, original_msg_id, emoji, user_id):
+        rc = self.conn.execute(
+            'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ? AND user_id = ?',
+            (str(original_msg_id), emoji, str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def get_reactors(self, original_msg_id, emoji):
+        query = 'SELECT user_id FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?'
+        return [r.user_id for r in self.conn.execute(query, (str(original_msg_id), emoji)).fetchall()]
+
+    def get_reactor_count(self, original_msg_id, emoji):
+        query = 'SELECT COUNT(*) as cnt FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?'
+        return self.conn.execute(query, (str(original_msg_id), emoji)).fetchone().cnt
+
+    def get_merged_reactor_count(self, original_msg_id, emojis):
+        if not emojis:
+            return 0
+        placeholders = ','.join('?' * len(emojis))
+        query = (f'SELECT COUNT(DISTINCT user_id) as cnt FROM starboard_reactors '
+                 f'WHERE original_msg_id = ? AND emoji IN ({placeholders})')
+        return self.conn.execute(query, (str(original_msg_id), *emojis)).fetchone().cnt
+
+    def bulk_add_reactors(self, original_msg_id, emoji, user_ids):
+        original_msg_id = str(original_msg_id)
+        self.conn.executemany(
+            'INSERT OR IGNORE INTO starboard_reactors (original_msg_id, emoji, user_id) '
+            'VALUES (?, ?, ?)',
+            [(original_msg_id, emoji, str(uid)) for uid in user_ids]
+        )
+        self.conn.commit()
 
     def get_guild_config(self, guild_id, key):
         guild_id = str(guild_id)
@@ -561,3 +636,150 @@ class TestIntStrCasting:
         entry = db.get_starboard_entry(GUILD, STAR)
         assert entry.channel_id == '999888777666'
         assert isinstance(entry.channel_id, str)
+
+
+# =====================================================================
+# Reactor tracking
+# =====================================================================
+
+class TestReactorCrud:
+    def test_add_and_get_reactors(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        reactors = db.get_reactors('msg1', STAR)
+        assert set(reactors) == {'user1', 'user2'}
+
+    def test_add_reactor_idempotent(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user1')  # Duplicate
+        assert db.get_reactor_count('msg1', STAR) == 1
+
+    def test_remove_reactor(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        rc = db.remove_reactor('msg1', STAR, 'user1')
+        assert rc == 1
+        assert db.get_reactors('msg1', STAR) == ['user2']
+
+    def test_remove_nonexistent_reactor(self, db):
+        rc = db.remove_reactor('msg1', STAR, 'user1')
+        assert rc == 0
+
+    def test_get_reactor_count(self, db):
+        assert db.get_reactor_count('msg1', STAR) == 0
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        db.add_reactor('msg1', STAR, 'user3')
+        assert db.get_reactor_count('msg1', STAR) == 3
+
+    def test_reactors_per_emoji_independent(self, db):
+        """Same message, different emojis — reactors are independent."""
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        db.add_reactor('msg1', FIRE, 'user1')
+        assert db.get_reactor_count('msg1', STAR) == 2
+        assert db.get_reactor_count('msg1', FIRE) == 1
+
+    def test_bulk_add_reactors(self, db):
+        db.bulk_add_reactors('msg1', STAR, ['user1', 'user2', 'user3'])
+        assert db.get_reactor_count('msg1', STAR) == 3
+        assert set(db.get_reactors('msg1', STAR)) == {'user1', 'user2', 'user3'}
+
+    def test_bulk_add_idempotent(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        db.bulk_add_reactors('msg1', STAR, ['user1', 'user2', 'user3'])
+        assert db.get_reactor_count('msg1', STAR) == 3
+
+    def test_bulk_add_empty_list(self, db):
+        db.bulk_add_reactors('msg1', STAR, [])
+        assert db.get_reactor_count('msg1', STAR) == 0
+
+    def test_int_user_ids(self, db):
+        """Discord user IDs are ints — should be cast to str."""
+        db.add_reactor('msg1', STAR, 123456789)
+        assert db.get_reactors('msg1', STAR) == ['123456789']
+        rc = db.remove_reactor('msg1', STAR, 123456789)
+        assert rc == 1
+
+
+class TestMergedReactorCount:
+    def test_same_user_two_emojis_counts_once(self, db):
+        """User reacted with both star and fire — merged count = 1."""
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', FIRE, 'user1')
+        assert db.get_merged_reactor_count('msg1', [STAR, FIRE]) == 1
+
+    def test_different_users_two_emojis(self, db):
+        """user1 starred, user2 fired — merged count = 2."""
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', FIRE, 'user2')
+        assert db.get_merged_reactor_count('msg1', [STAR, FIRE]) == 2
+
+    def test_overlapping_users(self, db):
+        """user1 did both, user2 only star, user3 only fire — merged = 3."""
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', FIRE, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        db.add_reactor('msg1', FIRE, 'user3')
+        assert db.get_merged_reactor_count('msg1', [STAR, FIRE]) == 3
+
+    def test_single_emoji_matches_get_reactor_count(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+        assert db.get_merged_reactor_count('msg1', [STAR]) == 2
+        assert db.get_reactor_count('msg1', STAR) == 2
+
+    def test_empty_emojis_returns_zero(self, db):
+        db.add_reactor('msg1', STAR, 'user1')
+        assert db.get_merged_reactor_count('msg1', []) == 0
+
+
+class TestReactorCascadeDelete:
+    def test_remove_message_by_emoji_cleans_reactors(self, db):
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='u')
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', STAR, 'user2')
+
+        db.remove_starboard_message(original_msg_id='msg1', emoji=STAR)
+        assert db.get_reactor_count('msg1', STAR) == 0
+
+    def test_remove_message_by_starboard_msg_id_cleans_reactors(self, db):
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='u')
+        db.add_reactor('msg1', STAR, 'user1')
+
+        db.remove_starboard_message(starboard_msg_id='sb1')
+        assert db.get_reactor_count('msg1', STAR) == 0
+
+    def test_remove_message_all_emojis_cleans_reactors(self, db):
+        db.add_starboard_message_v1('msg1', 'sb_s', GUILD, STAR, author_id='u')
+        db.add_starboard_message_v1('msg1', 'sb_f', GUILD, FIRE, author_id='u')
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', FIRE, 'user2')
+
+        db.remove_starboard_message(original_msg_id='msg1')
+        assert db.get_reactor_count('msg1', STAR) == 0
+        assert db.get_reactor_count('msg1', FIRE) == 0
+
+    def test_remove_emoji_cleans_reactors(self, db):
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='u')
+        db.add_starboard_message_v1('msg2', 'sb2', GUILD, STAR, author_id='u')
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg2', STAR, 'user2')
+
+        db.remove_starboard_emoji(GUILD, STAR)
+        assert db.get_reactor_count('msg1', STAR) == 0
+        assert db.get_reactor_count('msg2', STAR) == 0
+
+    def test_remove_emoji_preserves_other_emoji_reactors(self, db):
+        """Removing star shouldn't touch fire reactors."""
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_emoji(GUILD, FIRE, 3, 0xff0000)
+        db.add_starboard_message_v1('msg1', 'sb_s', GUILD, STAR, author_id='u')
+        db.add_starboard_message_v1('msg1', 'sb_f', GUILD, FIRE, author_id='u')
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', FIRE, 'user1')
+
+        db.remove_starboard_emoji(GUILD, STAR)
+        assert db.get_reactor_count('msg1', STAR) == 0
+        assert db.get_reactor_count('msg1', FIRE) == 1  # Preserved

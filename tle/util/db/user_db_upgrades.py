@@ -105,7 +105,7 @@ def upgrade_1_2_0(db):
     logger.info('1.2.0: guild_config table created')
 
 
-@registry.register('1.3.0', 'Star count and author tracking for leaderboards')
+@registry.register('1.3.0', 'Star count, author tracking, and reactor tracking for leaderboards')
 def upgrade_1_3_0(db):
     logger.info('1.3.0: Adding author_id and star_count columns to starboard_message_v1')
     # Add author_id column
@@ -128,6 +128,17 @@ def upgrade_1_3_0(db):
         logger.info('1.3.0: Added channel_id column')
     except Exception as e:
         logger.debug(f'1.3.0: channel_id column already exists or error: {e}')
+
+    # Create starboard_reactors table — tracks which users reacted
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_reactors (
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    logger.info('1.3.0: Created starboard_reactors table')
 
     db.commit()
     logger.info('1.3.0: Upgrade complete')

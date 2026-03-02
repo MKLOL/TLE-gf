@@ -247,6 +247,15 @@ class UserDbConn:
                 PRIMARY KEY (original_msg_id, emoji)
             )
         ''')
+        # Starboard reactors — tracks which users reacted with which emoji
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_reactors (
+                original_msg_id TEXT,
+                emoji           TEXT,
+                user_id         TEXT,
+                PRIMARY KEY (original_msg_id, emoji, user_id)
+            )
+        ''')
         # Guild config table
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS guild_config (
@@ -709,8 +718,16 @@ class UserDbConn:
         self.conn.commit()
 
     def remove_starboard_emoji(self, guild_id, emoji):
-        """Remove an emoji from a guild's starboard config and its tracked messages."""
+        """Remove an emoji from a guild's starboard config, its tracked messages, and reactors."""
         guild_id = str(guild_id)
+        # Clean up reactors for messages belonging to this guild+emoji
+        self.conn.execute('''
+            DELETE FROM starboard_reactors
+            WHERE emoji = ? AND original_msg_id IN (
+                SELECT original_msg_id FROM starboard_message_v1
+                WHERE guild_id = ? AND emoji = ?
+            )
+        ''', (emoji, guild_id, emoji))
         self.conn.execute(
             'DELETE FROM starboard_emoji_v1 WHERE guild_id = ? AND emoji = ?',
             (guild_id, emoji)
@@ -766,14 +783,33 @@ class UserDbConn:
         return self.conn.execute(query, (str(original_msg_id), emoji)).fetchone()
 
     def remove_starboard_message(self, *, original_msg_id=None, emoji=None, starboard_msg_id=None):
-        """Remove starboard message(s). Use original_msg_id+emoji or starboard_msg_id."""
+        """Remove starboard message(s) and their reactors.
+        Use original_msg_id+emoji or starboard_msg_id."""
         if starboard_msg_id is not None:
+            # Look up the message first to cascade-delete reactors
+            msg = self.conn.execute(
+                'SELECT original_msg_id, emoji FROM starboard_message_v1 WHERE starboard_msg_id = ?',
+                (str(starboard_msg_id),)
+            ).fetchone()
+            if msg:
+                self.conn.execute(
+                    'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?',
+                    (msg.original_msg_id, msg.emoji)
+                )
             query = 'DELETE FROM starboard_message_v1 WHERE starboard_msg_id = ?'
             rc = self.conn.execute(query, (str(starboard_msg_id),)).rowcount
         elif original_msg_id is not None and emoji is not None:
+            self.conn.execute(
+                'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?',
+                (str(original_msg_id), emoji)
+            )
             query = 'DELETE FROM starboard_message_v1 WHERE original_msg_id = ? AND emoji = ?'
             rc = self.conn.execute(query, (str(original_msg_id), emoji)).rowcount
         elif original_msg_id is not None:
+            self.conn.execute(
+                'DELETE FROM starboard_reactors WHERE original_msg_id = ?',
+                (str(original_msg_id),)
+            )
             query = 'DELETE FROM starboard_message_v1 WHERE original_msg_id = ?'
             rc = self.conn.execute(query, (str(original_msg_id),)).rowcount
         else:
@@ -797,6 +833,56 @@ class UserDbConn:
             'UPDATE starboard_message_v1 SET author_id = ?, star_count = ? '
             'WHERE original_msg_id = ? AND emoji = ?',
             (str(author_id), count, str(original_msg_id), emoji)
+        )
+        self.conn.commit()
+
+    # --- Reactor tracking ---
+
+    def add_reactor(self, original_msg_id, emoji, user_id):
+        """Record a user's reaction. INSERT OR IGNORE (idempotent)."""
+        self.conn.execute(
+            'INSERT OR IGNORE INTO starboard_reactors (original_msg_id, emoji, user_id) '
+            'VALUES (?, ?, ?)',
+            (str(original_msg_id), emoji, str(user_id))
+        )
+        self.conn.commit()
+
+    def remove_reactor(self, original_msg_id, emoji, user_id):
+        """Remove a user's reaction. Returns rowcount (0 or 1)."""
+        rc = self.conn.execute(
+            'DELETE FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ? AND user_id = ?',
+            (str(original_msg_id), emoji, str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def get_reactors(self, original_msg_id, emoji):
+        """Get all user IDs who reacted with this emoji on this message."""
+        query = 'SELECT user_id FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?'
+        return [r.user_id for r in self.conn.execute(query, (str(original_msg_id), emoji)).fetchall()]
+
+    def get_reactor_count(self, original_msg_id, emoji):
+        """Get the number of unique reactors for this emoji on this message."""
+        query = 'SELECT COUNT(*) as cnt FROM starboard_reactors WHERE original_msg_id = ? AND emoji = ?'
+        return self.conn.execute(query, (str(original_msg_id), emoji)).fetchone().cnt
+
+    def get_merged_reactor_count(self, original_msg_id, emojis):
+        """Count distinct users who reacted with ANY of the given emojis on a message.
+        Useful for merging starboards (e.g., star + flame = unique users across both)."""
+        if not emojis:
+            return 0
+        placeholders = ','.join('?' * len(emojis))
+        query = (f'SELECT COUNT(DISTINCT user_id) as cnt FROM starboard_reactors '
+                 f'WHERE original_msg_id = ? AND emoji IN ({placeholders})')
+        return self.conn.execute(query, (str(original_msg_id), *emojis)).fetchone().cnt
+
+    def bulk_add_reactors(self, original_msg_id, emoji, user_ids):
+        """Bulk-insert reactors (idempotent via INSERT OR IGNORE)."""
+        original_msg_id = str(original_msg_id)
+        self.conn.executemany(
+            'INSERT OR IGNORE INTO starboard_reactors (original_msg_id, emoji, user_id) '
+            'VALUES (?, ?, ?)',
+            [(original_msg_id, emoji, str(uid)) for uid in user_ids]
         )
         self.conn.commit()
 
@@ -838,7 +924,7 @@ class UserDbConn:
     def get_starboard_emojis_for_guild(self, guild_id):
         """Get all configured emojis for a guild's starboard."""
         guild_id = str(guild_id)
-        query = 'SELECT emoji, threshold, color FROM starboard_emoji_v1 WHERE guild_id = ?'
+        query = 'SELECT emoji, threshold, color, channel_id FROM starboard_emoji_v1 WHERE guild_id = ?'
         return self.conn.execute(query, (guild_id,)).fetchall()
 
     # --- Guild config methods ---

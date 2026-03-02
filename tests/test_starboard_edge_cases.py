@@ -609,3 +609,89 @@ class TestBackfillLiveRace:
         slb = db.get_starboard_star_leaderboard(GUILD_A, STAR)
         assert len(slb) == 1
         assert slb[0].total_stars == 5
+
+
+# =====================================================================
+# Jump URL parsing for backfill optimization
+# =====================================================================
+
+from tle.cogs.starboard import _parse_jump_url
+
+
+class TestParseJumpUrl:
+    def test_standard_discord_url(self):
+        text = '[Original](https://discord.com/channels/111/222/333)'
+        result = _parse_jump_url(text)
+        assert result == (111, 222, 333)
+
+    def test_discordapp_url(self):
+        text = '[Original](https://discordapp.com/channels/111/222/333)'
+        result = _parse_jump_url(text)
+        assert result == (111, 222, 333)
+
+    def test_real_snowflake_ids(self):
+        text = '[Original](https://discord.com/channels/1273752315022540861/1274019679425265685/1276961610195537991)'
+        result = _parse_jump_url(text)
+        assert result == (1273752315022540861, 1274019679425265685, 1276961610195537991)
+
+    def test_extracts_channel_id(self):
+        """The channel_id (second element) is what the backfill needs."""
+        text = '[Original](https://discord.com/channels/111/999888777/333)'
+        result = _parse_jump_url(text)
+        _, channel_id, _ = result
+        assert channel_id == 999888777
+
+    def test_no_url_returns_none(self):
+        assert _parse_jump_url('no url here') is None
+
+    def test_empty_string_returns_none(self):
+        assert _parse_jump_url('') is None
+
+    def test_partial_url_returns_none(self):
+        assert _parse_jump_url('https://discord.com/channels/111/222') is None
+
+    def test_wrong_domain_returns_none(self):
+        assert _parse_jump_url('https://example.com/channels/111/222/333') is None
+
+    def test_url_embedded_in_markdown(self):
+        """The real embed field value has markdown link syntax."""
+        text = '[Original](https://discord.com/channels/111/222/333)'
+        result = _parse_jump_url(text)
+        assert result == (111, 222, 333)
+
+    def test_url_with_extra_text(self):
+        text = 'Check this out: https://discord.com/channels/111/222/333 cool right?'
+        result = _parse_jump_url(text)
+        assert result == (111, 222, 333)
+
+
+# =====================================================================
+# get_starboard_emojis_for_guild now includes channel_id
+# =====================================================================
+
+class TestGetEmojisIncludesChannelId:
+    def test_channel_id_returned(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        db.set_starboard_channel(GUILD_A, STAR, 999888)
+
+        emojis = db.get_starboard_emojis_for_guild(GUILD_A)
+        assert len(emojis) == 1
+        assert emojis[0].channel_id == '999888'
+
+    def test_channel_id_none_when_not_set(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+
+        emojis = db.get_starboard_emojis_for_guild(GUILD_A)
+        assert len(emojis) == 1
+        assert emojis[0].channel_id is None
+
+    def test_multiple_emojis_different_channels(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        db.add_starboard_emoji(GUILD_A, FIRE, 5, 0xff0000)
+        db.set_starboard_channel(GUILD_A, STAR, 100)
+        db.set_starboard_channel(GUILD_A, FIRE, 200)
+
+        emojis = db.get_starboard_emojis_for_guild(GUILD_A)
+        by_emoji = {e.emoji: e for e in emojis}
+        assert by_emoji[STAR].channel_id == '100'
+        assert by_emoji[FIRE].channel_id == '200'

@@ -30,7 +30,40 @@ for mod_name in _STUB_MODULES:
         sys.modules[mod_name] = stub
 
 # Add specific attributes that get imported at module level
-sys.modules['discord.ext.commands'].CommandError = type('CommandError', (Exception,), {})
+_commands_mod = sys.modules['discord.ext.commands']
+_commands_mod.CommandError = type('CommandError', (Exception,), {})
+
+# Stub commands.Cog so starboard.py can be imported for pure-function tests
+class _StubCog:
+    @staticmethod
+    def listener():
+        return lambda f: f
+_commands_mod.Cog = _StubCog
+_commands_mod.has_role = lambda role: (lambda f: f)
+_commands_mod.command = lambda **kw: (lambda f: f)
+
+class _StubGroupResult:
+    """Fake return value of @commands.group() — supports chained .command() and .group()."""
+    def __init__(self, func):
+        self.__name__ = getattr(func, '__name__', 'stub')
+        self.__doc__ = getattr(func, '__doc__', None)
+    def command(self, **kw):
+        return lambda f: _StubGroupResult(f)
+    def group(self, **kw):
+        return lambda f: _StubGroupResult(f)
+    def __call__(self, *a, **kw):
+        pass
+
+_commands_mod.group = lambda **kw: (lambda f: _StubGroupResult(f))
+
+# Stub discord module attributes used by starboard.py
+_discord_mod = sys.modules['discord']
+_discord_mod.Embed = type('Embed', (), {'__init__': lambda self, **kw: None})
+_discord_mod.MessageType = type('MessageType', (), {'default': 0, 'reply': 1})
+_discord_mod.NotFound = type('NotFound', (Exception,), {})
+_discord_mod.Forbidden = type('Forbidden', (Exception,), {})
+_discord_mod.HTTPException = type('HTTPException', (Exception,), {})
+
 sys.modules['aiocache'].cached = lambda *a, **kw: (lambda f: f)  # no-op decorator
 
 # ── Step 2: Stub tle internal packages ──────────────────────────────────
@@ -74,6 +107,21 @@ constants_mod.TLE_ADMIN = 'Admin'
 cf_common = sys.modules['tle.util.codeforces_common']
 cf_common.user_db = None
 
+# tle.util.discord_common needs stubs for starboard.py imports
+_dc = sys.modules['tle.util.discord_common']
+_dc.once = lambda f: f
+_dc.send_error_if = lambda *errs: (lambda f: f)
+_dc.embed_success = lambda desc: None
+_dc.embed_neutral = lambda desc, **kw: None
+_dc.embed_alert = lambda desc: None
+_dc.random_cf_color = lambda: 0
+_dc._ALERT_AMBER = 0xFFBF00
+
+# tle.util.paginator needs stubs
+_pg = sys.modules['tle.util.paginator']
+_pg.chunkify = lambda seq, n: [seq[i:i+n] for i in range(0, len(seq), n)]
+_pg.paginate = lambda *a, **kw: None
+
 # ── Step 3: Load the actual modules we want to test ─────────────────────
 _db_path = os.path.join(_root, 'tle', 'util', 'db')
 
@@ -95,3 +143,12 @@ _load_module('tle.util.db.user_db_conn', os.path.join(_db_path, 'user_db_conn.py
 
 # user_db_upgrades.py imports from tle.util.db.upgrades (already loaded)
 _load_module('tle.util.db.user_db_upgrades', os.path.join(_db_path, 'user_db_upgrades.py'))
+
+# starboard.py — load for pure-function tests (_parse_jump_url, etc.)
+# Needs tle.cogs package stub
+if 'tle.cogs' not in sys.modules:
+    _cogs_mod = types.ModuleType('tle.cogs')
+    _cogs_mod.__path__ = [os.path.join(_root, 'tle', 'cogs')]
+    _cogs_mod.__package__ = 'tle.cogs'
+    sys.modules['tle.cogs'] = _cogs_mod
+_load_module('tle.cogs.starboard', os.path.join(_root, 'tle', 'cogs', 'starboard.py'))
