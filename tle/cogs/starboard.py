@@ -449,7 +449,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Add an emoji to the starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def add(self, ctx, emoji: str, threshold: int = 3, color: str = None):
+    async def add(self, ctx, emoji: str = constants._DEFAULT_STAR, threshold: int = 3, color: str = None):
         """Add an emoji to the starboard with optional threshold and color.
         Example: ;starboard add ⭐ 3 #ffaa10"""
         if threshold < 1:
@@ -473,7 +473,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Delete an emoji from starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def delete(self, ctx, emoji: str):
+    async def delete(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Remove an emoji and all its tracked messages from the starboard."""
         existing = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
         if existing is None:
@@ -484,7 +484,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Edit threshold for an emoji')
     @commands.has_role(constants.TLE_ADMIN)
-    async def edit_threshold(self, ctx, emoji: str, threshold: int):
+    async def edit_threshold(self, ctx, threshold: int, emoji: str = constants._DEFAULT_STAR):
         """Update the reaction threshold for an emoji."""
         if threshold < 1:
             raise StarboardCogError('Threshold must be at least 1')
@@ -499,7 +499,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Edit color for an emoji')
     @commands.has_role(constants.TLE_ADMIN)
-    async def edit_color(self, ctx, emoji: str, color: str):
+    async def edit_color(self, ctx, color: str, emoji: str = constants._DEFAULT_STAR):
         """Update the embed color for an emoji. Use hex format like #ffaa10."""
         try:
             color_val = int(color.lstrip('#'), 16)
@@ -516,7 +516,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Set starboard channel for an emoji')
     @commands.has_role(constants.TLE_ADMIN)
-    async def here(self, ctx, emoji: str):
+    async def here(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Set the current channel as the starboard channel for a specific emoji.
         Example: ;starboard here ⭐"""
         existing = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
@@ -533,7 +533,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Clear starboard channel for an emoji')
     @commands.has_role(constants.TLE_ADMIN)
-    async def clear(self, ctx, emoji: str):
+    async def clear(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Clear the starboard channel for a specific emoji.
         Example: ;starboard clear ⭐"""
         existing = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
@@ -545,7 +545,7 @@ class Starboard(commands.Cog):
 
     @starboard.command(brief='Remove a message from starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def remove(self, ctx, emoji: str, original_message_id: int):
+    async def remove(self, ctx, original_message_id: int, emoji: str = constants._DEFAULT_STAR):
         """Remove a particular message from the starboard database for the given emoji."""
         rc = cf_common.user_db.remove_starboard_message(
             original_msg_id=original_message_id, emoji=emoji
@@ -562,7 +562,7 @@ class Starboard(commands.Cog):
     # --- Leaderboard commands ---
 
     @starboard.command(brief='Show starboard leaderboard by message count')
-    async def leaderboard(self, ctx, emoji: str):
+    async def leaderboard(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Show top users by number of starboarded messages for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled."""
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
@@ -585,7 +585,7 @@ class Starboard(commands.Cog):
         await self._send_personal_rank(ctx, rows, 'messages')
 
     @starboard.command(name='star-leaderboard', brief='Show starboard leaderboard by star count')
-    async def star_leaderboard(self, ctx, emoji: str):
+    async def star_leaderboard(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Show top users by total star count for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled."""
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
@@ -609,7 +609,7 @@ class Starboard(commands.Cog):
         await self._send_personal_rank(ctx, rows, 'stars')
 
     @starboard.command(name='star-givers', brief='Show top star givers')
-    async def star_givers(self, ctx, emoji: str):
+    async def star_givers(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Show top users by number of stars given (reactions) for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled."""
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
@@ -631,7 +631,7 @@ class Starboard(commands.Cog):
         await self._send_personal_rank(ctx, rows, 'stars given')
 
     @starboard.command(brief='Show top starred messages')
-    async def top(self, ctx, emoji: str):
+    async def top(self, ctx, emoji: str = constants._DEFAULT_STAR):
         """Show top starboarded messages sorted by star count for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled."""
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
