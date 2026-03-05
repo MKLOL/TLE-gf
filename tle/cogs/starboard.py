@@ -58,6 +58,39 @@ class Starboard(commands.Cog):
     async def on_ready(self):
         logger.info('Starboard cog on_ready fired, launching backfill task')
         asyncio.create_task(self._backfill_star_counts())
+        asyncio.create_task(self._cleanup_embed_titles())
+
+    async def _cleanup_embed_titles(self):
+        """One-time task: remove emoji+count titles from the last 3 starboard messages per guild."""
+        await self.bot.wait_until_ready()
+        try:
+            for guild in self.bot.guilds:
+                all_msgs = cf_common.user_db.get_all_starboard_messages_for_guild(str(guild.id))
+                # Get the last 3 by starboard_msg_id (higher ID = newer)
+                all_msgs.sort(key=lambda m: int(m.starboard_msg_id), reverse=True)
+                emojis = cf_common.user_db.get_starboard_emojis_for_guild(str(guild.id))
+                emoji_channels = {}
+                for e in emojis:
+                    if e.channel_id:
+                        ch = self.bot.get_channel(int(e.channel_id))
+                        if ch:
+                            emoji_channels[e.emoji] = ch
+
+                for msg in all_msgs[:3]:
+                    sb_channel = emoji_channels.get(msg.emoji)
+                    if not sb_channel:
+                        continue
+                    try:
+                        sb_msg = await sb_channel.fetch_message(int(msg.starboard_msg_id))
+                        if sb_msg.embeds and sb_msg.embeds[0].title:
+                            embed = sb_msg.embeds[0]
+                            embed.title = None
+                            await sb_msg.edit(embed=embed)
+                            logger.info(f'Cleaned embed title from starboard msg={msg.starboard_msg_id}')
+                    except Exception as e:
+                        logger.warning(f'Failed to clean embed title for msg={msg.starboard_msg_id}: {e}')
+        except Exception as e:
+            logger.error(f'Embed title cleanup failed: {e}')
 
     # --- Event listeners ---
 
@@ -128,13 +161,10 @@ class Starboard(commands.Cog):
     # --- Core logic ---
 
     @staticmethod
-    def prepare_embed(message, color, emoji_str, star_count):
+    def prepare_embed(message, color):
         embed = discord.Embed(color=color, timestamp=message.created_at)
         embed.add_field(name='Channel', value=message.channel.mention)
         embed.add_field(name='Jump to', value=f'[Original]({message.jump_url})')
-
-        header = f'{emoji_str} {star_count}' if star_count else emoji_str
-        embed.title = header
 
         if message.content:
             content = message.content
@@ -195,7 +225,7 @@ class Starboard(commands.Cog):
                 logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
                              f'author={message.author.id} count={reaction_count}')
                 return
-            embed = self.prepare_embed(message, color, emoji_str, reaction_count)
+            embed = self.prepare_embed(message, color)
             starboard_message = await starboard_channel.send(embed=embed)
             cf_common.user_db.add_starboard_message_v1(
                 message.id, starboard_message.id, guild.id, emoji_str,
