@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 
@@ -123,9 +124,20 @@ class Rpoll(commands.Cog):
     @commands.Cog.listener()
     @discord_common.once
     async def on_ready(self):
-        """Re-register persistent views for all active polls on startup."""
+        """Re-register persistent views once the DB is available."""
+        # user_db is initialized in the bot's on_ready handler, which may run
+        # after cog listeners.  Wait briefly for it to become available.
+        for _ in range(30):
+            if cf_common.user_db is not None:
+                break
+            await asyncio.sleep(1)
         if cf_common.user_db is None:
+            logger.warning('rpoll: user_db still None after waiting, skipping view registration')
             return
+        self._register_persistent_views()
+
+    def _register_persistent_views(self):
+        """Register persistent views for all active polls so buttons work after restart."""
         try:
             polls = cf_common.user_db.get_all_active_rpolls()
             for poll in polls:
