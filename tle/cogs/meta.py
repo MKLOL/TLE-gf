@@ -1,3 +1,5 @@
+import asyncio
+import datetime
 import logging
 import os
 import subprocess
@@ -5,6 +7,7 @@ import sys
 import time
 import textwrap
 
+import discord
 from discord.ext import commands
 
 from tle import constants
@@ -60,13 +63,41 @@ class Meta(commands.Cog):
         """Command the bot or get information about the bot."""
         await ctx.send_help(ctx.command)
 
+    @commands.Cog.listener()
+    @discord_common.once
+    async def on_ready(self):
+        """Edit the restart message once the bot is back up."""
+        for _ in range(30):
+            if cf_common.user_db is not None:
+                break
+            await asyncio.sleep(1)
+        if cf_common.user_db is None:
+            return
+
+        val = cf_common.user_db.kvs_get('restart_message')
+        if val is None:
+            return
+
+        try:
+            channel_id, message_id = val.split(':')
+            channel = self.bot.get_channel(int(channel_id))
+            if channel is None:
+                channel = await self.bot.fetch_channel(int(channel_id))
+            msg = await channel.fetch_message(int(message_id))
+            now = datetime.datetime.now().strftime('%H:%M:%S')
+            await msg.edit(content=f'`{now}`: Restart complete.')
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+            logger.warning(f'meta: Could not edit restart message: {e}')
+        finally:
+            cf_common.user_db.kvs_delete('restart_message')
+
     @meta.command(brief='Restarts TLE')
     @commands.has_role(constants.TLE_ADMIN)
     async def restart(self, ctx):
         """Restarts the bot."""
-        # Really, we just exit with a special code
-        # the magic is handled elsewhere
-        await ctx.send('Restarting...')
+        now = datetime.datetime.now().strftime('%H:%M:%S')
+        msg = await ctx.send(f'`{now}`: Restarting...')
+        cf_common.user_db.kvs_set('restart_message', f'{ctx.channel.id}:{msg.id}')
         os._exit(RESTART)
 
     @meta.command(brief='Kill TLE')

@@ -388,6 +388,14 @@ class UserDbConn(StarboardDbMixin):
             )
             ''')
 
+        # General key-value store
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS kvs (
+                key     TEXT PRIMARY KEY,
+                value   TEXT NOT NULL
+            )
+        ''')
+
         # Rating-weighted polls
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS rpoll (
@@ -1471,6 +1479,28 @@ class UserDbConn(StarboardDbMixin):
             'FROM rpoll WHERE message_id IS NOT NULL',
             row_factory=namedtuple_factory
         )
+
+    # ── General key-value store ──────────────────────────────────────────
+
+    def kvs_set(self, key, value):
+        """Set a key-value pair. Overwrites if key exists."""
+        with self.conn:
+            self.conn.execute(
+                'INSERT OR REPLACE INTO kvs (key, value) VALUES (?, ?)',
+                (key, value)
+            )
+
+    def kvs_get(self, key):
+        """Get a value by key, or None if not found."""
+        row = self.conn.execute(
+            'SELECT value FROM kvs WHERE key = ?', (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def kvs_delete(self, key):
+        """Delete a key-value pair."""
+        with self.conn:
+            self.conn.execute('DELETE FROM kvs WHERE key = ?', (key,))
 
     def close(self):
         self.conn.close()

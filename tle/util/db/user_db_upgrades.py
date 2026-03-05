@@ -213,3 +213,16 @@ def upgrade_1_5_0(db):
     ''')
     db.commit()
     logger.info('1.5.0: rpoll tables created')
+
+
+@registry.register('1.6.0', 'General key-value store')
+def upgrade_1_6_0(db):
+    logger.info('1.6.0: Creating kvs table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS kvs (
+            key     TEXT PRIMARY KEY,
+            value   TEXT NOT NULL
+        )
+    ''')
+    db.commit()
+    logger.info('1.6.0: kvs table created')
