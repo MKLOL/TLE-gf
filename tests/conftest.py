@@ -179,18 +179,24 @@ def _load_module(name, filepath):
 # upgrades.py has no heavy deps — just logging
 _load_module('tle.util.db.upgrades', os.path.join(_db_path, 'upgrades.py'))
 
-# user_db_conn.py imports discord.ext.commands and tle.util.codeforces_*
-# Both are stubbed above, so this should work now
+# starboard_db.py — standalone mixin, no heavy deps
+_load_module('tle.util.db.starboard_db', os.path.join(_db_path, 'starboard_db.py'))
+
+# user_db_conn.py imports discord.ext.commands, tle.util.codeforces_*, and starboard_db
+# All are stubbed/loaded above, so this should work now
 _load_module('tle.util.db.user_db_conn', os.path.join(_db_path, 'user_db_conn.py'))
 
 # user_db_upgrades.py imports from tle.util.db.upgrades (already loaded)
 _load_module('tle.util.db.user_db_upgrades', os.path.join(_db_path, 'user_db_upgrades.py'))
 
-# starboard.py — load for pure-function tests (_parse_jump_url, etc.)
+# starboard cog — load helpers, backfill mixin, then main cog for pure-function tests
 # Needs tle.cogs package stub
 if 'tle.cogs' not in sys.modules:
     _cogs_mod = types.ModuleType('tle.cogs')
     _cogs_mod.__path__ = [os.path.join(_root, 'tle', 'cogs')]
     _cogs_mod.__package__ = 'tle.cogs'
     sys.modules['tle.cogs'] = _cogs_mod
-_load_module('tle.cogs.starboard', os.path.join(_root, 'tle', 'cogs', 'starboard.py'))
+_cogs_path = os.path.join(_root, 'tle', 'cogs')
+_load_module('tle.cogs.starboard_helpers', os.path.join(_cogs_path, 'starboard_helpers.py'))
+_load_module('tle.cogs.starboard_backfill', os.path.join(_cogs_path, 'starboard_backfill.py'))
+_load_module('tle.cogs.starboard', os.path.join(_cogs_path, 'starboard.py'))
