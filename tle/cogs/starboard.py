@@ -289,7 +289,8 @@ class Starboard(commands.Cog):
                             else:
                                 logger.debug(f'Backfill: stored channel={stored_channel_id} not in bot cache')
 
-                        # Try to find original channel via the starboard embed's "Jump to" link
+                        # Try to find original channel via the starboard embed's "Jump to" link.
+                        # We intentionally do not fall back to scanning every guild text channel.
                         if original_msg is None and msg.starboard_msg_id:
                             sb_channel = emoji_sb_channels.get(msg.emoji)
                             if sb_channel:
@@ -316,7 +317,11 @@ class Starboard(commands.Cog):
                                                                 f'Backfill: original msg={msg.original_msg_id} '
                                                                 f'not found via embed link (channel={orig_ch_id})'
                                                             )
-                                                break  # Only check the first embed
+                                                break
+                                        if original_msg is not None:
+                                            break
+                                        if any(field.name == 'Jump to' for field in embed.fields):
+                                            break
                                 except (discord.NotFound, discord.Forbidden):
                                     logger.debug(
                                         f'Backfill: starboard embed {msg.starboard_msg_id} not found '
@@ -328,30 +333,11 @@ class Starboard(commands.Cog):
                                         f'{msg.starboard_msg_id}: {e}'
                                     )
 
-                        # Last resort: scan all text channels
                         if original_msg is None:
-                            logger.debug(f'Backfill: scanning channels for msg={msg.original_msg_id} '
-                                         f'in guild={guild.id}')
-                            channels_tried = 0
-                            for ch in guild.text_channels:
-                                try:
-                                    original_msg = await ch.fetch_message(int(msg.original_msg_id))
-                                    logger.info(f'Backfill: found msg={msg.original_msg_id} '
-                                                f'in channel={ch.name} ({ch.id}) after scanning '
-                                                f'{channels_tried + 1} channels')
-                                    break
-                                except (discord.NotFound, discord.Forbidden):
-                                    channels_tried += 1
-                                    continue
-                                except discord.HTTPException as e:
-                                    channels_tried += 1
-                                    logger.debug(f'Backfill: HTTP error on channel={ch.id}: {e}')
-                                    continue
-
-                        if original_msg is None:
-                            logger.warning(f'Backfill: FAILED to find msg={msg.original_msg_id} '
-                                           f'in any channel of guild={guild.id} '
-                                           f'(message may have been deleted)')
+                            logger.warning(
+                                f'Backfill: unresolved msg={msg.original_msg_id} in guild={guild.id} '
+                                f'after stored-channel and jump-url lookup; marking as unknown'
+                            )
                             # Mark with sentinel so we don't retry on next restart
                             cf_common.user_db.update_starboard_author_and_count(
                                 msg.original_msg_id, msg.emoji, _BACKFILL_UNKNOWN, 0
