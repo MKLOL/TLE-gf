@@ -440,14 +440,14 @@ class UserDbConn(StarboardDbMixin):
         self.conn.commit()
         return rc
 
-    def _fetchone(self, query: str, params=None, row_factory=None):
+    def _fetchone(self, query: str, params=(), row_factory=None):
         original = self.conn.row_factory
         self.conn.row_factory = row_factory
         res = self.conn.execute(query, params).fetchone()
         self.conn.row_factory = original
         return res
 
-    def _fetchall(self, query: str, params=None, row_factory=None):
+    def _fetchall(self, query: str, params=(), row_factory=None):
         original = self.conn.row_factory
         self.conn.row_factory = row_factory
         res = self.conn.execute(query, params).fetchall()
