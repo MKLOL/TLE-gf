@@ -704,7 +704,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, message, ctx.guild.id, False)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @duel.command(brief='Print user dueling history')
     async def history(self, ctx, member: discord.Member = None):
@@ -714,7 +714,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, message, ctx.guild.id, False)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @duel.command(brief='Print a list of recent duels.')
     async def recent(self, ctx):
@@ -722,7 +722,7 @@ class Dueling(commands.Cog):
         pages = self._paginate_duels(
             data, 'list of recent duels', ctx.guild.id, True)
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @duel.command(brief='Print list of ongoing duels.')
     async def ongoing(self, ctx, member: discord.Member = None):
@@ -749,7 +749,7 @@ class Dueling(commands.Cog):
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(data, 7)]
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @duel.command(brief="Show duelists")
     async def ranklist(self, ctx):
@@ -786,7 +786,7 @@ class Dueling(commands.Cog):
         pages = [make_page(chunk, k) for k, chunk in enumerate(
             paginator.chunkify(users, _PER_PAGE))]
         paginator.paginate(self.bot, ctx.channel, pages,
-                           wait_time=5 * 60, set_pagenum_footers=True)
+                           wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     async def invalidate_duel(self, ctx, duelid, challenger_id, challengee_id): 
         rc = cf_common.user_db.invalidate_duel(duelid, ctx.guild.id)

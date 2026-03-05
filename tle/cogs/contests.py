@@ -196,7 +196,7 @@ class Contests(commands.Cog):
             return
         pages = self._make_contest_pages(contests, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_CONTEST_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     @commands.group(brief='Commands for listing contests',
                     invoke_without_command=True)
@@ -724,7 +724,7 @@ class Contests(commands.Cog):
             raise ContestCogError('There are no active VCers.')
 
         pages = [make_page(chunk, k) for k, chunk in enumerate(paginator.chunkify(users, _PER_PAGE))]
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @commands.command(brief='Plot vc rating for a list of at most 5 users', usage='@user1 @user2 ..')
     async def vcrating(self, ctx, *members: discord.Member):

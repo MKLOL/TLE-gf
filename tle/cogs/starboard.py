@@ -410,7 +410,7 @@ class Starboard(BackfillMixin, commands.Cog):
         logger.info(f'CMD starboard leaderboard: guild={ctx.guild.id} emoji={emoji} '
                     f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Starboard Leaderboard', 'messages')
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
         # Send personal rank
         await self._send_personal_rank(ctx, rows, 'messages')
@@ -437,7 +437,7 @@ class Starboard(BackfillMixin, commands.Cog):
         logger.info(f'CMD starboard star-leaderboard: guild={ctx.guild.id} emoji={emoji} '
                     f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Star Leaderboard', 'stars')
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
         # Send personal rank
         await self._send_personal_rank(ctx, rows, 'stars')
@@ -463,7 +463,7 @@ class Starboard(BackfillMixin, commands.Cog):
         logger.info(f'CMD starboard star-givers: guild={ctx.guild.id} emoji={emoji} '
                     f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Star Givers', 'stars given')
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
         await self._send_personal_rank(ctx, rows, 'stars given')
 
@@ -505,7 +505,7 @@ class Starboard(BackfillMixin, commands.Cog):
                 color=discord_common.random_cf_color()
             )
             pages.append((None, embed))
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @staticmethod
     def _get_user_id(row):

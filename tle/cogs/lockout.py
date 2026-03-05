@@ -531,7 +531,7 @@ class Round(commands.Cog):
         title = 'List of ongoing lockout rounds'
         pages = _make_pages(data, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     @round.command(name="recent", brief="Show recent rounds")
     async def recent(self, ctx, user: discord.Member=None):
@@ -563,7 +563,7 @@ class Round(commands.Cog):
         title = 'List of recent lockout rounds'
         pages = _make_pages(data, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
 #     @round.command(name="custom", brief="Challenge to a round with custom problemset")
 #     async def custom(self, ctx, *users: discord.Member):

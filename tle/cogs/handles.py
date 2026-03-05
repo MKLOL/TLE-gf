@@ -676,7 +676,7 @@ class Handles(commands.Cog):
             title += ' from ' + ', '.join(f'`{country}`' for country in countries)
         pages = _make_pages(users, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
-                           set_pagenum_footers=True)
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     @handle.command(brief="Show handles, but prettier")
     async def pretty(self, ctx, page_no: int = None):

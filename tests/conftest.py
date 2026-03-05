@@ -194,6 +194,7 @@ _dc._ALERT_AMBER = 0xFFBF00
 _pg = sys.modules['tle.util.paginator']
 _pg.chunkify = lambda seq, n: [seq[i:i+n] for i in range(0, len(seq), n)]
 _pg.paginate = lambda *a, **kw: None
+_pg.NoPagesError = type('NoPagesError', (Exception,), {})
 
 # ── Step 3: Load the actual modules we want to test ─────────────────────
 _db_path = os.path.join(_root, 'tle', 'util', 'db')
