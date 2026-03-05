@@ -143,7 +143,7 @@ class Rpoll(commands.Cog):
             for poll in polls:
                 options = cf_common.user_db.get_rpoll_options(poll.poll_id)
                 view = RpollView(poll.poll_id, len(options))
-                self.bot.add_view(view)
+                self.bot.add_view(view, message_id=int(poll.message_id))
             if polls:
                 logger.info(f'rpoll: Re-registered {len(polls)} persistent poll views')
         except Exception as e:
