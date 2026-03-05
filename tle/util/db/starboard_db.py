@@ -359,6 +359,25 @@ class StarboardDbMixin:
         '''
         return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
 
+    def get_narcissus_leaderboard(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
+        """Get leaderboard of users who starred their own messages the most."""
+        guild_id = str(guild_id)
+        time_clauses, time_params = self._snowflake_time_filter('m.original_msg_id', dlo, dhi)
+        extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
+        query = f'''
+            SELECT r.user_id, COUNT(*) as self_stars
+            FROM starboard_reactors r
+            JOIN starboard_message_v1 m
+                ON r.original_msg_id = m.original_msg_id AND r.emoji = m.emoji
+            WHERE m.guild_id = ? AND r.emoji = ?
+                AND r.user_id = m.author_id
+                AND m.author_id IS NOT NULL AND m.author_id != '__UNKNOWN__'
+                {extra}
+            GROUP BY r.user_id
+            ORDER BY self_stars DESC
+        '''
+        return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
+
     def get_top_starboard_messages(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
         """Get top starboarded messages sorted by star_count DESC, original_msg_id DESC."""
         guild_id = str(guild_id)

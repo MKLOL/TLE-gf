@@ -436,6 +436,78 @@ class TestGetEmojisForGuild:
 
 
 # =====================================================================
+# Narcissus leaderboard (self-stars)
+# =====================================================================
+
+class TestNarcissusLeaderboard:
+    def _setup_starboard(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+
+    def test_self_star_counted(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
+        db.add_reactor('100', STAR, 'user1')  # self-star
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 1
+        assert rows[0].user_id == 'user1'
+        assert rows[0].self_stars == 1
+
+    def test_non_self_star_not_counted(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
+        db.add_reactor('100', STAR, 'user2')  # not self-star
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 0
+
+    def test_multiple_self_stars(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
+        db.add_starboard_message_v1('101', '201', GUILD_A, STAR, author_id='user1')
+        db.add_reactor('100', STAR, 'user1')
+        db.add_reactor('101', STAR, 'user1')
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 1
+        assert rows[0].self_stars == 2
+
+    def test_ranking_order(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
+        db.add_starboard_message_v1('101', '201', GUILD_A, STAR, author_id='user2')
+        db.add_starboard_message_v1('102', '202', GUILD_A, STAR, author_id='user2')
+        db.add_reactor('100', STAR, 'user1')
+        db.add_reactor('101', STAR, 'user2')
+        db.add_reactor('102', STAR, 'user2')
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert rows[0].user_id == 'user2'
+        assert rows[0].self_stars == 2
+        assert rows[1].user_id == 'user1'
+        assert rows[1].self_stars == 1
+
+    def test_excludes_unknown_author(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='__UNKNOWN__')
+        db.add_reactor('100', STAR, '__UNKNOWN__')
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 0
+
+    def test_empty_when_no_self_stars(self, db):
+        self._setup_starboard(db)
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 0
+
+    def test_guild_isolation(self, db):
+        self._setup_starboard(db)
+        db.add_starboard_emoji(GUILD_B, STAR, 3, 0xffaa10)
+        db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
+        db.add_starboard_message_v1('101', '201', GUILD_B, STAR, author_id='user1')
+        db.add_reactor('100', STAR, 'user1')
+        db.add_reactor('101', STAR, 'user1')
+        rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 1
+        assert rows[0].self_stars == 1
+
+
+# =====================================================================
 # Same message, different emojis (the core multi-emoji scenario)
 # =====================================================================
 

@@ -467,6 +467,31 @@ class Starboard(BackfillMixin, commands.Cog):
 
         await self._send_personal_rank(ctx, rows, 'stars given')
 
+    @starboard.command(brief='Show who stars their own messages the most',
+                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def narcissus(self, ctx, *args):
+        """Show users who star their own messages the most.
+        Requires the `starboard_leaderboard` feature to be enabled.
+        Supports timeline filters: week, month, year, d>=date, d<date."""
+        emoji, dlo, dhi = _parse_starboard_args(args)
+        if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
+            raise StarboardCogError('Starboard leaderboard is not enabled. '
+                                    'An admin can enable it with `;meta config enable starboard_leaderboard`.')
+        entry = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
+        if entry is None:
+            raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
+
+        rows = cf_common.user_db.get_narcissus_leaderboard(ctx.guild.id, emoji, dlo, dhi)
+        if not rows:
+            raise StarboardCogError(f'No self-stars found for {emoji}. How humble!')
+
+        logger.info(f'CMD starboard narcissus: guild={ctx.guild.id} emoji={emoji} '
+                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
+        pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Narcissus Leaderboard', 'self-stars')
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
+
+        await self._send_personal_rank(ctx, rows, 'self-stars')
+
     @starboard.command(brief='Show top starred messages',
                        usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def top(self, ctx, *args):
@@ -515,7 +540,7 @@ class Starboard(BackfillMixin, commands.Cog):
     @staticmethod
     def _get_count(row):
         """Extract count from a leaderboard row."""
-        for attr in ('message_count', 'total_stars', 'stars_given'):
+        for attr in ('message_count', 'total_stars', 'stars_given', 'self_stars'):
             val = getattr(row, attr, None)
             if val is not None:
                 return val
