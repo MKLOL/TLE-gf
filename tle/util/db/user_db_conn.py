@@ -915,6 +915,19 @@ class UserDbConn:
         '''
         return self.conn.execute(query, (guild_id, emoji)).fetchall()
 
+    def get_top_starboard_messages(self, guild_id, emoji):
+        """Get top starboarded messages sorted by star_count DESC, original_msg_id DESC."""
+        guild_id = str(guild_id)
+        query = '''
+            SELECT original_msg_id, author_id, star_count, channel_id
+            FROM starboard_message_v1
+            WHERE guild_id = ? AND emoji = ?
+                AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
+                AND star_count > 0
+            ORDER BY star_count DESC, original_msg_id DESC
+        '''
+        return self.conn.execute(query, (guild_id, emoji)).fetchall()
+
     def get_all_starboard_messages_for_guild(self, guild_id):
         """Get all starboard messages for a guild (used by backfill)."""
         guild_id = str(guild_id)

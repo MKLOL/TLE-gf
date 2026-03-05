@@ -563,6 +563,43 @@ class Starboard(commands.Cog):
         # Send personal rank
         await self._send_personal_rank(ctx, rows, 'stars')
 
+    @starboard.command(brief='Show top starred messages')
+    async def top(self, ctx, emoji: str):
+        """Show top starboarded messages sorted by star count for an emoji.
+        Requires the `starboard_leaderboard` feature to be enabled."""
+        if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
+            raise StarboardCogError('Starboard leaderboard is not enabled. '
+                                    'An admin can enable it with `;meta config starboard_leaderboard enable`.')
+        entry = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
+        if entry is None:
+            raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
+
+        rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji)
+        if not rows:
+            raise StarboardCogError(f'No starred messages found for {emoji}.')
+
+        logger.info(f'CMD starboard top: guild={ctx.guild.id} emoji={emoji} '
+                    f'{len(rows)} messages by user={ctx.author.id}')
+
+        per_page = 10
+        chunks = paginator.chunkify(rows, per_page)
+        pages = []
+        for page_idx, chunk in enumerate(chunks):
+            lines = []
+            for i, row in enumerate(chunk):
+                rank = page_idx * per_page + i + 1
+                jump_url = f'https://discord.com/channels/{ctx.guild.id}/{row.channel_id}/{row.original_msg_id}'
+                member = ctx.guild.get_member(int(row.author_id))
+                name = member.mention if member else f'<@{row.author_id}>'
+                lines.append(f'**#{rank}** {name} — **{row.star_count}** {emoji} — [Jump]({jump_url})')
+            embed = discord.Embed(
+                title=f'{emoji} Top Starred Messages',
+                description='\n'.join(lines),
+                color=discord_common.random_cf_color()
+            )
+            pages.append((None, embed))
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
+
     def _make_leaderboard_pages(self, ctx, rows, emoji, title, unit):
         """Build paginated embed pages from leaderboard rows."""
         per_page = 10

@@ -54,4 +54,4 @@ Tests stub out discord.py, aiohttp, and other heavy deps in `conftest.py` so the
 
 ## Commits convention
 
-Use imperative mood, short first line. `Co-Authored-By` trailer when AI-assisted.
+Use imperative mood, short first line. `Co-Authored-By` trailer when AI-assisted. Always stage files and commit without being asked. Do not use `$()` command substitution in commit messages — use a plain string with `-m`.
