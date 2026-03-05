@@ -9,7 +9,7 @@ from collections import namedtuple
 
 import pytest
 
-from tle.util.db.user_db_conn import namedtuple_factory
+from tle.util.db.user_db_conn import namedtuple_factory, snowflake_to_unix_sql, _NO_TIME_BOUND
 
 
 class FakeUserDb:
@@ -207,30 +207,80 @@ class FakeUserDb:
         )
         self.conn.commit()
 
-    def get_starboard_leaderboard(self, guild_id, emoji):
+    @staticmethod
+    def _snowflake_time_filter(col, dlo, dhi):
+        clauses = []
+        params = []
+        ts_expr = snowflake_to_unix_sql(col)
+        if dlo and dlo > 0:
+            clauses.append(f'{ts_expr} >= ?')
+            params.append(dlo)
+        if dhi and dhi < _NO_TIME_BOUND:
+            clauses.append(f'{ts_expr} < ?')
+            params.append(dhi)
+        return clauses, params
+
+    def get_starboard_leaderboard(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
         guild_id = str(guild_id)
-        query = '''
+        time_clauses, time_params = self._snowflake_time_filter('original_msg_id', dlo, dhi)
+        extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
+        query = f'''
             SELECT author_id, COUNT(*) as message_count
             FROM starboard_message_v1
             WHERE guild_id = ? AND emoji = ?
                 AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
+                {extra}
             GROUP BY author_id
             ORDER BY message_count DESC
         '''
-        return self.conn.execute(query, (guild_id, emoji)).fetchall()
+        return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
 
-    def get_starboard_star_leaderboard(self, guild_id, emoji):
+    def get_starboard_star_leaderboard(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
         guild_id = str(guild_id)
-        query = '''
+        time_clauses, time_params = self._snowflake_time_filter('original_msg_id', dlo, dhi)
+        extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
+        query = f'''
             SELECT author_id, SUM(star_count) as total_stars
             FROM starboard_message_v1
             WHERE guild_id = ? AND emoji = ?
                 AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
                 AND star_count > 0
+                {extra}
             GROUP BY author_id
             ORDER BY total_stars DESC
         '''
-        return self.conn.execute(query, (guild_id, emoji)).fetchall()
+        return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
+
+    def get_star_givers_leaderboard(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
+        guild_id = str(guild_id)
+        time_clauses, time_params = self._snowflake_time_filter('m.original_msg_id', dlo, dhi)
+        extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
+        query = f'''
+            SELECT r.user_id, COUNT(*) as stars_given
+            FROM starboard_reactors r
+            JOIN starboard_message_v1 m
+                ON r.original_msg_id = m.original_msg_id AND r.emoji = m.emoji
+            WHERE m.guild_id = ? AND r.emoji = ?
+                {extra}
+            GROUP BY r.user_id
+            ORDER BY stars_given DESC
+        '''
+        return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
+
+    def get_top_starboard_messages(self, guild_id, emoji, dlo=0, dhi=_NO_TIME_BOUND):
+        guild_id = str(guild_id)
+        time_clauses, time_params = self._snowflake_time_filter('original_msg_id', dlo, dhi)
+        extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
+        query = f'''
+            SELECT original_msg_id, author_id, star_count, channel_id
+            FROM starboard_message_v1
+            WHERE guild_id = ? AND emoji = ?
+                AND author_id IS NOT NULL AND author_id != '__UNKNOWN__'
+                AND star_count > 0
+                {extra}
+            ORDER BY star_count DESC, original_msg_id DESC
+        '''
+        return self.conn.execute(query, (guild_id, emoji) + tuple(time_params)).fetchall()
 
     def get_all_starboard_messages_for_guild(self, guild_id):
         guild_id = str(guild_id)

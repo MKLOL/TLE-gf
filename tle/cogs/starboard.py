@@ -1,6 +1,8 @@
 import asyncio
+import datetime
 import logging
 import re
+import time
 
 import discord
 from discord.ext import commands
@@ -11,6 +13,50 @@ from tle.util import discord_common
 from tle.util import paginator
 
 logger = logging.getLogger(__name__)
+
+_TIMELINE_KEYWORDS = {'week', 'month', 'year'}
+
+# No time bound sentinel — matches the DB layer constant
+_NO_TIME_BOUND = 10 ** 10
+
+
+def _parse_starboard_args(args, default_emoji=constants._DEFAULT_STAR):
+    """Parse args for starboard leaderboard/top commands.
+
+    Returns (emoji, dlo, dhi) where dlo/dhi are unix timestamps (seconds).
+    Supports:
+      - timeline keywords: week, month, year
+      - date ranges: d>=[[dd]mm]yyyy  d<[[dd]mm]yyyy
+      - emoji (anything else that isn't a keyword or date arg)
+    If no emoji is provided, defaults to default_emoji.
+    If no time filter is provided, dlo=0 and dhi=_NO_TIME_BOUND.
+    """
+    emoji = None
+    dlo = 0
+    dhi = _NO_TIME_BOUND
+
+    for arg in args:
+        lower = arg.lower()
+        if lower in _TIMELINE_KEYWORDS:
+            now = datetime.datetime.now()
+            if lower == 'week':
+                # Monday of this week at 00:00
+                monday = now - datetime.timedelta(days=now.weekday())
+                dlo = time.mktime(monday.replace(hour=0, minute=0, second=0, microsecond=0).timetuple())
+            elif lower == 'month':
+                dlo = time.mktime(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+            elif lower == 'year':
+                dlo = time.mktime(now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+        elif lower.startswith('d>='):
+            dlo = max(dlo, cf_common.parse_date(arg[3:]))
+        elif lower.startswith('d<'):
+            dhi = min(dhi, cf_common.parse_date(arg[2:]))
+        else:
+            emoji = arg
+
+    if emoji is None:
+        emoji = default_emoji
+    return emoji, dlo, dhi
 
 # Sentinel value for author_id when a message could not be fetched during backfill.
 # This prevents infinite retry loops on restart. Excluded from leaderboard queries.
@@ -561,10 +607,13 @@ class Starboard(commands.Cog):
 
     # --- Leaderboard commands ---
 
-    @starboard.command(brief='Show starboard leaderboard by message count')
-    async def leaderboard(self, ctx, emoji: str = constants._DEFAULT_STAR):
+    @starboard.command(brief='Show starboard leaderboard by message count',
+                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def leaderboard(self, ctx, *args):
         """Show top users by number of starboarded messages for an emoji.
-        Requires the `starboard_leaderboard` feature to be enabled."""
+        Requires the `starboard_leaderboard` feature to be enabled.
+        Supports timeline filters: week, month, year, d>=date, d<date."""
+        emoji, dlo, dhi = _parse_starboard_args(args)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -572,22 +621,25 @@ class Starboard(commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_starboard_leaderboard(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_starboard_leaderboard(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
             raise StarboardCogError(f'No starboarded messages found for {emoji}.')
 
         logger.info(f'CMD starboard leaderboard: guild={ctx.guild.id} emoji={emoji} '
-                    f'{len(rows)} users by user={ctx.author.id}')
+                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Starboard Leaderboard', 'messages')
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
 
         # Send personal rank
         await self._send_personal_rank(ctx, rows, 'messages')
 
-    @starboard.command(name='star-leaderboard', brief='Show starboard leaderboard by star count')
-    async def star_leaderboard(self, ctx, emoji: str = constants._DEFAULT_STAR):
+    @starboard.command(name='star-leaderboard', brief='Show starboard leaderboard by star count',
+                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def star_leaderboard(self, ctx, *args):
         """Show top users by total star count for an emoji.
-        Requires the `starboard_leaderboard` feature to be enabled."""
+        Requires the `starboard_leaderboard` feature to be enabled.
+        Supports timeline filters: week, month, year, d>=date, d<date."""
+        emoji, dlo, dhi = _parse_starboard_args(args)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -595,23 +647,26 @@ class Starboard(commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_starboard_star_leaderboard(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_starboard_star_leaderboard(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
             raise StarboardCogError(f'No star data found for {emoji}. '
                                     'Star counts are populated via backfill and live tracking.')
 
         logger.info(f'CMD starboard star-leaderboard: guild={ctx.guild.id} emoji={emoji} '
-                    f'{len(rows)} users by user={ctx.author.id}')
+                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Star Leaderboard', 'stars')
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
 
         # Send personal rank
         await self._send_personal_rank(ctx, rows, 'stars')
 
-    @starboard.command(name='star-givers', brief='Show top star givers')
-    async def star_givers(self, ctx, emoji: str = constants._DEFAULT_STAR):
+    @starboard.command(name='star-givers', brief='Show top star givers',
+                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def star_givers(self, ctx, *args):
         """Show top users by number of stars given (reactions) for an emoji.
-        Requires the `starboard_leaderboard` feature to be enabled."""
+        Requires the `starboard_leaderboard` feature to be enabled.
+        Supports timeline filters: week, month, year, d>=date, d<date."""
+        emoji, dlo, dhi = _parse_starboard_args(args)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -619,21 +674,24 @@ class Starboard(commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_star_givers_leaderboard(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_star_givers_leaderboard(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
             raise StarboardCogError(f'No reactor data found for {emoji}.')
 
         logger.info(f'CMD starboard star-givers: guild={ctx.guild.id} emoji={emoji} '
-                    f'{len(rows)} users by user={ctx.author.id}')
+                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Star Givers', 'stars given')
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True)
 
         await self._send_personal_rank(ctx, rows, 'stars given')
 
-    @starboard.command(brief='Show top starred messages')
-    async def top(self, ctx, emoji: str = constants._DEFAULT_STAR):
+    @starboard.command(brief='Show top starred messages',
+                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def top(self, ctx, *args):
         """Show top starboarded messages sorted by star count for an emoji.
-        Requires the `starboard_leaderboard` feature to be enabled."""
+        Requires the `starboard_leaderboard` feature to be enabled.
+        Supports timeline filters: week, month, year, d>=date, d<date."""
+        emoji, dlo, dhi = _parse_starboard_args(args)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -641,12 +699,12 @@ class Starboard(commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
             raise StarboardCogError(f'No starred messages found for {emoji}.')
 
         logger.info(f'CMD starboard top: guild={ctx.guild.id} emoji={emoji} '
-                    f'{len(rows)} messages by user={ctx.author.id}')
+                    f'dlo={dlo} dhi={dhi} {len(rows)} messages by user={ctx.author.id}')
 
         per_page = 10
         chunks = paginator.chunkify(rows, per_page)

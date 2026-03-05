@@ -702,7 +702,7 @@ class TestGetEmojisIncludesChannelId:
 # =====================================================================
 
 from tle.cogs.starboard import Starboard
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class _FakeDisplayAvatar:
@@ -794,13 +794,18 @@ def _unwrap(attr):
 class TestDefaultEmojiParameter:
     """All starboard commands should default the emoji parameter to the star emoji."""
 
-    _COMMANDS_WITH_EMOJI = [
+    # Commands with an explicit emoji parameter (admin/config commands)
+    _COMMANDS_WITH_EMOJI_PARAM = [
         'add', 'delete', 'edit_threshold', 'edit_color',
         'here', 'clear', 'remove',
+    ]
+
+    # Commands using *args + _parse_starboard_args (leaderboard/top commands)
+    _COMMANDS_WITH_ARGS = [
         'leaderboard', 'star_leaderboard', 'star_givers', 'top',
     ]
 
-    @pytest.mark.parametrize('method_name', _COMMANDS_WITH_EMOJI)
+    @pytest.mark.parametrize('method_name', _COMMANDS_WITH_EMOJI_PARAM)
     def test_emoji_defaults_to_star(self, method_name):
         method = _unwrap(getattr(Starboard, method_name))
         sig = inspect.signature(method)
@@ -809,6 +814,13 @@ class TestDefaultEmojiParameter:
         assert param.default == _DEFAULT_STAR, (
             f'{method_name}: emoji default is {param.default!r}, expected {_DEFAULT_STAR!r}'
         )
+
+    @pytest.mark.parametrize('method_name', _COMMANDS_WITH_ARGS)
+    def test_args_commands_use_varargs(self, method_name):
+        """Leaderboard/top commands use *args and parse emoji via _parse_starboard_args."""
+        method = _unwrap(getattr(Starboard, method_name))
+        sig = inspect.signature(method)
+        assert 'args' in sig.parameters, f'{method_name} should accept *args'
 
     def test_edit_threshold_required_arg_before_emoji(self):
         """threshold should come before the optional emoji."""
@@ -827,3 +839,411 @@ class TestDefaultEmojiParameter:
         sig = inspect.signature(_unwrap(Starboard.remove))
         params = list(sig.parameters.keys())
         assert params.index('original_message_id') < params.index('emoji')
+
+
+# =====================================================================
+# _parse_starboard_args
+# =====================================================================
+
+from tle.cogs.starboard import _parse_starboard_args, _NO_TIME_BOUND
+import time as time_mod
+
+
+class TestParseStarboardArgs:
+    """Test the argument parser for starboard leaderboard/top commands."""
+
+    def test_no_args_defaults_to_star_all_time(self):
+        emoji, dlo, dhi = _parse_starboard_args(())
+        assert emoji == STAR
+        assert dlo == 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_emoji_only(self):
+        emoji, dlo, dhi = _parse_starboard_args(('🔥',))
+        assert emoji == '🔥'
+        assert dlo == 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_star_emoji_explicit(self):
+        emoji, dlo, dhi = _parse_starboard_args(('⭐',))
+        assert emoji == '⭐'
+        assert dlo == 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_week_keyword_defaults_star(self):
+        emoji, dlo, dhi = _parse_starboard_args(('week',))
+        assert emoji == STAR
+        assert dlo > 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_month_keyword_defaults_star(self):
+        emoji, dlo, dhi = _parse_starboard_args(('month',))
+        assert emoji == STAR
+        assert dlo > 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_year_keyword_defaults_star(self):
+        emoji, dlo, dhi = _parse_starboard_args(('year',))
+        assert emoji == STAR
+        assert dlo > 0
+        assert dhi == _NO_TIME_BOUND
+
+    def test_emoji_and_week(self):
+        emoji, dlo, dhi = _parse_starboard_args(('🔥', 'week'))
+        assert emoji == '🔥'
+        assert dlo > 0
+
+    def test_week_and_emoji_reversed_order(self):
+        """Order shouldn't matter."""
+        emoji, dlo, dhi = _parse_starboard_args(('week', '🔥'))
+        assert emoji == '🔥'
+        assert dlo > 0
+
+    def test_week_sets_monday(self):
+        emoji, dlo, dhi = _parse_starboard_args(('week',))
+        monday = datetime.fromtimestamp(dlo)
+        assert monday.weekday() == 0  # Monday
+        assert monday.hour == 0
+        assert monday.minute == 0
+        assert monday.second == 0
+
+    def test_month_sets_first_of_month(self):
+        emoji, dlo, dhi = _parse_starboard_args(('month',))
+        first = datetime.fromtimestamp(dlo)
+        assert first.day == 1
+        assert first.hour == 0
+        assert first.minute == 0
+
+    def test_year_sets_jan_first(self):
+        emoji, dlo, dhi = _parse_starboard_args(('year',))
+        jan1 = datetime.fromtimestamp(dlo)
+        assert jan1.month == 1
+        assert jan1.day == 1
+        assert jan1.hour == 0
+
+    def test_dge_date_arg(self):
+        """d>=01012025 should set dlo to Jan 1 2025."""
+        emoji, dlo, dhi = _parse_starboard_args(('d>=01012025',))
+        assert emoji == STAR
+        dt_obj = datetime.fromtimestamp(dlo)
+        assert dt_obj.year == 2025
+        assert dt_obj.month == 1
+        assert dt_obj.day == 1
+
+    def test_dlt_date_arg(self):
+        """d<01022025 should set dhi to Feb 1 2025."""
+        emoji, dlo, dhi = _parse_starboard_args(('d<01022025',))
+        assert emoji == STAR
+        dt_obj = datetime.fromtimestamp(dhi)
+        assert dt_obj.year == 2025
+        assert dt_obj.month == 2
+        assert dt_obj.day == 1
+
+    def test_dge_and_dlt_combined(self):
+        emoji, dlo, dhi = _parse_starboard_args(('d>=01012025', 'd<01022025'))
+        assert emoji == STAR
+        assert dlo < dhi
+        lo_dt = datetime.fromtimestamp(dlo)
+        hi_dt = datetime.fromtimestamp(dhi)
+        assert lo_dt.month == 1
+        assert hi_dt.month == 2
+
+    def test_emoji_with_dge_and_dlt(self):
+        emoji, dlo, dhi = _parse_starboard_args(('🔥', 'd>=01012025', 'd<01022025'))
+        assert emoji == '🔥'
+        assert dlo > 0
+        assert dhi < _NO_TIME_BOUND
+
+    def test_year_only_format(self):
+        """d>=2024 should parse as Jan 1 2024."""
+        emoji, dlo, dhi = _parse_starboard_args(('d>=2024',))
+        dt_obj = datetime.fromtimestamp(dlo)
+        assert dt_obj.year == 2024
+        assert dt_obj.month == 1
+        assert dt_obj.day == 1
+
+    def test_month_year_format(self):
+        """d>=032025 should parse as March 2025."""
+        emoji, dlo, dhi = _parse_starboard_args(('d>=032025',))
+        dt_obj = datetime.fromtimestamp(dlo)
+        assert dt_obj.year == 2025
+        assert dt_obj.month == 3
+
+    def test_keyword_case_insensitive(self):
+        emoji, dlo, dhi = _parse_starboard_args(('Week',))
+        assert emoji == STAR
+        assert dlo > 0
+
+    def test_keyword_uppercase(self):
+        emoji, dlo, dhi = _parse_starboard_args(('MONTH',))
+        assert emoji == STAR
+        assert dlo > 0
+
+    def test_timeline_keyword_not_treated_as_emoji(self):
+        """'week' should not be stored as the emoji."""
+        emoji, dlo, dhi = _parse_starboard_args(('week',))
+        assert emoji != 'week'
+        assert emoji == STAR
+
+    def test_multiple_emojis_last_wins(self):
+        """If multiple non-keyword args given, last one is the emoji."""
+        emoji, dlo, dhi = _parse_starboard_args(('🔥', '❤️'))
+        assert emoji == '❤️'
+
+    def test_week_dge_combined_uses_max_dlo(self):
+        """d>= should take max with week's dlo."""
+        # Use a date far in the future to ensure it overrides week
+        emoji, dlo, dhi = _parse_starboard_args(('week', 'd>=01012030'))
+        dt_obj = datetime.fromtimestamp(dlo)
+        assert dt_obj.year == 2030
+
+    def test_default_emoji_override(self):
+        emoji, dlo, dhi = _parse_starboard_args(('week',), default_emoji='🔥')
+        assert emoji == '🔥'
+
+
+# =====================================================================
+# DB time filtering via snowflake timestamps
+# =====================================================================
+
+
+def _make_snowflake(year, month, day):
+    """Create a Discord snowflake ID from a date. Used in tests to create
+    messages at known timestamps for time-range filtering."""
+    dt_obj = datetime(year, month, day, tzinfo=timezone.utc)
+    ts_ms = int(dt_obj.timestamp() * 1000)
+    # Discord epoch is 2015-01-01 00:00:00 UTC = 1420070400000 ms
+    discord_epoch_ms = 1420070400000
+    snowflake = (ts_ms - discord_epoch_ms) << 22
+    return str(snowflake)
+
+
+class TestSnowflakeTimeFiltering:
+    """Test that DB leaderboard queries correctly filter by snowflake timestamp."""
+
+    def _setup_messages(self, db):
+        """Add messages at known dates for filtering tests."""
+        db.add_starboard_emoji(GUILD_A, STAR, 1, 0xffaa10)
+        # Jan 2024 message
+        db.add_starboard_message_v1(
+            _make_snowflake(2024, 1, 15), 'sb1', GUILD_A, STAR, author_id='user1')
+        db.update_starboard_star_count(_make_snowflake(2024, 1, 15), STAR, 5)
+        # June 2024 message
+        db.add_starboard_message_v1(
+            _make_snowflake(2024, 6, 15), 'sb2', GUILD_A, STAR, author_id='user1')
+        db.update_starboard_star_count(_make_snowflake(2024, 6, 15), STAR, 3)
+        # Dec 2024 message
+        db.add_starboard_message_v1(
+            _make_snowflake(2024, 12, 1), 'sb3', GUILD_A, STAR, author_id='user2')
+        db.update_starboard_star_count(_make_snowflake(2024, 12, 1), STAR, 10)
+        # Feb 2025 message
+        db.add_starboard_message_v1(
+            _make_snowflake(2025, 2, 10), 'sb4', GUILD_A, STAR, author_id='user2')
+        db.update_starboard_star_count(_make_snowflake(2025, 2, 10), STAR, 7)
+
+    def _setup_reactors(self, db):
+        """Add reactors for star-givers filtering tests."""
+        db.add_reactor(_make_snowflake(2024, 1, 15), STAR, 'reactor1')
+        db.add_reactor(_make_snowflake(2024, 1, 15), STAR, 'reactor2')
+        db.add_reactor(_make_snowflake(2025, 2, 10), STAR, 'reactor1')
+
+    def _ts(self, year, month, day):
+        """Get unix timestamp for a date."""
+        return datetime(year, month, day, tzinfo=timezone.utc).timestamp()
+
+    # --- get_starboard_leaderboard ---
+
+    def test_leaderboard_no_filter(self, db):
+        self._setup_messages(db)
+        rows = db.get_starboard_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 2  # user1 and user2
+
+    def test_leaderboard_dlo_filter(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2024, 7, 1)
+        rows = db.get_starboard_leaderboard(GUILD_A, STAR, dlo=dlo)
+        # Only Dec 2024 and Feb 2025 messages (user2 has both)
+        assert len(rows) == 1
+        assert rows[0].author_id == 'user2'
+        assert rows[0].message_count == 2
+
+    def test_leaderboard_dhi_filter(self, db):
+        self._setup_messages(db)
+        dhi = self._ts(2024, 7, 1)
+        rows = db.get_starboard_leaderboard(GUILD_A, STAR, dhi=dhi)
+        # Only Jan 2024 and June 2024 messages (user1 has both)
+        assert len(rows) == 1
+        assert rows[0].author_id == 'user1'
+
+    def test_leaderboard_range_filter(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2024, 6, 1)
+        dhi = self._ts(2024, 12, 31)
+        rows = db.get_starboard_leaderboard(GUILD_A, STAR, dlo=dlo, dhi=dhi)
+        # June 2024 (user1) and Dec 2024 (user2)
+        assert len(rows) == 2
+
+    def test_leaderboard_empty_range(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2023, 1, 1)
+        dhi = self._ts(2023, 12, 31)
+        rows = db.get_starboard_leaderboard(GUILD_A, STAR, dlo=dlo, dhi=dhi)
+        assert len(rows) == 0
+
+    # --- get_starboard_star_leaderboard ---
+
+    def test_star_leaderboard_no_filter(self, db):
+        self._setup_messages(db)
+        rows = db.get_starboard_star_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 2
+
+    def test_star_leaderboard_dlo_filter(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2024, 7, 1)
+        rows = db.get_starboard_star_leaderboard(GUILD_A, STAR, dlo=dlo)
+        assert len(rows) == 1
+        assert rows[0].author_id == 'user2'
+        assert rows[0].total_stars == 17  # 10 + 7
+
+    def test_star_leaderboard_range(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2024, 1, 1)
+        dhi = self._ts(2024, 7, 1)
+        rows = db.get_starboard_star_leaderboard(GUILD_A, STAR, dlo=dlo, dhi=dhi)
+        assert len(rows) == 1
+        assert rows[0].author_id == 'user1'
+        assert rows[0].total_stars == 8  # 5 + 3
+
+    # --- get_top_starboard_messages ---
+
+    def test_top_messages_no_filter(self, db):
+        self._setup_messages(db)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR)
+        assert len(rows) == 4
+
+    def test_top_messages_dlo_filter(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2025, 1, 1)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dlo=dlo)
+        assert len(rows) == 1
+        assert rows[0].star_count == 7
+
+    def test_top_messages_dhi_filter(self, db):
+        self._setup_messages(db)
+        dhi = self._ts(2024, 2, 1)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dhi=dhi)
+        assert len(rows) == 1
+        assert rows[0].star_count == 5
+
+    def test_top_messages_range(self, db):
+        self._setup_messages(db)
+        dlo = self._ts(2024, 6, 1)
+        dhi = self._ts(2025, 1, 1)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dlo=dlo, dhi=dhi)
+        assert len(rows) == 2
+        # Should be sorted by star_count DESC
+        assert rows[0].star_count == 10
+        assert rows[1].star_count == 3
+
+    # --- get_star_givers_leaderboard ---
+
+    def test_star_givers_no_filter(self, db):
+        self._setup_messages(db)
+        self._setup_reactors(db)
+        rows = db.get_star_givers_leaderboard(GUILD_A, STAR)
+        assert len(rows) == 2
+        # reactor1 reacted on 2 messages, reactor2 on 1
+        givers = {r.user_id: r.stars_given for r in rows}
+        assert givers['reactor1'] == 2
+        assert givers['reactor2'] == 1
+
+    def test_star_givers_dlo_filter(self, db):
+        self._setup_messages(db)
+        self._setup_reactors(db)
+        dlo = self._ts(2025, 1, 1)
+        rows = db.get_star_givers_leaderboard(GUILD_A, STAR, dlo=dlo)
+        # Only Feb 2025 message has reactor1
+        assert len(rows) == 1
+        assert rows[0].user_id == 'reactor1'
+        assert rows[0].stars_given == 1
+
+    def test_star_givers_dhi_filter(self, db):
+        self._setup_messages(db)
+        self._setup_reactors(db)
+        dhi = self._ts(2024, 2, 1)
+        rows = db.get_star_givers_leaderboard(GUILD_A, STAR, dhi=dhi)
+        # Only Jan 2024 message has reactor1 and reactor2
+        assert len(rows) == 2
+
+    # --- Boundary / edge cases ---
+
+    def test_dlo_zero_means_no_bound(self, db):
+        """dlo=0 should not filter anything (same as no filter)."""
+        self._setup_messages(db)
+        rows_all = db.get_starboard_leaderboard(GUILD_A, STAR)
+        rows_zero = db.get_starboard_leaderboard(GUILD_A, STAR, dlo=0)
+        assert len(rows_all) == len(rows_zero)
+
+    def test_dhi_sentinel_means_no_bound(self, db):
+        """dhi=_NO_TIME_BOUND should not filter anything."""
+        from tle.util.db.user_db_conn import _NO_TIME_BOUND
+        self._setup_messages(db)
+        rows_all = db.get_starboard_leaderboard(GUILD_A, STAR)
+        rows_nobound = db.get_starboard_leaderboard(GUILD_A, STAR, dhi=_NO_TIME_BOUND)
+        assert len(rows_all) == len(rows_nobound)
+
+    def test_exact_boundary_dlo_inclusive(self, db):
+        """dlo is inclusive (>=): a message at exactly dlo should be included."""
+        db.add_starboard_emoji(GUILD_A, STAR, 1, 0xffaa10)
+        exact_ts = self._ts(2024, 6, 15)
+        db.add_starboard_message_v1(
+            _make_snowflake(2024, 6, 15), 'sb1', GUILD_A, STAR, author_id='user1')
+        db.update_starboard_star_count(_make_snowflake(2024, 6, 15), STAR, 5)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dlo=exact_ts)
+        assert len(rows) == 1
+
+    def test_exact_boundary_dhi_exclusive(self, db):
+        """dhi is exclusive (<): a message at exactly dhi should be excluded."""
+        db.add_starboard_emoji(GUILD_A, STAR, 1, 0xffaa10)
+        exact_ts = self._ts(2024, 6, 15)
+        db.add_starboard_message_v1(
+            _make_snowflake(2024, 6, 15), 'sb1', GUILD_A, STAR, author_id='user1')
+        db.update_starboard_star_count(_make_snowflake(2024, 6, 15), STAR, 5)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dhi=exact_ts)
+        assert len(rows) == 0
+
+
+# =====================================================================
+# snowflake_to_unix_sql correctness
+# =====================================================================
+
+from tle.util.db.user_db_conn import snowflake_to_unix_sql, DISCORD_EPOCH_MS, SNOWFLAKE_TIMESTAMP_DIVISOR
+import sqlite3 as _sqlite3
+
+
+class TestSnowflakeToUnixSql:
+    """Verify the SQL expression correctly extracts timestamps from Discord snowflakes."""
+
+    def test_known_snowflake(self):
+        """Test with a real Discord snowflake ID."""
+        conn = _sqlite3.connect(':memory:')
+        # Known snowflake: 1276961610195537991 -> 2024-08-24 17:49:32 UTC
+        expr = snowflake_to_unix_sql('val')
+        row = conn.execute(f'SELECT {expr} FROM (SELECT 1276961610195537991 AS val)').fetchone()
+        ts = row[0]
+        dt_obj = datetime.fromtimestamp(ts, tz=timezone.utc)
+        assert dt_obj.year == 2024
+        assert dt_obj.month == 8
+        assert dt_obj.day == 24
+
+    def test_roundtrip_with_make_snowflake(self):
+        """A snowflake created from a date should produce that same date back."""
+        conn = _sqlite3.connect(':memory:')
+        sf = _make_snowflake(2025, 3, 1)
+        expr = snowflake_to_unix_sql('val')
+        row = conn.execute(f'SELECT {expr} FROM (SELECT ? AS val)', (sf,)).fetchone()
+        ts = row[0]
+        dt_obj = datetime.fromtimestamp(ts, tz=timezone.utc)
+        assert dt_obj.year == 2025
+        assert dt_obj.month == 3
+        assert dt_obj.day == 1

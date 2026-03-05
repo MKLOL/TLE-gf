@@ -123,9 +123,31 @@ constants_mod._DEFAULT_STAR_COLOR = 0xffaa10
 constants_mod._DEFAULT_STAR = '\N{WHITE MEDIUM STAR}'
 constants_mod.TLE_ADMIN = 'Admin'
 
-# tle.util.codeforces_common needs a user_db attribute for starboard cog
+# tle.util.codeforces_common needs a user_db attribute and parse_date for starboard cog
+import time as _time
+import datetime as _datetime
 cf_common = sys.modules['tle.util.codeforces_common']
 cf_common.user_db = None
+
+class _ParamParseError(_commands_mod.CommandError):
+    pass
+
+def _parse_date(arg):
+    try:
+        if len(arg) == 8:
+            fmt = '%d%m%Y'
+        elif len(arg) == 6:
+            fmt = '%m%Y'
+        elif len(arg) == 4:
+            fmt = '%Y'
+        else:
+            raise ValueError
+        return _time.mktime(_datetime.datetime.strptime(arg, fmt).timetuple())
+    except ValueError:
+        raise _ParamParseError(f'{arg} is an invalid date argument')
+
+cf_common.parse_date = _parse_date
+cf_common.ParamParseError = _ParamParseError
 
 # tle.util.discord_common needs stubs for starboard.py imports
 _dc = sys.modules['tle.util.discord_common']
