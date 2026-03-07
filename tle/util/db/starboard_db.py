@@ -114,22 +114,31 @@ class StarboardDbMixin:
         self.conn.commit()
 
     def remove_starboard_emoji(self, guild_id, emoji):
-        """Remove an emoji from a guild's starboard config, its tracked messages, and reactors."""
+        """Remove an emoji from a guild's starboard config, its tracked messages, reactors, and aliases."""
         guild_id = str(guild_id)
-        # Clean up reactors for messages belonging to this guild+emoji
-        self.conn.execute('''
+        # Collect the emoji family (main + aliases) so we clean up all reactor rows
+        alias_emojis = self.get_aliases_for_emoji(guild_id, emoji)
+        all_emojis = [emoji] + alias_emojis
+        placeholders = ','.join('?' * len(all_emojis))
+        # Clean up reactors for messages belonging to this guild+emoji (including alias reactors)
+        self.conn.execute(f'''
             DELETE FROM starboard_reactors
-            WHERE emoji = ? AND original_msg_id IN (
+            WHERE emoji IN ({placeholders}) AND original_msg_id IN (
                 SELECT original_msg_id FROM starboard_message_v1
                 WHERE guild_id = ? AND emoji = ?
             )
-        ''', (emoji, guild_id, emoji))
+        ''', (*all_emojis, guild_id, emoji))
         self.conn.execute(
             'DELETE FROM starboard_emoji_v1 WHERE guild_id = ? AND emoji = ?',
             (guild_id, emoji)
         )
         self.conn.execute(
             'DELETE FROM starboard_message_v1 WHERE guild_id = ? AND emoji = ?',
+            (guild_id, emoji)
+        )
+        # Clean up aliases pointing to this main emoji
+        self.conn.execute(
+            'DELETE FROM starboard_alias WHERE guild_id = ? AND main_emoji = ?',
             (guild_id, emoji)
         )
         self.conn.commit()

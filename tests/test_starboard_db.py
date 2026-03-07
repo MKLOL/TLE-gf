@@ -197,6 +197,30 @@ class TestRemoveStarboardEmoji:
         assert db.get_starboard_entry(GUILD, FIRE) is not None
         assert db.check_exists_starboard_message_v1('msg1', FIRE)
 
+    def test_remove_cleans_up_aliases(self, db):
+        """Removing a main emoji should delete its aliases."""
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_alias(GUILD, FIRE, STAR)
+
+        db.remove_starboard_emoji(GUILD, STAR)
+        assert db.get_aliases_for_emoji(GUILD, STAR) == []
+        assert db.resolve_alias(GUILD, THUMBS_UP) is None
+        assert db.resolve_alias(GUILD, FIRE) is None
+
+    def test_remove_cleans_up_alias_reactors(self, db):
+        """Removing a main emoji should also delete reactors stored under alias emojis."""
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
+        # Reactors stored under both main and alias emojis
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', THUMBS_UP, 'user2')
+
+        db.remove_starboard_emoji(GUILD, STAR)
+        assert db.get_reactor_count('msg1', STAR) == 0
+        assert db.get_reactor_count('msg1', THUMBS_UP) == 0
+
 
 # =====================================================================
 # Starboard messages
