@@ -105,23 +105,24 @@ class Starboard(BackfillMixin, commands.Cog):
 
     @staticmethod
     async def build_starboard_message(message, emoji_str, count, color):
-        """Build content and embeds for a starboard message.
+        """Build content, embeds, and files for a starboard message.
 
-        Returns (content, embeds) where:
-          - content: the header line with emoji count and jump URL,
-                     plus any video URLs on separate lines for auto-embed
-          - embeds: list of Embed objects (reply context + main)
+        Returns (content, embeds, files) where:
+          - content: the header line with emoji count and jump URL
+          - embeds: list of Embed objects (reply context + main + carried-over)
+          - files: list of discord.File for video attachments
 
-        For videos: Discord renders URL auto-embeds above custom embeds,
-        so we put the author name in the content header instead of the embed
-        to keep it above the video player.
+        For videos: author goes in the content header so the rendering
+        order is: content (author) → file attachment (video) → embeds.
+        For non-video: author goes in the main embed via set_author.
         """
-        content_lines = [_starboard_content(emoji_str, count, message.jump_url)]
+        content = _starboard_content(emoji_str, count, message.jump_url)
         embeds = []
-        video_urls = []
+        files = []
 
-        # Scan attachments first to know if there are videos
+        # Scan attachments to categorise them
         image_url = None
+        video_attachments = []
         other_attachments = []
         for att in message.attachments:
             ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
@@ -129,21 +130,25 @@ class Starboard(BackfillMixin, commands.Cog):
                 if image_url is None:
                     image_url = att.url
             elif ext in _VIDEO_EXTENSIONS:
-                video_urls.append(att.url)
+                video_attachments.append(att)
             else:
                 other_attachments.append(att)
 
-        has_video = bool(video_urls)
+        has_video = bool(video_attachments)
 
-        # For video messages, put author in the content header so it's
-        # above the auto-embedded video player.
+        # For video messages, put author in the content header so it
+        # appears above the video player (file attachments render after
+        # content but before embeds).
         if has_video:
-            content_lines[0] = (
+            content = (
                 f'{emoji_str} **{count}** \u00b7 **{message.author.display_name}** '
                 f'| {message.jump_url}'
             )
-            for url in video_urls:
-                content_lines.append(url)
+            for att in video_attachments:
+                try:
+                    files.append(await att.to_file())
+                except Exception:
+                    logger.debug(f'Failed to download video attachment {att.filename}')
 
         # --- Reply context embed (goes first / above main embed) ---
         if message.reference and message.reference.message_id:
@@ -169,11 +174,10 @@ class Starboard(BackfillMixin, commands.Cog):
                 logger.debug(f'Could not fetch referenced message {message.reference.message_id}')
 
         # --- Main embed ---
-        # For video messages: only include embed if there's text content,
-        # a reply, or other attachments — skip the empty author-only embed.
+        # For video-only messages (no text), skip the main embed entirely.
         has_text = bool(message.content)
         has_other = bool(other_attachments)
-        need_embed = not has_video or has_text or has_other
+        need_embed = not has_video or has_text or has_other or image_url
 
         if need_embed:
             embed = discord.Embed(color=color, timestamp=message.created_at)
@@ -220,8 +224,7 @@ class Starboard(BackfillMixin, commands.Cog):
             if e.type == 'rich':
                 embeds.append(e)
 
-        content = '\n'.join(content_lines)
-        return content, embeds
+        return content, embeds, files
 
     # --- Event listeners ---
 
@@ -367,11 +370,11 @@ class Starboard(BackfillMixin, commands.Cog):
                 )
                 return
 
-            content, embeds = await self.build_starboard_message(
+            content, embeds, files = await self.build_starboard_message(
                 message, emoji_str, reaction_count, color
             )
             starboard_message = await starboard_channel.send(
-                content=content, embeds=embeds,
+                content=content, embeds=embeds, files=files,
             )
             cf_common.user_db.add_starboard_message_v1(
                 message.id, starboard_message.id, guild.id, emoji_str,
@@ -424,12 +427,13 @@ class Starboard(BackfillMixin, commands.Cog):
                         original_msg = await source_channel.fetch_message(int(msg.original_msg_id))
                         count = msg.star_count or 0
 
-                        content, embeds = await self.build_starboard_message(
+                        content, embeds, files = await self.build_starboard_message(
                             original_msg, msg.emoji, count, emoji_cfg.color
                         )
 
                         sb_msg = await sb_channel.fetch_message(int(msg.starboard_msg_id))
-                        await sb_msg.edit(content=content, embeds=embeds)
+                        # Clear old attachments to avoid duplicates, attach new files
+                        await sb_msg.edit(content=content, embeds=embeds, attachments=files)
                         logger.info(f'Reformatted starboard msg={msg.starboard_msg_id} '
                                     f'(original={msg.original_msg_id})')
                         await asyncio.sleep(1)  # Rate limit courtesy
