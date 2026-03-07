@@ -374,6 +374,72 @@ class TestLeaderboards:
         assert fire_lb[0].total_stars == 10
 
 
+class TestStarGiversWithAliases:
+    def test_alias_reactors_counted_in_star_givers(self, db):
+        """Star givers leaderboard should include users who reacted with aliases."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='author1')
+        db.add_reactor('msg1', THUMBS_UP, 'reactor1')  # reacted with alias only
+        db.add_reactor('msg1', STAR, 'reactor2')        # reacted with main
+
+        family = db.get_emoji_family(GUILD, STAR)
+        rows = db.get_star_givers_leaderboard(GUILD, STAR, emoji_family=family)
+        givers = {r.user_id: r.stars_given for r in rows}
+        assert 'reactor1' in givers
+        assert 'reactor2' in givers
+
+    def test_star_givers_no_double_count_same_message(self, db):
+        """User who reacted with both main and alias on same message counts as 1 star given."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='author1')
+        db.add_reactor('msg1', STAR, 'reactor1')
+        db.add_reactor('msg1', THUMBS_UP, 'reactor1')  # same user, same msg
+
+        family = db.get_emoji_family(GUILD, STAR)
+        rows = db.get_star_givers_leaderboard(GUILD, STAR, emoji_family=family)
+        assert len(rows) == 1
+        assert rows[0].stars_given == 1  # not 2
+
+    def test_without_family_misses_alias_reactors(self, db):
+        """Without emoji_family, alias reactors are not counted (backward compat)."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='author1')
+        db.add_reactor('msg1', THUMBS_UP, 'reactor1')
+
+        rows = db.get_star_givers_leaderboard(GUILD, STAR)  # no family
+        assert len(rows) == 0  # alias reactor missed
+
+
+class TestNarcissusWithAliases:
+    def test_self_star_via_alias_counted(self, db):
+        """Narcissus leaderboard should count self-stars via aliases."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
+        db.add_reactor('msg1', THUMBS_UP, 'user1')  # self-star via alias
+
+        family = db.get_emoji_family(GUILD, STAR)
+        rows = db.get_narcissus_leaderboard(GUILD, STAR, emoji_family=family)
+        assert len(rows) == 1
+        assert rows[0].user_id == 'user1'
+
+    def test_narcissus_no_double_count(self, db):
+        """Self-star via both main and alias on same message counts as 1."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', THUMBS_UP, 'user1')
+
+        family = db.get_emoji_family(GUILD, STAR)
+        rows = db.get_narcissus_leaderboard(GUILD, STAR, emoji_family=family)
+        assert len(rows) == 1
+        assert rows[0].self_stars == 1  # not 2
+
+
 # =====================================================================
 # Guild config
 # =====================================================================
@@ -450,6 +516,30 @@ class TestAliasRemove:
     def test_remove_nonexistent(self, db):
         rc = db.remove_starboard_alias(GUILD, THUMBS_UP)
         assert rc == 0
+
+    def test_remove_migrates_alias_reactors_to_main(self, db):
+        """Removing an alias should migrate its reactor rows to the main emoji."""
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_reactor('msg1', THUMBS_UP, 'user1')
+        db.add_reactor('msg1', THUMBS_UP, 'user2')
+
+        db.remove_starboard_alias(GUILD, THUMBS_UP)
+        # Alias reactors should now be under the main emoji
+        assert db.get_reactor_count('msg1', STAR) == 2
+        assert db.get_reactor_count('msg1', THUMBS_UP) == 0
+
+    def test_remove_migrates_without_duplicating(self, db):
+        """If a user reacted with both main and alias, migration should not duplicate."""
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_reactor('msg1', STAR, 'user1')
+        db.add_reactor('msg1', THUMBS_UP, 'user1')  # Same user, both emojis
+
+        db.remove_starboard_alias(GUILD, THUMBS_UP)
+        # user1 should still be counted once under main emoji
+        assert db.get_reactor_count('msg1', STAR) == 1
+        assert db.get_reactor_count('msg1', THUMBS_UP) == 0
 
 
 class TestAliasResolve:

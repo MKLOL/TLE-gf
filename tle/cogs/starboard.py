@@ -767,7 +767,9 @@ class Starboard(BackfillMixin, commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_star_givers_leaderboard(ctx.guild.id, emoji, dlo, dhi)
+        emoji_family = cf_common.user_db.get_emoji_family(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_star_givers_leaderboard(ctx.guild.id, emoji, dlo, dhi,
+                                                              emoji_family=emoji_family)
         if not rows:
             raise StarboardCogError(f'No reactor data found for {emoji}.')
 
@@ -790,7 +792,9 @@ class Starboard(BackfillMixin, commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_narcissus_leaderboard(ctx.guild.id, emoji, dlo, dhi)
+        emoji_family = cf_common.user_db.get_emoji_family(ctx.guild.id, emoji)
+        rows = cf_common.user_db.get_narcissus_leaderboard(ctx.guild.id, emoji, dlo, dhi,
+                                                            emoji_family=emoji_family)
         if not rows:
             raise StarboardCogError(f'No self-stars found for {emoji}. How humble!')
 
