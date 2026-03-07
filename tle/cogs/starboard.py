@@ -10,7 +10,7 @@ from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
-from tle.cogs._starboard_helpers import _emoji_str, _parse_jump_url
+from tle.cogs._starboard_helpers import _emoji_str
 from tle.cogs._starboard_backfill import BackfillMixin, _BACKFILL_UNKNOWN
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,27 @@ _TIMELINE_KEYWORDS = {'week', 'month', 'year'}
 
 # No time bound sentinel — matches the DB layer constant
 _NO_TIME_BOUND = 10 ** 10
+
+# Muted embed color for reply context
+_REPLY_EMBED_COLOR = discord.Color.from_rgb(47, 49, 54)
+
+# Image extensions that Discord can render inline in embeds
+_IMAGE_EXTENSIONS = ('png', 'jpeg', 'jpg', 'gif', 'webp')
+
+# Video extensions that need to be re-uploaded as files
+_VIDEO_EXTENSIONS = ('mp4', 'mov', 'webm')
+
+# Set to True to reformat the last 10 starboard messages on startup.
+# Flip to False and redeploy once the migration is done.
+REFORMAT_ON_STARTUP = True
+
+
+def _starboard_content(emoji_str, count, channel_id, jump_url):
+    """Build the header line for a starboard message.
+
+    Format: ⭐ **5** | <#channel_id> › [💬](jump_url)
+    """
+    return f'{emoji_str} **{count}** | <#{channel_id}> \u203a [\U0001f4ac]({jump_url})'
 
 
 def _parse_starboard_args(args, default_emoji=constants._DEFAULT_STAR):
@@ -76,39 +97,95 @@ class Starboard(BackfillMixin, commands.Cog):
     async def on_ready(self):
         logger.info('Starboard cog on_ready fired, launching backfill task')
         asyncio.create_task(self._backfill_star_counts())
-        asyncio.create_task(self._cleanup_embed_titles())
+        if REFORMAT_ON_STARTUP:
+            asyncio.create_task(self._reformat_recent_starboard_messages())
 
-    async def _cleanup_embed_titles(self):
-        """One-time task: remove emoji+count titles from the last 3 starboard messages per guild."""
-        await self.bot.wait_until_ready()
-        try:
-            for guild in self.bot.guilds:
-                all_msgs = cf_common.user_db.get_all_starboard_messages_for_guild(str(guild.id))
-                # Get the last 3 by starboard_msg_id (higher ID = newer)
-                all_msgs.sort(key=lambda m: int(m.starboard_msg_id), reverse=True)
-                emojis = cf_common.user_db.get_starboard_emojis_for_guild(str(guild.id))
-                emoji_channels = {}
-                for e in emojis:
-                    if e.channel_id:
-                        ch = self.bot.get_channel(int(e.channel_id))
-                        if ch:
-                            emoji_channels[e.emoji] = ch
+    # --- Building starboard messages ---
 
-                for msg in all_msgs[:3]:
-                    sb_channel = emoji_channels.get(msg.emoji)
-                    if not sb_channel:
-                        continue
-                    try:
-                        sb_msg = await sb_channel.fetch_message(int(msg.starboard_msg_id))
-                        if sb_msg.embeds and sb_msg.embeds[0].title:
-                            embed = sb_msg.embeds[0]
-                            embed.title = None
-                            await sb_msg.edit(embed=embed)
-                            logger.info(f'Cleaned embed title from starboard msg={msg.starboard_msg_id}')
-                    except Exception as e:
-                        logger.warning(f'Failed to clean embed title for msg={msg.starboard_msg_id}: {e}')
-        except Exception as e:
-            logger.error(f'Embed title cleanup failed: {e}')
+    @staticmethod
+    async def build_starboard_message(message, emoji_str, count, color):
+        """Build content, embeds, and files for a starboard message.
+
+        Returns (content, embeds, files) where:
+          - content: the header line with emoji count and channel link
+          - embeds: list of Embed objects (reply context + main)
+          - files: list of discord.File for videos/non-image attachments
+        """
+        content = _starboard_content(emoji_str, count, message.channel.id, message.jump_url)
+        embeds = []
+        files = []
+
+        # --- Reply context embed (goes first / above main embed) ---
+        if message.reference and message.reference.message_id:
+            try:
+                ref_msg = message.reference.resolved
+                if ref_msg is None or isinstance(ref_msg, discord.DeletedReferencedMessage):
+                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                reply_embed = discord.Embed(
+                    color=_REPLY_EMBED_COLOR,
+                    timestamp=ref_msg.created_at,
+                )
+                reply_embed.set_author(
+                    name=f'Replying to {ref_msg.author.display_name}',
+                    icon_url=ref_msg.author.display_avatar.url,
+                )
+                if ref_msg.content:
+                    text = ref_msg.content
+                    if len(text) > 4096:
+                        text = text[:4093] + '...'
+                    reply_embed.description = text
+                embeds.append(reply_embed)
+            except Exception:
+                logger.debug(f'Could not fetch referenced message {message.reference.message_id}')
+
+        # --- Main embed ---
+        embed = discord.Embed(color=color, timestamp=message.created_at)
+        embed.set_author(
+            name=message.author.display_name,
+            icon_url=message.author.display_avatar.url,
+        )
+
+        if message.content:
+            text = message.content
+            if len(text) > 4096:
+                text = text[:4093] + '...'
+            embed.description = text
+
+        # Handle attachments
+        image_set = False
+        for att in message.attachments:
+            ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
+            if ext in _IMAGE_EXTENSIONS:
+                if not image_set:
+                    embed.set_image(url=att.url)
+                    image_set = True
+            elif ext in _VIDEO_EXTENSIONS:
+                try:
+                    files.append(await att.to_file())
+                except Exception:
+                    embed.add_field(
+                        name='Video', value=f'[{att.filename}]({att.url})', inline=False
+                    )
+            else:
+                embed.add_field(
+                    name='Attachment', value=f'[{att.filename}]({att.url})', inline=False
+                )
+
+        # Handle embeds from original message (link previews, etc.)
+        if not image_set and message.embeds:
+            for e in message.embeds:
+                if e.type == 'image' and e.url:
+                    embed.set_image(url=e.url)
+                    break
+                if e.type == 'rich' and e.image and e.image.url:
+                    embed.set_image(url=e.image.url)
+                    break
+                if e.thumbnail and e.thumbnail.url:
+                    embed.set_image(url=e.thumbnail.url)
+                    break
+
+        embeds.append(embed)
+        return content, embeds, files
 
     # --- Event listeners ---
 
@@ -164,6 +241,11 @@ class Starboard(BackfillMixin, commands.Cog):
                 )
                 logger.info(f'Updated star count for msg={payload.message_id} emoji={emoji_str} '
                             f'author={message.author.id} new_count={count}')
+                # Live-update the starboard message content
+                await self._update_starboard_content(
+                    payload.guild_id, payload.message_id, emoji_str, count,
+                    message.channel.id, message.jump_url,
+                )
             except discord.NotFound:
                 logger.warning(f'Reaction remove: message {payload.message_id} not found '
                                f'(may have been deleted)')
@@ -184,32 +266,27 @@ class Starboard(BackfillMixin, commands.Cog):
 
     # --- Core logic ---
 
-    @staticmethod
-    def prepare_embed(message, color):
-        embed = discord.Embed(color=color, timestamp=message.created_at)
-        embed.add_field(name='Channel', value=message.channel.mention)
-        embed.add_field(name='Jump to', value=f'[Original]({message.jump_url})')
-
-        if message.content:
-            content = message.content
-            if len(content) > 1024:
-                content = content[:1021] + '...'
-            embed.add_field(name='Content', value=content, inline=False)
-
-        if message.embeds:
-            data = message.embeds[0]
-            if data.type == 'image':
-                embed.set_image(url=data.url)
-
-        if message.attachments:
-            file = message.attachments[0]
-            if file.filename.lower().endswith(('png', 'jpeg', 'jpg', 'gif', 'webp')):
-                embed.set_image(url=file.url)
-            else:
-                embed.add_field(name='Attachment', value=f'[{file.filename}]({file.url})', inline=False)
-
-        embed.set_footer(text=str(message.author), icon_url=message.author.display_avatar.url)
-        return embed
+    async def _update_starboard_content(self, guild_id, original_msg_id, emoji_str, count,
+                                        source_channel_id, jump_url):
+        """Edit the starboard message to reflect an updated reaction count."""
+        sb_entry = cf_common.user_db.get_starboard_message_v1(original_msg_id, emoji_str)
+        if sb_entry is None or sb_entry.starboard_msg_id is None:
+            return
+        entry = cf_common.user_db.get_starboard_entry(guild_id, emoji_str)
+        if entry is None or entry.channel_id is None:
+            return
+        sb_channel = self.bot.get_channel(int(entry.channel_id))
+        if sb_channel is None:
+            return
+        try:
+            sb_msg = await sb_channel.fetch_message(int(sb_entry.starboard_msg_id))
+            new_content = _starboard_content(emoji_str, count, source_channel_id, jump_url)
+            await sb_msg.edit(content=new_content)
+            logger.debug(f'Live-updated starboard content: msg={original_msg_id} '
+                         f'emoji={emoji_str} count={count}')
+        except Exception as e:
+            logger.warning(f'Failed to live-update starboard message for '
+                           f'original={original_msg_id}: {e}')
 
     async def check_and_add_to_starboard(self, starboard_channel_id, threshold, color, emoji_str, payload):
         guild = self.bot.get_guild(payload.guild_id)
@@ -224,7 +301,8 @@ class Starboard(BackfillMixin, commands.Cog):
             raise StarboardCogError(f'Source channel {payload.channel_id} not found in bot cache')
         message = await channel.fetch_message(payload.message_id)
         if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
-                or (len(message.content) == 0 and len(message.attachments) == 0)):
+                or (len(message.content) == 0 and len(message.attachments) == 0
+                    and len(message.embeds) == 0)):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')
 
         reaction_count = sum(r.count for r in message.reactions if _emoji_str(r) == emoji_str)
@@ -240,7 +318,6 @@ class Starboard(BackfillMixin, commands.Cog):
             already_exists = cf_common.user_db.check_exists_starboard_message_v1(message.id, emoji_str)
             if already_exists:
                 # Update star count AND author_id for existing entry.
-                # author_id may be NULL if this message was created before backfill ran.
                 cf_common.user_db.update_starboard_author_and_count(
                     message.id, emoji_str, str(message.author.id), reaction_count
                 )
@@ -248,9 +325,19 @@ class Starboard(BackfillMixin, commands.Cog):
                 cf_common.user_db.add_reactor(message.id, emoji_str, payload.user_id)
                 logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
                              f'author={message.author.id} count={reaction_count}')
+                # Live-update the starboard message content with new count
+                await self._update_starboard_content(
+                    payload.guild_id, message.id, emoji_str, reaction_count,
+                    channel.id, message.jump_url,
+                )
                 return
-            embed = self.prepare_embed(message, color)
-            starboard_message = await starboard_channel.send(embed=embed)
+
+            content, embeds, files = await self.build_starboard_message(
+                message, emoji_str, reaction_count, color
+            )
+            starboard_message = await starboard_channel.send(
+                content=content, embeds=embeds, files=files,
+            )
             cf_common.user_db.add_starboard_message_v1(
                 message.id, starboard_message.id, guild.id, emoji_str,
                 author_id=str(message.author.id),
@@ -267,6 +354,57 @@ class Starboard(BackfillMixin, commands.Cog):
                         f'guild={guild.id} emoji={emoji_str} author={message.author} ({message.author.id}) '
                         f'channel={channel.id} count={reaction_count} '
                         f'(triggered by user {payload.user_id})')
+
+    # --- One-time reformat of recent starboard messages ---
+
+    async def _reformat_recent_starboard_messages(self):
+        """Edit the last 10 starboard messages per guild with the new embed format.
+
+        Controlled by REFORMAT_ON_STARTUP flag at module level.
+        Set it to False after the migration is done.
+        """
+        await self.bot.wait_until_ready()
+        try:
+            for guild in self.bot.guilds:
+                all_msgs = cf_common.user_db.get_all_starboard_messages_for_guild(str(guild.id))
+                # Sort by starboard_msg_id descending (higher = newer)
+                all_msgs.sort(key=lambda m: int(m.starboard_msg_id), reverse=True)
+                emojis = cf_common.user_db.get_starboard_emojis_for_guild(str(guild.id))
+                emoji_map = {e.emoji: e for e in emojis}
+
+                for msg in all_msgs[:10]:
+                    emoji_cfg = emoji_map.get(msg.emoji)
+                    if not emoji_cfg or not emoji_cfg.channel_id:
+                        continue
+                    sb_channel = self.bot.get_channel(int(emoji_cfg.channel_id))
+                    if not sb_channel:
+                        continue
+
+                    try:
+                        # Fetch the original message to rebuild embeds
+                        source_channel = self.bot.get_channel(int(msg.channel_id)) if msg.channel_id else None
+                        if source_channel is None:
+                            logger.debug(f'Reformat: source channel not found for msg={msg.original_msg_id}')
+                            continue
+                        original_msg = await source_channel.fetch_message(int(msg.original_msg_id))
+                        count = msg.star_count or 0
+
+                        content, embeds, files = await self.build_starboard_message(
+                            original_msg, msg.emoji, count, emoji_cfg.color
+                        )
+
+                        sb_msg = await sb_channel.fetch_message(int(msg.starboard_msg_id))
+                        if files:
+                            await sb_msg.edit(content=content, embeds=embeds, attachments=files)
+                        else:
+                            await sb_msg.edit(content=content, embeds=embeds)
+                        logger.info(f'Reformatted starboard msg={msg.starboard_msg_id} '
+                                    f'(original={msg.original_msg_id})')
+                        await asyncio.sleep(1)  # Rate limit courtesy
+                    except Exception as e:
+                        logger.warning(f'Failed to reformat starboard msg={msg.starboard_msg_id}: {e}')
+        except Exception as e:
+            logger.error(f'Reformat task failed: {e}', exc_info=True)
 
     # --- Commands ---
 

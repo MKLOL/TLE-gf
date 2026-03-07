@@ -60,7 +60,7 @@ _commands_mod.group = lambda **kw: (lambda f: _StubGroupResult(f))
 # Stub discord module attributes used by starboard.py
 _discord_mod = sys.modules['discord']
 class _StubEmbed:
-    """Minimal Embed stub that tracks fields, title, footer, and image."""
+    """Minimal Embed stub that tracks fields, title, footer, image, and author."""
     def __init__(self, **kw):
         self.color = kw.get('color')
         self.timestamp = kw.get('timestamp')
@@ -69,6 +69,7 @@ class _StubEmbed:
         self.fields = []
         self.footer = None
         self.image_url = None
+        self.author_data = None
 
     def add_field(self, *, name=None, value=None, inline=True):
         self.fields.append({'name': name, 'value': value, 'inline': inline})
@@ -79,8 +80,19 @@ class _StubEmbed:
     def set_footer(self, *, text=None, icon_url=None):
         self.footer = {'text': text, 'icon_url': icon_url}
 
+    def set_author(self, *, name=None, icon_url=None, url=None):
+        self.author_data = {'name': name, 'icon_url': icon_url, 'url': url}
+
 _discord_mod.Embed = _StubEmbed
 _discord_mod.MessageType = type('MessageType', (), {'default': 0, 'reply': 1})
+
+class _StubColor:
+    @staticmethod
+    def from_rgb(r, g, b):
+        return (r << 16) | (g << 8) | b
+_discord_mod.Color = _StubColor
+_discord_mod.Colour = _StubColor
+_discord_mod.DeletedReferencedMessage = type('DeletedReferencedMessage', (), {})
 _discord_mod.NotFound = type('NotFound', (Exception,), {})
 _discord_mod.Forbidden = type('Forbidden', (Exception,), {})
 _discord_mod.HTTPException = type('HTTPException', (Exception,), {})
