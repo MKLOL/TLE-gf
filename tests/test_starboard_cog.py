@@ -118,6 +118,40 @@ class TestGetEmojisIncludesChannelId:
 
 
 # =====================================================================
+# _is_old_format detection
+# =====================================================================
+
+
+class _FakeSbMsg:
+    """Minimal starboard message mock for old-format detection."""
+    def __init__(self, embeds):
+        self.embeds = embeds
+
+
+class TestIsOldFormat:
+    def test_old_format_with_jump_to(self):
+        import discord
+        embed = discord.Embed()
+        embed.add_field(name='Channel', value='#general')
+        embed.add_field(name='Jump to', value='[Original](https://...)')
+        assert Starboard._is_old_format(_FakeSbMsg([embed])) is True
+
+    def test_new_format_no_fields(self):
+        import discord
+        embed = discord.Embed(description='Hello')
+        assert Starboard._is_old_format(_FakeSbMsg([embed])) is False
+
+    def test_new_format_with_attachment_field(self):
+        import discord
+        embed = discord.Embed()
+        embed.add_field(name='Attachment', value='[file.pdf](https://...)')
+        assert Starboard._is_old_format(_FakeSbMsg([embed])) is False
+
+    def test_empty_embeds(self):
+        assert Starboard._is_old_format(_FakeSbMsg([])) is False
+
+
+# =====================================================================
 # _starboard_content helper
 # =====================================================================
 

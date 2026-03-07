@@ -280,9 +280,10 @@ class Starboard(BackfillMixin, commands.Cog):
                 )
                 logger.info(f'Updated star count for msg={payload.message_id} emoji={emoji_str} '
                             f'author={message.author.id} new_count={count}')
-                # Live-update the starboard message content
-                await self._update_starboard_content(
+                # Live-update the starboard message (full rebuild if old format)
+                await self._update_starboard_message(
                     payload.guild_id, payload.message_id, emoji_str, count,
+                    original_message=message,
                 )
             except discord.NotFound:
                 logger.warning(f'Reaction remove: message {payload.message_id} not found '
@@ -304,8 +305,26 @@ class Starboard(BackfillMixin, commands.Cog):
 
     # --- Core logic ---
 
-    async def _update_starboard_content(self, guild_id, original_msg_id, emoji_str, count):
-        """Edit the starboard message to reflect an updated reaction count."""
+    @staticmethod
+    def _is_old_format(sb_msg):
+        """Check if a starboard message uses the old embed format.
+
+        Old format has embed fields like 'Jump to' and 'Channel'.
+        """
+        for embed in sb_msg.embeds:
+            for f in getattr(embed, 'fields', []):
+                name = f.name if hasattr(f, 'name') else f.get('name')
+                if name in ('Jump to', 'Channel'):
+                    return True
+        return False
+
+    async def _update_starboard_message(self, guild_id, original_msg_id, emoji_str, count,
+                                        original_message=None):
+        """Edit the starboard message to reflect an updated reaction count.
+
+        If the starboard message uses the old embed format, it is fully
+        rebuilt from the original message instead of just updating the count.
+        """
         sb_entry = cf_common.user_db.get_starboard_message_v1(original_msg_id, emoji_str)
         if sb_entry is None or sb_entry.starboard_msg_id is None:
             return
@@ -315,14 +334,30 @@ class Starboard(BackfillMixin, commands.Cog):
         sb_channel = self.bot.get_channel(int(entry.channel_id))
         if sb_channel is None:
             return
-        source_channel_id = sb_entry.channel_id or '0'
-        jump_url = f'https://discord.com/channels/{guild_id}/{source_channel_id}/{original_msg_id}'
         try:
             sb_msg = await sb_channel.fetch_message(int(sb_entry.starboard_msg_id))
-            new_content = _starboard_content(emoji_str, count, jump_url)
-            await sb_msg.edit(content=new_content)
-            logger.debug(f'Live-updated starboard content: msg={original_msg_id} '
-                         f'emoji={emoji_str} count={count}')
+
+            if self._is_old_format(sb_msg):
+                # Old format — full rebuild from original message
+                if original_message is None:
+                    source_ch = self.bot.get_channel(int(sb_entry.channel_id)) if sb_entry.channel_id else None
+                    if source_ch is None:
+                        return
+                    original_message = await source_ch.fetch_message(int(original_msg_id))
+                content, embeds, files = await self.build_starboard_message(
+                    original_message, emoji_str, count, entry.color
+                )
+                await sb_msg.edit(content=content, embeds=embeds, attachments=files)
+                logger.info(f'Rebuilt old-format starboard message: msg={original_msg_id} '
+                            f'emoji={emoji_str} count={count}')
+            else:
+                # New format — just update the content line with new count
+                source_channel_id = sb_entry.channel_id or '0'
+                jump_url = f'https://discord.com/channels/{guild_id}/{source_channel_id}/{original_msg_id}'
+                new_content = _starboard_content(emoji_str, count, jump_url)
+                await sb_msg.edit(content=new_content)
+                logger.debug(f'Live-updated starboard content: msg={original_msg_id} '
+                             f'emoji={emoji_str} count={count}')
         except Exception as e:
             logger.warning(f'Failed to live-update starboard message for '
                            f'original={original_msg_id}: {e}')
@@ -364,9 +399,10 @@ class Starboard(BackfillMixin, commands.Cog):
                 cf_common.user_db.add_reactor(message.id, emoji_str, payload.user_id)
                 logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
                              f'author={message.author.id} count={reaction_count}')
-                # Live-update the starboard message content with new count
-                await self._update_starboard_content(
+                # Live-update the starboard message (full rebuild if old format)
+                await self._update_starboard_message(
                     payload.guild_id, message.id, emoji_str, reaction_count,
+                    original_message=message,
                 )
                 return
 
