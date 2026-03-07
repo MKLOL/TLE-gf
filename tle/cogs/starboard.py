@@ -305,11 +305,19 @@ class Starboard(BackfillMixin, commands.Cog):
 
     # --- Core logic ---
 
+    # TODO(remove after migration): _is_old_format and the old-format rebuild
+    # codepath in _update_starboard_message were added in commit 8bafdf3 to
+    # migrate old starboard messages on-the-fly when they receive new reactions.
+    # Once all old messages have been migrated (or are no longer relevant),
+    # delete _is_old_format and the `if self._is_old_format(sb_msg):` branch,
+    # keeping only the `else` (new-format) path.
+
     @staticmethod
     def _is_old_format(sb_msg):
         """Check if a starboard message uses the old embed format.
 
         Old format has embed fields like 'Jump to' and 'Channel'.
+        TODO(remove after migration)
         """
         for embed in sb_msg.embeds:
             for f in getattr(embed, 'fields', []):
@@ -337,8 +345,8 @@ class Starboard(BackfillMixin, commands.Cog):
         try:
             sb_msg = await sb_channel.fetch_message(int(sb_entry.starboard_msg_id))
 
+            # TODO(remove after migration): old-format rebuild branch
             if self._is_old_format(sb_msg):
-                # Old format — full rebuild from original message
                 if original_message is None:
                     source_ch = self.bot.get_channel(int(sb_entry.channel_id)) if sb_entry.channel_id else None
                     if source_ch is None:
@@ -350,6 +358,7 @@ class Starboard(BackfillMixin, commands.Cog):
                 await sb_msg.edit(content=content, embeds=embeds, attachments=files)
                 logger.info(f'Rebuilt old-format starboard message: msg={original_msg_id} '
                             f'emoji={emoji_str} count={count}')
+            # END TODO(remove after migration)
             else:
                 # New format — just update the content line with new count
                 source_channel_id = sb_entry.channel_id or '0'
