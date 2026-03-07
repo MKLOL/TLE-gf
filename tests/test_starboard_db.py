@@ -521,6 +521,7 @@ class TestAliasRemove:
         """Removing an alias should migrate its reactor rows to the main emoji."""
         db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
         db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='a1')
         db.add_reactor('msg1', THUMBS_UP, 'user1')
         db.add_reactor('msg1', THUMBS_UP, 'user2')
 
@@ -533,6 +534,7 @@ class TestAliasRemove:
         """If a user reacted with both main and alias, migration should not duplicate."""
         db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
         db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='a1')
         db.add_reactor('msg1', STAR, 'user1')
         db.add_reactor('msg1', THUMBS_UP, 'user1')  # Same user, both emojis
 
@@ -540,6 +542,45 @@ class TestAliasRemove:
         # user1 should still be counted once under main emoji
         assert db.get_reactor_count('msg1', STAR) == 1
         assert db.get_reactor_count('msg1', THUMBS_UP) == 0
+
+    def test_remove_migrates_across_multiple_messages(self, db):
+        """Migration should work for alias reactors spread across multiple messages."""
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='a1')
+        db.add_starboard_message_v1('msg2', 'sb2', GUILD, STAR, author_id='a2')
+        db.add_reactor('msg1', THUMBS_UP, 'user1')
+        db.add_reactor('msg2', THUMBS_UP, 'user2')
+
+        db.remove_starboard_alias(GUILD, THUMBS_UP)
+        assert db.get_reactor_count('msg1', STAR) == 1
+        assert db.get_reactor_count('msg2', STAR) == 1
+        assert db.get_reactor_count('msg1', THUMBS_UP) == 0
+        assert db.get_reactor_count('msg2', THUMBS_UP) == 0
+
+    def test_remove_alias_scoped_to_guild(self, db):
+        """Removing an alias in one guild must not affect another guild's reactors."""
+        GUILD_B = 222222222222222222
+        db.add_starboard_emoji(GUILD, STAR, 1, 0xffaa10)
+        db.add_starboard_emoji(GUILD_B, FIRE, 1, 0xff0000)
+        db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
+        db.add_starboard_alias(GUILD_B, THUMBS_UP, FIRE)
+        # Guild A message + reactor
+        db.add_starboard_message_v1('msg_a', 'sb_a', GUILD, STAR, author_id='u1')
+        db.add_reactor('msg_a', THUMBS_UP, 'user1')
+        # Guild B message + reactor
+        db.add_starboard_message_v1('msg_b', 'sb_b', GUILD_B, FIRE, author_id='u2')
+        db.add_reactor('msg_b', THUMBS_UP, 'user2')
+
+        # Remove alias only in Guild A
+        db.remove_starboard_alias(GUILD, THUMBS_UP)
+
+        # Guild A: migrated to STAR
+        assert db.get_reactor_count('msg_a', STAR) == 1
+        assert db.get_reactor_count('msg_a', THUMBS_UP) == 0
+        # Guild B: untouched — still under THUMBS_UP
+        assert db.get_reactor_count('msg_b', THUMBS_UP) == 1
+        assert db.get_reactor_count('msg_b', FIRE) == 0  # NOT migrated
 
 
 class TestAliasResolve:
