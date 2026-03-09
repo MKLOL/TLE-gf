@@ -1,12 +1,18 @@
 import collections
+import time
 
 from discord.ext import commands
 from matplotlib import pyplot as plt
 import numpy as np
 
+from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import graph_common as gc
+
+# Alias cache staleness: 14 days normally, 2 days in Dec/Jan (rename season)
+_STALE_SECONDS = 14 * 24 * 60 * 60
+_STALE_SECONDS_RENAME_SEASON = 2 * 24 * 60 * 60
 
 
 class VersusCogError(commands.CommandError):
@@ -73,6 +79,70 @@ def _normalize_handles(handles, cache):
     return result
 
 
+def _alias_is_stale(resolved_at):
+    """Check if an alias resolution is stale based on current month."""
+    if resolved_at is None:
+        return True
+    import datetime
+    now = datetime.datetime.now()
+    max_age = _STALE_SECONDS_RENAME_SEASON if now.month in (12, 1) else _STALE_SECONDS
+    return (time.time() - resolved_at) > max_age
+
+
+async def _resolve_aliases(handle, cache_db):
+    """Get all handles for a person. Uses cached alias table if fresh,
+    otherwise makes one cf.user.rating API call and caches the result."""
+    aliases, resolved_at = cache_db.get_handle_aliases(handle)
+
+    if aliases is not None and not _alias_is_stale(resolved_at):
+        return aliases
+
+    # Cache miss or stale — call CF API once to discover all handle names
+    try:
+        api_changes = await cf.user.rating(handle=handle)
+    except cf.HandleNotFoundError:
+        # Unknown handle — cache it as mapping to itself so we don't retry
+        now = int(time.time())
+        cache_db.save_handle_aliases({handle: handle}, now)
+        return {handle}
+
+    # Extract all distinct handles from the API response
+    discovered = {rc.handle for rc in api_changes}
+    if not discovered:
+        discovered = {handle}
+
+    # The current handle is whatever CF uses for the most recent entry,
+    # or the input handle if no entries
+    current = api_changes[-1].handle if api_changes else handle
+
+    # Build alias map: every discovered handle → current handle
+    alias_map = {h: current for h in discovered}
+    # Also map the input handle in case it differs from all discovered ones
+    alias_map[handle] = current
+
+    now = int(time.time())
+    cache_db.save_handle_aliases(alias_map, now)
+    return set(alias_map.keys())
+
+
+async def _get_all_changes(handles, cache):
+    """Fetch rating changes for each handle, merging data from all historical
+    handle names (CF renames). Uses cached alias table, only hits CF API if stale."""
+    cache_db = cache.cache_master.conn
+    all_changes = {}
+    for handle in handles:
+        aliases = await _resolve_aliases(handle, cache_db)
+        merged = []
+        seen_contests = set()
+        for alias in aliases:
+            for rc in cache.get_rating_changes_for_handle(alias):
+                if rc.contestId not in seen_contests:
+                    seen_contests.add(rc.contestId)
+                    merged.append(rc)
+        all_changes[handle] = merged
+    return all_changes
+
+
 class Versus(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -94,9 +164,7 @@ class Versus(commands.Cog):
 
         cache = cf_common.cache2.rating_changes_cache
         handles = _normalize_handles(handles, cache)
-        all_changes = {}
-        for handle in handles:
-            all_changes[handle] = cache.get_rating_changes_for_handle(handle)
+        all_changes = await _get_all_changes(handles, cache)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
                                                                strict=strict)
@@ -138,9 +206,7 @@ class Versus(commands.Cog):
 
         cache = cf_common.cache2.rating_changes_cache
         handles = _normalize_handles(handles, cache)
-        all_changes = {}
-        for handle in handles:
-            all_changes[handle] = cache.get_rating_changes_for_handle(handle)
+        all_changes = await _get_all_changes(handles, cache)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
                                                                strict=strict)

@@ -78,6 +78,16 @@ class CacheDbConn:
         self.conn.execute('CREATE INDEX IF NOT EXISTS ix_problem2_contest_id '
                           'ON problem2 (contest_id)')
 
+        # Table for handle alias resolution (CF renames / new year magic).
+        # Maps every known handle to its current canonical handle.
+        self.conn.execute(
+            'CREATE TABLE IF NOT EXISTS handle_alias ('
+            'handle          TEXT PRIMARY KEY,'
+            'current_handle  TEXT NOT NULL,'
+            'resolved_at     INTEGER NOT NULL'
+            ')'
+        )
+
     def cache_contests(self, contests):
         query = ('INSERT OR REPLACE INTO contest '
                  '(id, name, start_time, duration, type, phase, prepared_by) '
@@ -238,6 +248,32 @@ class CacheDbConn:
         query = 'SELECT 1 FROM problem2'
         res = self.conn.execute(query).fetchone()
         return res is None
+
+    def get_handle_aliases(self, handle):
+        """Return all handles that map to the same current_handle as `handle`.
+        Returns None if the handle has never been resolved."""
+        # First find what current_handle this handle maps to
+        row = self.conn.execute(
+            'SELECT current_handle, resolved_at FROM handle_alias WHERE handle = ?',
+            (handle,)
+        ).fetchone()
+        if row is None:
+            return None, None
+        current_handle, resolved_at = row
+        # Find all handles (old and current) that map to the same current_handle
+        rows = self.conn.execute(
+            'SELECT handle FROM handle_alias WHERE current_handle = ?',
+            (current_handle,)
+        ).fetchall()
+        return {r[0] for r in rows}, resolved_at
+
+    def save_handle_aliases(self, alias_map, resolved_at):
+        """Save handle alias mappings. alias_map is {handle: current_handle}."""
+        query = ('INSERT OR REPLACE INTO handle_alias '
+                 '(handle, current_handle, resolved_at) VALUES (?, ?, ?)')
+        rows = [(h, cur, resolved_at) for h, cur in alias_map.items()]
+        self.conn.executemany(query, rows)
+        self.conn.commit()
 
     def close(self):
         self.conn.close()

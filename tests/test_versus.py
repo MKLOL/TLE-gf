@@ -24,7 +24,9 @@ def _make_rc(contest_id, handle, rank):
 
 
 # Import the pure functions under test
-from tle.cogs.versus import _compute_versus_stats, _normalize_handles
+from tle.cogs.versus import _compute_versus_stats, _normalize_handles, _alias_is_stale, _resolve_aliases, _get_all_changes
+import asyncio
+import time
 
 
 class TestComputeVersusStats:
@@ -225,3 +227,165 @@ class TestStrictMode:
         # Contest 1 has both, contest 2 has only a → both modes give 1
         assert total_default == 1
         assert total_strict == 1
+
+
+class TestAliasIsStale:
+    def test_none_is_stale(self):
+        assert _alias_is_stale(None) is True
+
+    def test_recent_is_fresh(self):
+        assert _alias_is_stale(time.time() - 100) is False
+
+    def test_old_is_stale(self):
+        # 15 days ago, outside rename season
+        assert _alias_is_stale(time.time() - 15 * 86400) is True
+
+
+class TestHandleAliasDb:
+    """Test the handle_alias table in CacheDbConn."""
+
+    def _make_db(self):
+        import sqlite3
+        from tle.util.db.cache_db_conn import CacheDbConn
+        db = CacheDbConn.__new__(CacheDbConn)
+        db.db_file = ':memory:'
+        db.conn = sqlite3.connect(':memory:')
+        db.create_tables()
+        return db
+
+    def test_no_alias_returns_none(self):
+        db = self._make_db()
+        aliases, resolved_at = db.get_handle_aliases('unknown')
+        assert aliases is None
+        assert resolved_at is None
+
+    def test_save_and_get_aliases(self):
+        db = self._make_db()
+        now = int(time.time())
+        db.save_handle_aliases({
+            'Friedrich': 'LMeyling',
+            'LMeyling': 'LMeyling',
+        }, now)
+
+        aliases, resolved_at = db.get_handle_aliases('Friedrich')
+        assert aliases == {'Friedrich', 'LMeyling'}
+        assert resolved_at == now
+
+        aliases, resolved_at = db.get_handle_aliases('LMeyling')
+        assert aliases == {'Friedrich', 'LMeyling'}
+
+    def test_self_alias(self):
+        db = self._make_db()
+        now = int(time.time())
+        db.save_handle_aliases({'alice': 'alice'}, now)
+        aliases, _ = db.get_handle_aliases('alice')
+        assert aliases == {'alice'}
+
+    def test_triple_chain(self):
+        db = self._make_db()
+        now = int(time.time())
+        db.save_handle_aliases({
+            'A': 'C',
+            'B': 'C',
+            'C': 'C',
+        }, now)
+        aliases, _ = db.get_handle_aliases('A')
+        assert aliases == {'A', 'B', 'C'}
+
+
+class TestResolveAliases:
+    """Test _resolve_aliases with mocked CF API."""
+
+    def _run(self, coro):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _make_db(self):
+        import sqlite3
+        from tle.util.db.cache_db_conn import CacheDbConn
+        db = CacheDbConn.__new__(CacheDbConn)
+        db.db_file = ':memory:'
+        db.conn = sqlite3.connect(':memory:')
+        db.create_tables()
+        return db
+
+    def test_caches_after_api_call(self, monkeypatch):
+        import tle.cogs.versus as versus_mod
+
+        api_response = [
+            _make_rc(1, 'Friedrich', 50),
+            _make_rc(2, 'Friedrich', 40),
+            _make_rc(3, 'LMeyling', 30),
+        ]
+
+        call_count = 0
+        class FakeUser:
+            @staticmethod
+            async def rating(*, handle):
+                nonlocal call_count
+                call_count += 1
+                return api_response
+
+        monkeypatch.setattr(versus_mod, 'cf', type('cf', (), {
+            'user': FakeUser(),
+            'HandleNotFoundError': type('E', (Exception,), {}),
+        })())
+
+        db = self._make_db()
+
+        # First call — hits API
+        aliases = self._run(_resolve_aliases('LMeyling', db))
+        assert 'Friedrich' in aliases
+        assert 'LMeyling' in aliases
+        assert call_count == 1
+
+        # Second call — uses cache, no API
+        aliases = self._run(_resolve_aliases('LMeyling', db))
+        assert 'Friedrich' in aliases
+        assert call_count == 1  # Still 1, no new API call
+
+    def test_handle_not_found(self, monkeypatch):
+        import tle.cogs.versus as versus_mod
+
+        class FakeNotFound(Exception):
+            pass
+
+        class FakeUser:
+            @staticmethod
+            async def rating(*, handle):
+                raise FakeNotFound()
+
+        monkeypatch.setattr(versus_mod, 'cf', type('cf', (), {
+            'user': FakeUser(),
+            'HandleNotFoundError': FakeNotFound,
+        })())
+
+        db = self._make_db()
+        aliases = self._run(_resolve_aliases('nobody', db))
+        assert aliases == {'nobody'}
+
+    def test_lookup_by_old_handle(self, monkeypatch):
+        """Looking up the old handle also finds the new one."""
+        import tle.cogs.versus as versus_mod
+
+        api_response = [
+            _make_rc(1, 'OldName', 50),
+            _make_rc(2, 'NewName', 30),
+        ]
+
+        class FakeUser:
+            @staticmethod
+            async def rating(*, handle):
+                return api_response
+
+        monkeypatch.setattr(versus_mod, 'cf', type('cf', (), {
+            'user': FakeUser(),
+            'HandleNotFoundError': type('E', (Exception,), {}),
+        })())
+
+        db = self._make_db()
+        aliases = self._run(_resolve_aliases('OldName', db))
+        assert aliases == {'OldName', 'NewName'}
