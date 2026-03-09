@@ -189,6 +189,9 @@ _cf_api = sys.modules['tle.util.codeforces_api']
 _cf_api.User = _nt('User', 'handle first_name last_name country city organization '
                     'contribution rating maxRating last_online_time '
                     'registration_time friend_of_count title_photo')
+_cf_api.RatingChange = _nt('RatingChange',
+                            'contestId contestName handle rank '
+                            'ratingUpdateTimeSeconds oldRating newRating')
 
 class _ParamParseError(_commands_mod.CommandError):
     pass

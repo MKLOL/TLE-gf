@@ -1,5 +1,6 @@
 import collections
 import time
+import datetime
 
 from discord.ext import commands
 from matplotlib import pyplot as plt
@@ -10,7 +11,8 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import graph_common as gc
 
-# Alias cache staleness: 14 days normally, 2 days in Dec/Jan (rename season)
+# How long before we re-fetch a handle's rating history from the API.
+# 14 days normally, 2 days in Dec/Jan (CF rename season).
 _STALE_SECONDS = 14 * 24 * 60 * 60
 _STALE_SECONDS_RENAME_SEASON = 2 * 24 * 60 * 60
 
@@ -69,77 +71,98 @@ def _compute_versus_stats(handles, all_changes, strict=False):
     return wins, placements, len(shared_contests)
 
 
-def _normalize_handles(handles, cache):
-    """Resolve handle casing to match what's stored in the rating changes cache.
-    The cache stores handles with CF's canonical casing, but users may type any case."""
-    canonical = {h.lower(): h for h in cache.handle_rating_cache}
-    result = []
-    for handle in handles:
-        result.append(canonical.get(handle.lower(), handle))
-    return result
-
-
-def _alias_is_stale(resolved_at):
-    """Check if an alias resolution is stale based on current month."""
+def _is_stale(resolved_at):
+    """Check if a cached resolution is stale based on current month."""
     if resolved_at is None:
         return True
-    import datetime
     now = datetime.datetime.now()
     max_age = _STALE_SECONDS_RENAME_SEASON if now.month in (12, 1) else _STALE_SECONDS
     return (time.time() - resolved_at) > max_age
 
 
-async def _resolve_aliases(handle, cache_db):
-    """Get all handles for a person. Uses cached alias table if fresh,
-    otherwise makes one cf.user.rating API call and caches the result."""
-    aliases, resolved_at = cache_db.get_handle_aliases(handle)
+async def _get_rating_changes(handle, cache_db):
+    """Get a handle's full rating history. On first call (or when stale),
+    fetches from cf.user.rating and writes the results into the rating_change
+    cache under the current handle. Subsequent calls are pure DB lookups.
 
-    if aliases is not None and not _alias_is_stale(resolved_at):
-        return aliases
+    This handles CF renames: the API returns all contests for the person,
+    and we store them under the current handle in the cache."""
+    # Check if we've already resolved this handle recently
+    row = cache_db.conn.execute(
+        'SELECT current_handle, resolved_at FROM handle_alias WHERE handle = ?', (handle,)
+    ).fetchone()
 
-    # Cache miss or stale — call CF API once to discover all handle names
+    if row:
+        current_handle, resolved_at = row
+        if not _is_stale(resolved_at):
+            # Fresh cache — read under current handle (may differ if renamed)
+            return cache_db.get_rating_changes_for_handle(current_handle)
+
+    # Stale or never resolved — fetch from API
     try:
         api_changes = await cf.user.rating(handle=handle)
     except cf.HandleNotFoundError:
-        # Unknown handle — cache it as mapping to itself so we don't retry
+        # Old handle that no longer exists — check if we know its current name
+        alias_row = cache_db.conn.execute(
+            'SELECT current_handle FROM handle_alias WHERE handle = ?', (handle,)
+        ).fetchone()
+        if alias_row and alias_row[0] != handle:
+            # We already know the current handle — use it
+            return cache_db.get_rating_changes_for_handle(alias_row[0])
+        # Truly unknown handle — cache as resolved so we don't retry
         now = int(time.time())
-        cache_db.save_handle_aliases({handle: handle}, now)
-        return {handle}
+        cache_db.conn.execute(
+            'INSERT OR REPLACE INTO handle_alias (handle, current_handle, resolved_at) '
+            'VALUES (?, ?, ?)', (handle, handle, now)
+        )
+        cache_db.conn.commit()
+        return cache_db.get_rating_changes_for_handle(handle)
 
-    # Extract all distinct handles from the API response
-    discovered = {rc.handle for rc in api_changes}
-    if not discovered:
-        discovered = {handle}
-
-    # The current handle is whatever CF uses for the most recent entry,
-    # or the input handle if no entries
+    # The API returns all contests under the current handle name.
     current = api_changes[-1].handle if api_changes else handle
 
-    # Build alias map: every discovered handle → current handle
-    alias_map = {h: current for h in discovered}
-    # Also map the input handle in case it differs from all discovered ones
-    alias_map[handle] = current
+    if api_changes:
+        # If handle was renamed, delete old rows to avoid duplicates.
+        # The old handle's rows would otherwise coexist with the new ones,
+        # causing issues in contest listings and user counts.
+        if handle != current:
+            cache_db.conn.execute(
+                'DELETE FROM rating_change WHERE handle = ?', (handle,)
+            )
+        # Also find any OTHER old aliases and clean them up
+        old_aliases = cache_db.conn.execute(
+            'SELECT handle FROM handle_alias WHERE current_handle = ? AND handle != ?',
+            (current, current)
+        ).fetchall()
+        for (old_handle,) in old_aliases:
+            cache_db.conn.execute(
+                'DELETE FROM rating_change WHERE handle = ?', (old_handle,)
+            )
 
+        cache_db.save_rating_changes(api_changes)
+
+    # Mark as resolved
     now = int(time.time())
-    cache_db.save_handle_aliases(alias_map, now)
-    return set(alias_map.keys())
+    cache_db.conn.execute(
+        'INSERT OR REPLACE INTO handle_alias (handle, current_handle, resolved_at) '
+        'VALUES (?, ?, ?)', (handle, current, now)
+    )
+    if handle != current:
+        cache_db.conn.execute(
+            'INSERT OR REPLACE INTO handle_alias (handle, current_handle, resolved_at) '
+            'VALUES (?, ?, ?)', (current, current, now)
+        )
+    cache_db.conn.commit()
+
+    return cache_db.get_rating_changes_for_handle(current)
 
 
 async def _get_all_changes(handles, cache):
-    """Fetch rating changes for each handle, merging data from all historical
-    handle names (CF renames). Uses cached alias table, only hits CF API if stale."""
+    """Fetch rating changes for each handle via the cached API approach."""
     cache_db = cache.cache_master.conn
     all_changes = {}
     for handle in handles:
-        aliases = await _resolve_aliases(handle, cache_db)
-        merged = []
-        seen_contests = set()
-        for alias in aliases:
-            for rc in cache.get_rating_changes_for_handle(alias):
-                if rc.contestId not in seen_contests:
-                    seen_contests.add(rc.contestId)
-                    merged.append(rc)
-        all_changes[handle] = merged
+        all_changes[handle] = await _get_rating_changes(handle, cache_db)
     return all_changes
 
 
@@ -163,7 +186,6 @@ class Versus(commands.Cog):
                                                   mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
-        handles = _normalize_handles(handles, cache)
         all_changes = await _get_all_changes(handles, cache)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
@@ -205,7 +227,6 @@ class Versus(commands.Cog):
                                                   mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
-        handles = _normalize_handles(handles, cache)
         all_changes = await _get_all_changes(handles, cache)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
