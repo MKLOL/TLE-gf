@@ -95,10 +95,8 @@ async def _get_rating_changes(handle, cache_db):
     if row:
         current_handle, resolved_at = row
         if not _is_stale(resolved_at):
-            cached = cache_db.get_rating_changes_for_handle(current_handle)
-            if cached:
-                return cached
-            # Alias exists but no data — previous broken run, fall through to API
+            # Fresh cache — read under current handle (may differ if renamed)
+            return cache_db.get_rating_changes_for_handle(current_handle)
 
     # Stale or never resolved — fetch from API
     try:

@@ -221,6 +221,7 @@ class TestHandleAliasDb:
         db.db_file = ':memory:'
         db.conn = sqlite3.connect(':memory:')
         db.create_tables()
+        db._run_upgrades()
         return db
 
     def test_no_alias_returns_none(self):
@@ -280,6 +281,7 @@ class TestGetRatingChanges:
         db.db_file = ':memory:'
         db.conn = sqlite3.connect(':memory:')
         db.create_tables()
+        db._run_upgrades()
         return db
 
     def test_api_called_and_cached(self, monkeypatch):

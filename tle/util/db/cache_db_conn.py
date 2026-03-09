@@ -9,6 +9,7 @@ class CacheDbConn:
         self.db_file = db_file
         self.conn = sqlite3.connect(db_file)
         self.create_tables()
+        self._run_upgrades()
 
     def create_tables(self):
         # Table for contests from the contest.list endpoint.
@@ -78,15 +79,20 @@ class CacheDbConn:
         self.conn.execute('CREATE INDEX IF NOT EXISTS ix_problem2_contest_id '
                           'ON problem2 (contest_id)')
 
-        # Table for handle alias resolution (CF renames / new year magic).
-        # Maps every known handle to its current canonical handle.
-        self.conn.execute(
-            'CREATE TABLE IF NOT EXISTS handle_alias ('
-            'handle          TEXT PRIMARY KEY,'
-            'current_handle  TEXT NOT NULL,'
-            'resolved_at     INTEGER NOT NULL'
-            ')'
-        )
+    def _run_upgrades(self):
+        from tle.util.db.cache_db_upgrades import registry
+        registry.ensure_version_table(self.conn)
+        current = registry.get_current_version(self.conn)
+        if current is None:
+            # Check if handle_alias already exists (pre-upgrade DB)
+            has_alias = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='handle_alias'"
+            ).fetchone()
+            if has_alias:
+                registry.set_version(self.conn, '1.0.0')
+            else:
+                registry.set_version(self.conn, registry.latest_version)
+        registry.run(self.conn)
 
     def cache_contests(self, contests):
         query = ('INSERT OR REPLACE INTO contest '

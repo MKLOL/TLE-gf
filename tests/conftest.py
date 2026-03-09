@@ -247,6 +247,9 @@ def _load_module(name, filepath):
 # upgrades.py has no heavy deps — just logging
 _load_module('tle.util.db.upgrades', os.path.join(_db_path, 'upgrades.py'))
 
+# cache_db_upgrades.py — depends on upgrades.py (loaded above)
+_load_module('tle.util.db.cache_db_upgrades', os.path.join(_db_path, 'cache_db_upgrades.py'))
+
 # starboard_db.py — standalone mixin, no heavy deps
 _load_module('tle.util.db.starboard_db', os.path.join(_db_path, 'starboard_db.py'))
 
