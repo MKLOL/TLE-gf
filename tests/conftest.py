@@ -226,6 +226,42 @@ _dc.set_author_footer = lambda embed, user: None
 _dc.attach_image = lambda embed, img_file: None
 _dc._ALERT_AMBER = 0xFFBF00
 
+# tle.util.tasks needs stubs for task_spec decorator and Waiter
+_tasks = sys.modules['tle.util.tasks']
+
+
+class _FakeWaiter:
+    @staticmethod
+    def fixed_delay(delay, run_first=False):
+        return _FakeWaiter()
+
+
+class _FakeTaskSpec:
+    """Stub for tasks.TaskSpec descriptor — makes @tasks.task_spec a no-op decorator."""
+    def __init__(self, func):
+        self._func = func
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        return self
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+def _task_spec_decorator(*, name, waiter=None, exception_handler=None):
+    def decorator(func):
+        return _FakeTaskSpec(func)
+    return decorator
+
+
+_tasks.task_spec = _task_spec_decorator
+_tasks.Waiter = _FakeWaiter
+
 # tle.util.paginator needs stubs
 _pg = sys.modules['tle.util.paginator']
 _pg.chunkify = lambda seq, n: [seq[i:i+n] for i in range(0, len(seq), n)]

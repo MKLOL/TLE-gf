@@ -253,3 +253,31 @@ def upgrade_1_8_0(db):
         logger.debug(f'1.8.0: anonymous column already exists or error: {e}')
     db.commit()
     logger.info('1.8.0: Upgrade complete')
+
+
+@registry.register('1.9.0', 'Poll expiration')
+def upgrade_1_9_0(db):
+    logger.info('1.9.0: Adding expiration columns to rpoll table')
+    try:
+        db.execute('ALTER TABLE rpoll ADD COLUMN expires_at REAL DEFAULT 0')
+        logger.info('1.9.0: Added expires_at column')
+    except Exception as e:
+        logger.debug(f'1.9.0: expires_at column already exists or error: {e}')
+    try:
+        db.execute('ALTER TABLE rpoll ADD COLUMN closed INTEGER NOT NULL DEFAULT 0')
+        logger.info('1.9.0: Added closed column')
+    except Exception as e:
+        logger.debug(f'1.9.0: closed column already exists or error: {e}')
+
+    import time
+    now = time.time()
+    # Backfill expires_at for all existing polls
+    db.execute('UPDATE rpoll SET expires_at = created_at + 86400 WHERE expires_at = 0')
+    # Close polls that have already expired or were never posted
+    db.execute(
+        'UPDATE rpoll SET closed = 1 WHERE closed = 0 AND '
+        '(expires_at <= ? OR message_id IS NULL)',
+        (now,)
+    )
+    db.commit()
+    logger.info('1.9.0: Backfilled expiration data for existing polls')

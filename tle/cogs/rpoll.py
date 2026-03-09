@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 
 import discord
@@ -8,6 +9,7 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import tasks
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +21,33 @@ _NUMBER_EMOJIS = ['1\N{COMBINING ENCLOSING KEYCAP}',
                   '5\N{COMBINING ENCLOSING KEYCAP}']
 
 MAX_OPTIONS = 5
+_DEFAULT_DURATION = 86400  # 24 hours in seconds
+_EXPIRY_CHECK_INTERVAL = 60  # Check every 60 seconds
+_DURATION_RE = re.compile(r'^\+(\d+)([mhd])$')
 
 
 class RpollError(commands.CommandError):
     pass
 
 
-def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None):
+def _parse_duration(token):
+    """Parse a duration token like +1h, +30m, +2d. Returns seconds."""
+    m = _DURATION_RE.match(token)
+    if not m:
+        return None
+    value = int(m.group(1))
+    unit = m.group(2)
+    if unit == 'm':
+        return value * 60
+    elif unit == 'h':
+        return value * 3600
+    elif unit == 'd':
+        return value * 86400
+    return None
+
+
+def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None,
+                      expires_at=None, closed=False):
     """Build the embed for a rating poll.
 
     Args:
@@ -34,6 +56,8 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
         totals_map: Dict of option_index -> total_rating.
         vote_count: Total number of distinct voters.
         voters_map: Optional dict of option_index -> list of user_ids.
+        expires_at: Optional UNIX timestamp when poll expires.
+        closed: Whether the poll has ended.
     """
     grand_total = sum(totals_map.get(idx, 0) for idx, _ in options)
     show_pct = grand_total > 0
@@ -68,6 +92,12 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
                 mentions = ', '.join(f'<@{uid}>' for uid in user_ids)
                 lines.append(f'{label}: {mentions}')
 
+    # Expiry info in description
+    if closed:
+        lines.append('\n**Poll has ended.**')
+    elif expires_at:
+        lines.append(f'\nEnds <t:{int(expires_at)}:R>')
+
     embed = discord.Embed(
         title=question,
         description='\n'.join(lines),
@@ -75,6 +105,21 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
     )
     embed.set_footer(text=f'{vote_count} vote{"s" if vote_count != 1 else ""}')
     return embed
+
+
+def _build_disabled_view(poll_id, option_count):
+    """Build a view with all buttons disabled."""
+    view = discord.ui.View(timeout=None)
+    for i in range(option_count):
+        emoji = _NUMBER_EMOJIS[i] if i < len(_NUMBER_EMOJIS) else None
+        btn = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji,
+            custom_id=f'rpoll:{poll_id}:{i}',
+            disabled=True,
+        )
+        view.add_item(btn)
+    return view
 
 
 class RpollView(discord.ui.View):
@@ -104,6 +149,15 @@ class RpollButton(discord.ui.Button):
             await interaction.response.send_message('Bot is still starting up.', ephemeral=True)
             return
 
+        # Check if poll is closed or expired before allowing vote
+        poll = cf_common.user_db.get_rpoll(self.poll_id)
+        if poll is None:
+            await interaction.response.send_message('Poll not found.', ephemeral=True)
+            return
+        if poll.closed or poll.expires_at <= time.time():
+            await interaction.response.send_message('This poll has ended.', ephemeral=True)
+            return
+
         user_id = interaction.user.id
         guild_id = interaction.guild_id
 
@@ -111,12 +165,6 @@ class RpollButton(discord.ui.Button):
         added = cf_common.user_db.toggle_rpoll_vote(
             self.poll_id, user_id, self.option_index, rating
         )
-
-        # Rebuild embed with updated totals
-        poll = cf_common.user_db.get_rpoll(self.poll_id)
-        if poll is None:
-            await interaction.response.send_message('Poll not found.', ephemeral=True)
-            return
 
         options = cf_common.user_db.get_rpoll_options(self.poll_id)
         totals = cf_common.user_db.get_rpoll_totals(self.poll_id)
@@ -136,6 +184,7 @@ class RpollButton(discord.ui.Button):
             totals_map,
             vote_count,
             voters_map,
+            expires_at=poll.expires_at,
         )
 
         action = 'voted for' if added else 'removed vote from'
@@ -164,6 +213,7 @@ class Rpoll(commands.Cog):
             logger.warning('rpoll: user_db still None after waiting, skipping view registration')
             return
         self._register_persistent_views()
+        self._expiry_task.start()
 
     def _register_persistent_views(self):
         """Register persistent views for all active polls so buttons work after restart."""
@@ -178,23 +228,105 @@ class Rpoll(commands.Cog):
         except Exception as e:
             logger.error(f'rpoll: Failed to re-register poll views: {e}', exc_info=True)
 
+    @tasks.task_spec(name='RpollExpiry',
+                     waiter=tasks.Waiter.fixed_delay(_EXPIRY_CHECK_INTERVAL))
+    async def _expiry_task(self, _):
+        """Check for expired polls and close them."""
+        if cf_common.user_db is None:
+            return
+        try:
+            expired = cf_common.user_db.get_expired_unclosed_rpolls()
+        except Exception as e:
+            logger.error(f'rpoll expiry: Failed to query expired polls: {e}', exc_info=True)
+            return
+
+        for poll in expired:
+            try:
+                await self._close_poll(poll)
+            except Exception as e:
+                logger.error(f'rpoll expiry: Failed to close poll {poll.poll_id}: {e}',
+                             exc_info=True)
+
+    async def _close_poll(self, poll):
+        """Close an expired poll: mark in DB, edit message, send results."""
+        cf_common.user_db.close_rpoll(poll.poll_id)
+        logger.info(f'rpoll: Closed expired poll {poll.poll_id}')
+
+        options = cf_common.user_db.get_rpoll_options(poll.poll_id)
+        totals = cf_common.user_db.get_rpoll_totals(poll.poll_id)
+        totals_map = {row.option_index: row.total_rating for row in totals}
+        vote_count = cf_common.user_db.get_rpoll_vote_count(poll.poll_id)
+
+        voters_map = None
+        if not poll.anonymous:
+            voters = cf_common.user_db.get_rpoll_voters(poll.poll_id)
+            voters_map = {}
+            for row in voters:
+                voters_map.setdefault(row.option_index, []).append(int(row.user_id))
+
+        option_pairs = [(opt.option_index, opt.label) for opt in options]
+        closed_embed = _build_poll_embed(
+            poll.question, option_pairs, totals_map, vote_count,
+            voters_map, expires_at=poll.expires_at, closed=True,
+        )
+        disabled_view = _build_disabled_view(poll.poll_id, len(options))
+
+        channel = self.bot.get_channel(int(poll.channel_id))
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(int(poll.channel_id))
+            except Exception:
+                logger.warning(f'rpoll: Could not fetch channel {poll.channel_id} for poll {poll.poll_id}')
+                return
+
+        # Edit original message to disable buttons and show "ended"
+        try:
+            msg = await channel.fetch_message(int(poll.message_id))
+            await msg.edit(embed=closed_embed, view=disabled_view)
+        except Exception as e:
+            logger.warning(f'rpoll: Could not edit message for poll {poll.poll_id}: {e}')
+
+        # Send "Poll done" reply with results
+        try:
+            results_embed = _build_poll_embed(
+                poll.question, option_pairs, totals_map, vote_count,
+                voters_map, closed=True,
+            )
+            await channel.send('Poll done!', embed=results_embed)
+        except Exception as e:
+            logger.warning(f'rpoll: Could not send results for poll {poll.poll_id}: {e}')
+
     @commands.command(brief='Create a rating-weighted poll')
     async def rpoll(self, ctx, *, args: str):
         """Create a poll where votes are weighted by Codeforces rating.
 
         Usage: ;rpoll "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +anon "What's the best approach?" BFS,DFS,Dijkstra
+               ;rpoll +2h "What's the best approach?" BFS,DFS,Dijkstra
 
         Each voter's CF rating is added to their chosen option(s).
         Users without a linked CF handle count as 0.
         You can vote for multiple options. Click again to un-vote.
         Use +anon to hide who voted for what.
+        Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
         """
         args = args.strip()
         anonymous = False
-        if args.startswith('+anon'):
-            anonymous = True
-            args = args[5:].lstrip()
+        duration = _DEFAULT_DURATION
+
+        # Parse flags: +anon and +duration (in any order, before the question)
+        while args.startswith('+'):
+            token = args.split(None, 1)[0]
+            if token == '+anon':
+                anonymous = True
+                args = args[len(token):].lstrip()
+            else:
+                parsed = _parse_duration(token)
+                if parsed is not None:
+                    duration = parsed
+                    args = args[len(token):].lstrip()
+                else:
+                    break  # Not a flag, stop parsing
 
         # Extract quoted question, then comma-separated options
         if args.startswith('"'):
@@ -218,9 +350,12 @@ class Rpoll(commands.Cog):
         if len(options) > MAX_OPTIONS:
             raise RpollError(f'Maximum {MAX_OPTIONS} options allowed.')
 
+        now = time.time()
+        expires_at = now + duration
+
         poll_id = cf_common.user_db.create_rpoll(
             ctx.guild.id, ctx.channel.id, question, options,
-            ctx.author.id, time.time(), anonymous=anonymous
+            ctx.author.id, now, anonymous=anonymous, expires_at=expires_at
         )
 
         embed = _build_poll_embed(
@@ -228,13 +363,14 @@ class Rpoll(commands.Cog):
             list(enumerate(options)),
             {},
             0,
+            expires_at=expires_at,
         )
         view = RpollView(poll_id, len(options))
         msg = await ctx.send(embed=embed, view=view)
 
         cf_common.user_db.set_rpoll_message_id(poll_id, msg.id)
         logger.info(f'rpoll: Created poll={poll_id} question={question!r} '
-                    f'options={options} by user={ctx.author.id} msg={msg.id}')
+                    f'options={options} duration={duration}s by user={ctx.author.id} msg={msg.id}')
 
     @discord_common.send_error_if(RpollError)
     async def cog_command_error(self, ctx, error):

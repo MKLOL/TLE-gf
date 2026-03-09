@@ -5,7 +5,7 @@ import time
 import pytest
 
 from tle.util.db.user_db_conn import namedtuple_factory
-from tle.cogs.rpoll import _build_poll_embed, MAX_OPTIONS
+from tle.cogs.rpoll import _build_poll_embed, _parse_duration, MAX_OPTIONS, _DEFAULT_DURATION
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,9 @@ class FakeRpollDb:
                 question    TEXT NOT NULL,
                 created_by  TEXT NOT NULL,
                 created_at  REAL NOT NULL,
-                anonymous   INTEGER NOT NULL DEFAULT 0
+                anonymous   INTEGER NOT NULL DEFAULT 0,
+                expires_at  REAL NOT NULL DEFAULT 0,
+                closed      INTEGER NOT NULL DEFAULT 0
             )
         ''')
         self.conn.execute('''
@@ -101,6 +103,8 @@ class FakeRpollDb:
     get_rpoll_vote_count = _UC.get_rpoll_vote_count
     get_rpoll_user_rating = _UC.get_rpoll_user_rating
     get_all_active_rpolls = _UC.get_all_active_rpolls
+    close_rpoll = _UC.close_rpoll
+    get_expired_unclosed_rpolls = _UC.get_expired_unclosed_rpolls
     get_handle = _UC.get_handle
     fetch_cf_user = _UC.fetch_cf_user
 
@@ -164,6 +168,23 @@ class TestCreateRpoll:
         opts = db.get_rpoll_options(pid)
         assert len(opts) == 5
         assert [o.label for o in opts] == ['A', 'B', 'C', 'D', 'E']
+
+    def test_default_expires_at(self, db):
+        now = 1000.0
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', now)
+        poll = db.get_rpoll(pid)
+        assert poll.expires_at == now + 86400
+
+    def test_custom_expires_at(self, db):
+        now = 1000.0
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', now, expires_at=now + 3600)
+        poll = db.get_rpoll(pid)
+        assert poll.expires_at == now + 3600
+
+    def test_poll_starts_open(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        poll = db.get_rpoll(pid)
+        assert poll.closed == 0
 
 
 # =====================================================================
@@ -340,6 +361,88 @@ class TestActiveRpolls:
         db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', 1.0)
         assert len(db.get_all_active_rpolls()) == 0
 
+    def test_excludes_closed_polls(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', 1.0)
+        db.set_rpoll_message_id(pid, 111)
+        db.close_rpoll(pid)
+        assert len(db.get_all_active_rpolls()) == 0
+
+    def test_includes_open_excludes_closed(self, db):
+        p1 = db.create_rpoll(GUILD, CHANNEL, 'Q1', ['A', 'B'], 'u', 1.0)
+        p2 = db.create_rpoll(GUILD, CHANNEL, 'Q2', ['A', 'B'], 'u', 2.0)
+        db.set_rpoll_message_id(p1, 111)
+        db.set_rpoll_message_id(p2, 222)
+        db.close_rpoll(p1)
+        active = db.get_all_active_rpolls()
+        assert len(active) == 1
+        assert active[0].poll_id == p2
+
+
+# =====================================================================
+# DB: close_rpoll
+# =====================================================================
+
+class TestCloseRpoll:
+    def test_closes_poll(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', 1.0)
+        assert db.get_rpoll(pid).closed == 0
+        db.close_rpoll(pid)
+        assert db.get_rpoll(pid).closed == 1
+
+    def test_close_idempotent(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', 1.0)
+        db.close_rpoll(pid)
+        db.close_rpoll(pid)  # Should not error
+        assert db.get_rpoll(pid).closed == 1
+
+
+# =====================================================================
+# DB: get_expired_unclosed_rpolls
+# =====================================================================
+
+class TestExpiredUnclosedRpolls:
+    def test_no_expired_polls(self, db):
+        now = time.time()
+        db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', now, expires_at=now + 3600)
+        assert db.get_expired_unclosed_rpolls() == []
+
+    def test_finds_expired_poll(self, db):
+        past = time.time() - 100
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', past - 86400,
+                              expires_at=past)
+        db.set_rpoll_message_id(pid, 111)
+        expired = db.get_expired_unclosed_rpolls()
+        assert len(expired) == 1
+        assert expired[0].poll_id == pid
+
+    def test_ignores_closed_polls(self, db):
+        past = time.time() - 100
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', past - 86400,
+                              expires_at=past)
+        db.set_rpoll_message_id(pid, 111)
+        db.close_rpoll(pid)
+        assert db.get_expired_unclosed_rpolls() == []
+
+    def test_ignores_polls_without_message_id(self, db):
+        past = time.time() - 100
+        db.create_rpoll(GUILD, CHANNEL, 'Q', ['A', 'B'], 'u', past - 86400,
+                        expires_at=past)
+        # No set_rpoll_message_id call
+        assert db.get_expired_unclosed_rpolls() == []
+
+    def test_mixed_expired_and_active(self, db):
+        now = time.time()
+        past = now - 100
+        p1 = db.create_rpoll(GUILD, CHANNEL, 'Q1', ['A', 'B'], 'u', past - 86400,
+                             expires_at=past)
+        p2 = db.create_rpoll(GUILD, CHANNEL, 'Q2', ['A', 'B'], 'u', now,
+                             expires_at=now + 3600)
+        db.set_rpoll_message_id(p1, 111)
+        db.set_rpoll_message_id(p2, 222)
+        expired = db.get_expired_unclosed_rpolls()
+        assert len(expired) == 1
+        assert expired[0].poll_id == p1
+
 
 # =====================================================================
 # DB upgrade 1.5.0
@@ -418,6 +521,118 @@ class TestUpgrade180:
         row = conn.execute('SELECT anonymous FROM rpoll WHERE poll_id = 1').fetchone()
         assert row.anonymous == 0
         conn.close()
+
+
+class TestUpgrade190:
+    def _make_pre_190_db(self):
+        """Create a DB at version 1.8.0 (rpoll tables exist, no expiry columns)."""
+        from tle.util.db.user_db_upgrades import registry
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        registry.ensure_version_table(conn)
+        registry.set_version(conn, '1.4.0')
+        registry.run(conn)
+        # Roll back to 1.8.0
+        conn.execute('UPDATE db_version SET version = ?', ('1.8.0',))
+        conn.commit()
+        return conn
+
+    def test_adds_expires_at_and_closed_columns(self):
+        from tle.util.db.user_db_upgrades import registry
+        conn = self._make_pre_190_db()
+        conn.execute(
+            'INSERT INTO rpoll (guild_id, channel_id, question, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?)',
+            ('1', '2', 'Q?', 'u', time.time())
+        )
+        conn.commit()
+        registry.run(conn)
+        row = conn.execute('SELECT expires_at, closed FROM rpoll WHERE poll_id = 1').fetchone()
+        assert row.expires_at > 0
+        assert row.closed in (0, 1)
+        conn.close()
+
+    def test_old_expired_poll_gets_closed(self):
+        from tle.util.db.user_db_upgrades import registry
+        conn = self._make_pre_190_db()
+        old_time = time.time() - 200000  # Way in the past
+        conn.execute(
+            'INSERT INTO rpoll (guild_id, channel_id, message_id, question, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            ('1', '2', '999', 'Old Q', 'u', old_time)
+        )
+        conn.commit()
+        registry.run(conn)
+        row = conn.execute('SELECT expires_at, closed FROM rpoll WHERE poll_id = 1').fetchone()
+        assert row.expires_at == old_time + 86400
+        assert row.closed == 1
+        conn.close()
+
+    def test_recent_poll_stays_open(self):
+        from tle.util.db.user_db_upgrades import registry
+        conn = self._make_pre_190_db()
+        now = time.time()
+        conn.execute(
+            'INSERT INTO rpoll (guild_id, channel_id, message_id, question, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            ('1', '2', '999', 'Recent Q', 'u', now)
+        )
+        conn.commit()
+        registry.run(conn)
+        row = conn.execute('SELECT expires_at, closed FROM rpoll WHERE poll_id = 1').fetchone()
+        assert row.expires_at == now + 86400
+        assert row.closed == 0
+        conn.close()
+
+    def test_unposted_poll_gets_closed(self):
+        from tle.util.db.user_db_upgrades import registry
+        conn = self._make_pre_190_db()
+        conn.execute(
+            'INSERT INTO rpoll (guild_id, channel_id, question, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?)',
+            ('1', '2', 'Unposted Q', 'u', time.time())
+        )
+        conn.commit()
+        registry.run(conn)
+        row = conn.execute('SELECT closed FROM rpoll WHERE poll_id = 1').fetchone()
+        assert row.closed == 1
+        conn.close()
+
+
+# =====================================================================
+# Duration parsing
+# =====================================================================
+
+class TestParseDuration:
+    def test_minutes(self):
+        assert _parse_duration('+30m') == 30 * 60
+
+    def test_hours(self):
+        assert _parse_duration('+2h') == 2 * 3600
+
+    def test_days(self):
+        assert _parse_duration('+1d') == 86400
+
+    def test_single_minute(self):
+        assert _parse_duration('+1m') == 60
+
+    def test_large_hours(self):
+        assert _parse_duration('+48h') == 48 * 3600
+
+    def test_invalid_no_plus(self):
+        assert _parse_duration('30m') is None
+
+    def test_invalid_unit(self):
+        assert _parse_duration('+5x') is None
+
+    def test_invalid_no_number(self):
+        assert _parse_duration('+h') is None
+
+    def test_not_a_duration(self):
+        assert _parse_duration('+anon') is None
+
+    def test_empty(self):
+        assert _parse_duration('') is None
 
 
 # =====================================================================
@@ -527,6 +742,32 @@ class TestBuildPollEmbed:
         totals = {0: 2000}
         embed = _build_poll_embed('Q?', options, totals, 1)
         assert 'Leader: **A** (+2000)' in embed.description
+
+
+# =====================================================================
+# Embed: expiry and closed state
+# =====================================================================
+
+class TestBuildPollEmbedExpiry:
+    def test_shows_expiry_timestamp(self):
+        expires_at = 1700000000.0
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, expires_at=expires_at)
+        assert f'<t:{int(expires_at)}:R>' in embed.description
+
+    def test_closed_shows_ended(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, closed=True)
+        assert 'Poll has ended.' in embed.description
+
+    def test_closed_overrides_expiry(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0,
+                                  expires_at=1700000000.0, closed=True)
+        assert 'Poll has ended.' in embed.description
+        assert '<t:' not in embed.description
+
+    def test_no_expiry_no_closed(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0)
+        assert 'Poll has ended' not in embed.description
+        assert 'Ends' not in embed.description
 
 
 # =====================================================================
