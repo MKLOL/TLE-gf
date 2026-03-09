@@ -25,7 +25,7 @@ class RpollError(commands.CommandError):
     pass
 
 
-def _build_poll_embed(question, options, totals_map, vote_count):
+def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None):
     """Build the embed for a rating poll.
 
     Args:
@@ -33,6 +33,7 @@ def _build_poll_embed(question, options, totals_map, vote_count):
         options: List of (option_index, label) tuples.
         totals_map: Dict of option_index -> total_rating.
         vote_count: Total number of distinct voters.
+        voters_map: Optional dict of option_index -> list of user_ids.
     """
     grand_total = sum(totals_map.get(idx, 0) for idx, _ in options)
     show_pct = grand_total > 0
@@ -57,6 +58,15 @@ def _build_poll_embed(question, options, totals_map, vote_count):
             lines.append(f'\nLeader: **{leaders[0]}** (+{lead})')
         else:
             lines.append(f'\nTied: {", ".join(f"**{l}**" for l in leaders)}')
+
+    # Voter breakdown per option
+    if voters_map:
+        lines.append('')
+        for idx, label in options:
+            user_ids = voters_map.get(idx, [])
+            if user_ids:
+                mentions = ', '.join(f'<@{uid}>' for uid in user_ids)
+                lines.append(f'{label}: {mentions}')
 
     embed = discord.Embed(
         title=question,
@@ -113,11 +123,17 @@ class RpollButton(discord.ui.Button):
         totals_map = {row.option_index: row.total_rating for row in totals}
         vote_count = cf_common.user_db.get_rpoll_vote_count(self.poll_id)
 
+        voters = cf_common.user_db.get_rpoll_voters(self.poll_id)
+        voters_map = {}
+        for row in voters:
+            voters_map.setdefault(row.option_index, []).append(int(row.user_id))
+
         embed = _build_poll_embed(
             poll.question,
             [(opt.option_index, opt.label) for opt in options],
             totals_map,
             vote_count,
+            voters_map,
         )
 
         action = 'voted for' if added else 'removed vote from'

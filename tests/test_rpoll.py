@@ -96,6 +96,7 @@ class FakeRpollDb:
     get_rpoll_options = _UC.get_rpoll_options
     toggle_rpoll_vote = _UC.toggle_rpoll_vote
     get_rpoll_totals = _UC.get_rpoll_totals
+    get_rpoll_voters = _UC.get_rpoll_voters
     get_rpoll_vote_count = _UC.get_rpoll_vote_count
     get_rpoll_user_rating = _UC.get_rpoll_user_rating
     get_all_active_rpolls = _UC.get_all_active_rpolls
@@ -505,3 +506,75 @@ class TestPollIsolation:
         db.toggle_rpoll_vote(p2, 'u3', 0, 1500)
         assert db.get_rpoll_vote_count(p1) == 2
         assert db.get_rpoll_vote_count(p2) == 1
+
+
+class TestGetRpollVoters:
+    @pytest.fixture
+    def db(self):
+        d = FakeRpollDb()
+        yield d
+        d.close()
+
+    def test_no_voters(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        assert db.get_rpoll_voters(pid) == []
+
+    def test_single_voter(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        voters = db.get_rpoll_voters(pid)
+        assert len(voters) == 1
+        assert voters[0].option_index == 0
+        assert voters[0].user_id == 'u1'
+
+    def test_multiple_voters_multiple_options(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B', 'C'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(pid, 'u2', 0, 1200)
+        db.toggle_rpoll_vote(pid, 'u3', 1, 1800)
+        db.toggle_rpoll_vote(pid, 'u1', 2, 1500)  # u1 votes for two options
+        voters = db.get_rpoll_voters(pid)
+        # Should be ordered by option_index
+        assert len(voters) == 4
+        option_0 = [v for v in voters if v.option_index == 0]
+        option_1 = [v for v in voters if v.option_index == 1]
+        option_2 = [v for v in voters if v.option_index == 2]
+        assert {v.user_id for v in option_0} == {'u1', 'u2'}
+        assert {v.user_id for v in option_1} == {'u3'}
+        assert {v.user_id for v in option_2} == {'u1'}
+
+    def test_unvote_removes_from_voters(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)  # toggle off
+        assert db.get_rpoll_voters(pid) == []
+
+
+class TestBuildPollEmbedVoters:
+    def test_no_voters_no_voter_section(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0)
+        assert 'A:' not in embed.description
+
+    def test_voters_shown(self):
+        voters_map = {0: [111, 222], 1: [333]}
+        embed = _build_poll_embed(
+            'Q?', [(0, 'Alpha'), (1, 'Beta')],
+            {0: 3000, 1: 1500}, 3, voters_map
+        )
+        assert '<@111>' in embed.description
+        assert '<@222>' in embed.description
+        assert '<@333>' in embed.description
+        assert 'Alpha: <@111>, <@222>' in embed.description
+        assert 'Beta: <@333>' in embed.description
+
+    def test_empty_option_not_shown(self):
+        voters_map = {0: [111]}
+        embed = _build_poll_embed(
+            'Q?', [(0, 'A'), (1, 'B')],
+            {0: 1500, 1: 0}, 1, voters_map
+        )
+        assert 'A: <@111>' in embed.description
+        # B has no voters, should not appear in voter section
+        lines = embed.description.split('\n')
+        voter_lines = [l for l in lines if l.startswith('B:')]
+        assert voter_lines == []

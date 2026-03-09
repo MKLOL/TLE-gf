@@ -1463,6 +1463,14 @@ class UserDbConn(StarboardDbMixin):
             params=(poll_id,), row_factory=namedtuple_factory
         )
 
+    def get_rpoll_voters(self, poll_id):
+        """Get all voters grouped by option. Returns list of (option_index, user_id) rows."""
+        return self._fetchall(
+            'SELECT option_index, user_id FROM rpoll_vote WHERE poll_id = ? '
+            'ORDER BY option_index',
+            params=(poll_id,), row_factory=namedtuple_factory
+        )
+
     def get_rpoll_vote_count(self, poll_id):
         """Get total number of distinct voters for a poll."""
         row = self._fetchone(
