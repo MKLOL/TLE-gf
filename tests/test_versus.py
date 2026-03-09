@@ -23,8 +23,8 @@ def _make_rc(contest_id, handle, rank):
     )
 
 
-# Import the pure function under test
-from tle.cogs.versus import _compute_versus_stats
+# Import the pure functions under test
+from tle.cogs.versus import _compute_versus_stats, _normalize_handles
 
 
 class TestComputeVersusStats:
@@ -145,3 +145,33 @@ class TestComputeVersusStats:
         assert wins['y'] == 0
         assert placements['x'][1] == 5
         assert placements['y'][2] == 5
+
+
+class TestNormalizeHandles:
+    def _make_cache(self, canonical_handles):
+        """Create a fake cache with handle_rating_cache mapping."""
+        class FakeCache:
+            pass
+        cache = FakeCache()
+        cache.handle_rating_cache = {h: 1500 for h in canonical_handles}
+        return cache
+
+    def test_lowercase_input_resolved(self):
+        cache = self._make_cache(['Dragos', 'Nifeshe'])
+        result = _normalize_handles(['dragos', 'nifeshe'], cache)
+        assert result == ['Dragos', 'Nifeshe']
+
+    def test_mixed_case_input(self):
+        cache = self._make_cache(['Tourist', 'Petr'])
+        result = _normalize_handles(['tourist', 'PETR'], cache)
+        assert result == ['Tourist', 'Petr']
+
+    def test_already_correct_case(self):
+        cache = self._make_cache(['Dragos'])
+        result = _normalize_handles(['Dragos'], cache)
+        assert result == ['Dragos']
+
+    def test_unknown_handle_unchanged(self):
+        cache = self._make_cache(['Alice'])
+        result = _normalize_handles(['alice', 'unknown_user'], cache)
+        assert result == ['Alice', 'unknown_user']

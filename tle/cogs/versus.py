@@ -60,6 +60,16 @@ def _compute_versus_stats(handles, all_changes):
     return wins, placements, len(shared_contests)
 
 
+def _normalize_handles(handles, cache):
+    """Resolve handle casing to match what's stored in the rating changes cache.
+    The cache stores handles with CF's canonical casing, but users may type any case."""
+    canonical = {h.lower(): h for h in cache.handle_rating_cache}
+    result = []
+    for handle in handles:
+        result.append(canonical.get(handle.lower(), handle))
+    return result
+
+
 class Versus(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -77,6 +87,7 @@ class Versus(commands.Cog):
                                                   mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
+        handles = _normalize_handles(handles, cache)
         all_changes = {}
         for handle in handles:
             all_changes[handle] = cache.get_rating_changes_for_handle(handle)
@@ -113,6 +124,7 @@ class Versus(commands.Cog):
                                                   mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
+        handles = _normalize_handles(handles, cache)
         all_changes = {}
         for handle in handles:
             all_changes[handle] = cache.get_rating_changes_for_handle(handle)
