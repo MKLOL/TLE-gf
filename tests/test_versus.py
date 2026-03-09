@@ -80,6 +80,28 @@ class TestComputeVersusStats:
         # Same rank → tie → no one gets a win
         assert wins['alice'] == 0
         assert wins['bob'] == 0
+        # Both get 1st place (competition ranking)
+        assert placements['alice'][1] == 1
+        assert placements['bob'][1] == 1
+
+    def test_competition_ranking_three_way(self):
+        """Two users tie for 1st, third user gets 3rd (not 2nd)."""
+        handles = ['a', 'b', 'c']
+        all_changes = {
+            'a': [_make_rc(1, 'a', 5)],
+            'b': [_make_rc(1, 'b', 5)],
+            'c': [_make_rc(1, 'c', 20)],
+        }
+        wins, placements, total = _compute_versus_stats(handles, all_changes)
+        assert total == 1
+        assert wins['a'] == 0  # Tie, no win
+        assert wins['b'] == 0
+        assert wins['c'] == 0
+        # a and b both get 1st, c gets 3rd (competition ranking skips 2nd)
+        assert placements['a'][1] == 1
+        assert placements['b'][1] == 1
+        assert placements['c'][3] == 1
+        assert placements['c'].get(2, 0) == 0  # 2nd place not assigned
 
     def test_partial_overlap(self):
         """Only contests where 2+ users participated are counted."""

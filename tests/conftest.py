@@ -181,6 +181,7 @@ import datetime as _datetime
 cf_common = sys.modules['tle.util.codeforces_common']
 cf_common.user_db = None
 cf_common.fix_urls = lambda user: user  # no-op in tests
+cf_common.ResolveHandleError = type('ResolveHandleError', (_commands_mod.CommandError,), {})
 
 # Stub cf.User (codeforces_api) as a namedtuple so _make() works
 from collections import namedtuple as _nt
@@ -217,6 +218,9 @@ _dc.embed_success = lambda desc: None
 _dc.embed_neutral = lambda desc, **kw: None
 _dc.embed_alert = lambda desc: None
 _dc.random_cf_color = lambda: 0
+_dc.cf_color_embed = lambda **kw: None
+_dc.set_author_footer = lambda embed, user: None
+_dc.attach_image = lambda embed, img_file: None
 _dc._ALERT_AMBER = 0xFFBF00
 
 # tle.util.paginator needs stubs

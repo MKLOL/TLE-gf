@@ -38,9 +38,19 @@ def _compute_versus_stats(handles, all_changes):
     for cid, ranks in shared_contests.items():
         # Sort participating handles by rank (lower = better)
         sorted_handles = sorted(ranks.keys(), key=lambda h: ranks[h])
-        for place, h in enumerate(sorted_handles, 1):
-            placements[h][place] += 1
-        # Winner = rank 1 in sorted order (best among the group)
+        # Use competition ranking: tied users get the same place
+        place = 1
+        i = 0
+        while i < len(sorted_handles):
+            current_rank = ranks[sorted_handles[i]]
+            # Find all handles sharing this rank
+            j = i
+            while j < len(sorted_handles) and ranks[sorted_handles[j]] == current_rank:
+                placements[sorted_handles[j]][place] += 1
+                j += 1
+            i = j
+            place = j + 1  # Competition ranking: skip places for ties
+        # Winner = sole holder of best rank
         best_rank = ranks[sorted_handles[0]]
         winners = [h for h in sorted_handles if ranks[h] == best_rank]
         if len(winners) == 1:
@@ -64,7 +74,7 @@ class Versus(commands.Cog):
             raise VersusCogError('Please provide at least 2 handles.')
 
         handles = await cf_common.resolve_handles(ctx, self.converter, handles,
-                                                  mincnt=2, maxcnt=10)
+                                                  mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
         all_changes = {}
@@ -100,7 +110,7 @@ class Versus(commands.Cog):
             raise VersusCogError('Please provide at least 2 handles.')
 
         handles = await cf_common.resolve_handles(ctx, self.converter, handles,
-                                                  mincnt=2, maxcnt=10)
+                                                  mincnt=2, maxcnt=5)
 
         cache = cf_common.cache2.rating_changes_cache
         all_changes = {}
@@ -150,6 +160,11 @@ class Versus(commands.Cog):
         discord_common.attach_image(embed, discord_file)
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed, file=discord_file)
+
+
+    @discord_common.send_error_if(VersusCogError, cf_common.ResolveHandleError)
+    async def cog_command_error(self, ctx, error):
+        pass
 
 
 async def setup(bot):
