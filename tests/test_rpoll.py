@@ -896,6 +896,48 @@ class TestAnonymousPoll:
         assert active[0].anonymous == 1
 
 
+class TestSmartQuoteNormalization:
+    """Verify that macOS smart/curly quotes are normalized to straight quotes."""
+
+    def _normalize(self, text):
+        """Apply the same normalization the rpoll command does."""
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2018', "'").replace('\u2019', "'")
+        return text
+
+    def test_left_right_double_smart_quotes(self):
+        result = self._normalize('\u201cIs this the best?\u201d yes, no')
+        assert result == '"Is this the best?" yes, no'
+
+    def test_left_right_single_smart_quotes(self):
+        result = self._normalize('What\u2019s the best?')
+        assert result == "What's the best?"
+
+    def test_straight_quotes_unchanged(self):
+        result = self._normalize('"Already straight" yes, no')
+        assert result == '"Already straight" yes, no'
+
+    def test_mixed_smart_and_straight(self):
+        result = self._normalize('\u201cMixed" quotes')
+        assert result == '"Mixed" quotes'
+
+    def test_smart_quotes_in_full_rpoll_args(self):
+        """Simulate the exact user input that was failing."""
+        args = '\u201cis dragos the goat\u201d yes, yes'
+        args = self._normalize(args)
+        # Now the standard parser would find the straight quote
+        assert args.startswith('"')
+        end = args.find('"', 1)
+        assert end != -1
+        question = args[1:end]
+        assert question == 'is dragos the goat'
+
+    def test_smart_quotes_with_flags(self):
+        args = '+anon \u201cWhat\u2019s better?\u201d A, B'
+        args = self._normalize(args)
+        assert '"What\'s better?"' in args
+
+
 class TestBuildResultsSummary:
     def test_basic_summary(self):
         options = [(0, 'BFS'), (1, 'DFS')]

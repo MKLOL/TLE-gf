@@ -368,6 +368,9 @@ class Rpoll(commands.Cog):
         Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
         """
         args = args.strip()
+        # Normalize smart/curly quotes (common on macOS) to straight quotes
+        args = args.replace('\u201c', '"').replace('\u201d', '"')
+        args = args.replace('\u2018', "'").replace('\u2019', "'")
         anonymous = False
         duration = _DEFAULT_DURATION
 
