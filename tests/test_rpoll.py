@@ -5,7 +5,7 @@ import time
 import pytest
 
 from tle.util.db.user_db_conn import namedtuple_factory
-from tle.cogs.rpoll import _build_poll_embed, _parse_duration, MAX_OPTIONS, _DEFAULT_DURATION
+from tle.cogs.rpoll import _build_poll_embed, _build_results_summary, _parse_duration, MAX_OPTIONS, _DEFAULT_DURATION
 
 
 # ---------------------------------------------------------------------------
@@ -894,3 +894,26 @@ class TestAnonymousPoll:
         active = db.get_all_active_rpolls()
         assert len(active) == 1
         assert active[0].anonymous == 1
+
+
+class TestBuildResultsSummary:
+    def test_basic_summary(self):
+        options = [(0, 'BFS'), (1, 'DFS')]
+        totals_map = {0: 3400, 1: 1600}
+        result = _build_results_summary(options, totals_map, 5)
+        assert 'Poll ended' in result
+        assert '**BFS** 68%' in result
+        assert '**DFS** 32%' in result
+        assert '5 votes' in result
+
+    def test_zero_totals(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_summary(options, {}, 0)
+        assert '**A** 0' in result
+        assert '**B** 0' in result
+        assert '0 votes' in result
+
+    def test_singular_vote(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_summary(options, {0: 1500}, 1)
+        assert '1 vote)' in result
