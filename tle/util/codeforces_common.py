@@ -346,6 +346,8 @@ class SubFilter:
         self.bantags = []
         self.contests = []
         self.indices = []
+        self.only_rated = False
+        self.rated_contest_ids_by_handle = {}  # handle (lowercase) -> set of contest IDs
 
     def parse(self, args):
         args = list(set(args))
@@ -356,6 +358,9 @@ class SubFilter:
                 self.team = True
             elif arg == '+contest':
                 self.types.append('CONTESTANT')
+            elif arg == '+rated':
+                self.types.append('CONTESTANT')
+                self.only_rated = True
             elif arg =='+outof':
                 self.types.append('OUT_OF_COMPETITION')
             elif arg == '+virtual':
@@ -433,7 +438,13 @@ class SubFilter:
                 problem_ok = (not contest or contest.id >= cf.GYM_ID_THRESHOLD
                               or not is_nonstandard_problem(problem))
                 rating_ok = True
-            if type_ok and date_ok and rating_ok and tag_ok and bantag_ok and team_ok and problem_ok and contest_ok and index_ok:
+            # +rated: skip contests that weren't rated for this user
+            if self.only_rated and self.rated_contest_ids_by_handle:
+                handle = submission.author.members[0].handle.lower() if submission.author.members else ''
+                rated_ok2 = problem.contestId in self.rated_contest_ids_by_handle.get(handle, set())
+            else:
+                rated_ok2 = True
+            if type_ok and date_ok and rating_ok and tag_ok and bantag_ok and team_ok and problem_ok and contest_ok and index_ok and rated_ok2:
                 filtered_subs.append(submission)
         return filtered_subs
 

@@ -197,16 +197,28 @@ class Codeforces(commands.Cog):
         await ctx.send(f'Recommended problem for `{handle}`', embed=embed)
 
     @commands.command(brief='List solved problems',
-                      usage='[handles] [+hardest] [+practice] [+contest] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
+                      usage='[handles] [+hardest] [+practice] [+contest] [+rated] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
     async def stalk(self, ctx, *args):
         """Print problems solved by user sorted by time (default) or rating.
         All submission types are included by default (practice, contest, etc.)
+        Use +rated to show only contests that were actually rated for the user
+        (excludes edu rounds and other contests that were unrated for them).
         """
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
         filt = cf_common.SubFilter(False)
         args = filt.parse(args)
         handles = args or ('!' + str(ctx.author),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles)
+        # +rated: fetch rating change history to know which contests were rated
+        if filt.only_rated:
+            for handle in handles:
+                try:
+                    changes = await cf.user.rating(handle=handle)
+                    filt.rated_contest_ids_by_handle[handle.lower()] = {
+                        rc.contestId for rc in changes
+                    }
+                except cf.HandleNotFoundError:
+                    filt.rated_contest_ids_by_handle[handle.lower()] = set()
         submissions = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for subs in submissions for sub in subs]
         submissions = filt.filter_subs(submissions)

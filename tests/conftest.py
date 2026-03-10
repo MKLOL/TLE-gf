@@ -185,33 +185,78 @@ cf_common.ResolveHandleError = type('ResolveHandleError', (_commands_mod.Command
 
 # Stub cf.User (codeforces_api) as a namedtuple so _make() works
 from collections import namedtuple as _nt
+from typing import NamedTuple as _NamedTuple, Optional as _Optional, List as _List, Iterable as _Iterable
 _cf_api = sys.modules['tle.util.codeforces_api']
-_cf_api.User = _nt('User', 'handle first_name last_name country city organization '
-                    'contribution rating maxRating last_online_time '
-                    'registration_time friend_of_count title_photo')
+_cf_api.User = _nt('User', 'handle firstName lastName country city organization '
+                    'contribution rating maxRating lastOnlineTimeSeconds '
+                    'registrationTimeSeconds friendOfCount titlePhoto')
 _cf_api.RatingChange = _nt('RatingChange',
                             'contestId contestName handle rank '
                             'ratingUpdateTimeSeconds oldRating newRating')
+_cf_api.GYM_ID_THRESHOLD = 100000
 
-class _ParamParseError(_commands_mod.CommandError):
-    pass
+class _Contest(_NamedTuple):
+    id: int
+    name: str
+    startTimeSeconds: _Optional[int] = None
+    durationSeconds: _Optional[int] = None
+    type: str = 'CF'
+    phase: str = 'FINISHED'
+    preparedBy: _Optional[str] = None
+    def matches(self, markers):
+        def f(s): return ''.join(x for x in s.lower() if x.isalnum())
+        return any(f(m) in f(self.name) for m in markers)
 
-def _parse_date(arg):
-    try:
-        if len(arg) == 8:
-            fmt = '%d%m%Y'
-        elif len(arg) == 6:
-            fmt = '%m%Y'
-        elif len(arg) == 4:
-            fmt = '%Y'
-        else:
-            raise ValueError
-        return _time.mktime(_datetime.datetime.strptime(arg, fmt).timetuple())
-    except ValueError:
-        raise _ParamParseError(f'{arg} is an invalid date argument')
+class _Member(_NamedTuple):
+    handle: str
 
-cf_common.parse_date = _parse_date
-cf_common.ParamParseError = _ParamParseError
+class _Party(_NamedTuple):
+    contestId: _Optional[int] = None
+    members: _List[_Member] = []
+    participantType: str = 'CONTESTANT'
+    teamId: _Optional[int] = None
+    teamName: _Optional[str] = None
+    ghost: bool = False
+    room: _Optional[int] = None
+    startTimeSeconds: _Optional[int] = None
+
+class _Problem(_NamedTuple):
+    contestId: _Optional[int] = None
+    problemsetName: _Optional[str] = None
+    index: str = 'A'
+    name: str = 'Test'
+    type: str = 'PROGRAMMING'
+    points: _Optional[float] = None
+    rating: _Optional[int] = None
+    tags: _List[str] = []
+    def matches_all_tags(self, match_tags):
+        match_tags = set(match_tags)
+        return all(any(mt in t for t in self.tags) for mt in match_tags) if match_tags else True
+    def matches_any_tag(self, match_tags):
+        match_tags = set(match_tags)
+        return any(any(mt in t for t in self.tags) for mt in match_tags) if match_tags else False
+
+class _Submission(_NamedTuple):
+    id: int = 0
+    contestId: _Optional[int] = None
+    problem: _Problem = _Problem()
+    author: _Party = _Party()
+    programmingLanguage: str = 'C++'
+    verdict: _Optional[str] = 'OK'
+    creationTimeSeconds: int = 0
+    relativeTimeSeconds: int = 0
+
+_cf_api.Contest = _Contest
+_cf_api.Member = _Member
+_cf_api.Party = _Party
+_cf_api.Problem = _Problem
+_cf_api.Submission = _Submission
+
+# Stub tle.util.db so codeforces_common can import it
+if 'tle.util.db' not in sys.modules:
+    _db_stub = types.ModuleType('tle.util.db')
+    _db_stub.__path__ = []
+    sys.modules['tle.util.db'] = _db_stub
 
 # tle.util.discord_common needs stubs for starboard.py imports
 _dc = sys.modules['tle.util.discord_common']
@@ -269,8 +314,6 @@ _pg.paginate = lambda *a, **kw: None
 _pg.NoPagesError = type('NoPagesError', (Exception,), {})
 
 # ── Step 3: Load the actual modules we want to test ─────────────────────
-_db_path = os.path.join(_root, 'tle', 'util', 'db')
-
 
 def _load_module(name, filepath):
     spec = importlib.util.spec_from_file_location(name, filepath)
@@ -278,6 +321,24 @@ def _load_module(name, filepath):
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+_util_path = os.path.join(_root, 'tle', 'util')
+
+# Extra discord stubs needed by codeforces_common.py
+_discord_mod.Member = type('Member', (), {})
+_discord_mod.MessageReference = type('MessageReference', (), {
+    '__init__': lambda self, **kw: None,
+})
+
+# Stub EventSystem so codeforces_common can instantiate it at module level
+_events = sys.modules['tle.util.events']
+_events.EventSystem = type('EventSystem', (), {'__init__': lambda self: None})
+
+# codeforces_common.py — load for real so SubFilter, parse helpers, etc. are testable.
+# Its imports (codeforces_api, cache_system2, db, events) are all stubbed above.
+_load_module('tle.util.codeforces_common', os.path.join(_util_path, 'codeforces_common.py'))
+
+_db_path = os.path.join(_root, 'tle', 'util', 'db')
 
 
 # upgrades.py has no heavy deps — just logging
