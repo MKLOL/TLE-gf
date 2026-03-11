@@ -115,6 +115,14 @@ _discord_mod.HTTPException = type('HTTPException', (Exception,), {})
 _discord_mod.ButtonStyle = type('ButtonStyle', (), {'secondary': 2, 'primary': 1})
 _discord_mod.Interaction = type('Interaction', (), {})
 
+# discord.utils stubs
+_discord_utils = types.ModuleType('discord.utils')
+def _escape_mentions(text):
+    return text.replace('@everyone', '@\u200beveryone').replace('@here', '@\u200bhere')
+_discord_utils.escape_mentions = _escape_mentions
+sys.modules['discord.utils'] = _discord_utils
+_discord_mod.utils = _discord_utils
+
 # discord.ui stubs for rpoll
 _discord_ui = types.ModuleType('discord.ui')
 _discord_ui.__path__ = []

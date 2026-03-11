@@ -139,8 +139,9 @@ class Starboard(BackfillMixin, commands.Cog):
         # appears above the video player (file attachments render after
         # content but before embeds).
         if has_video:
+            safe_name = discord.utils.escape_mentions(message.author.display_name)
             content = (
-                f'{emoji_str} **{count}** \u00b7 **{message.author.display_name}** '
+                f'{emoji_str} **{count}** \u00b7 **{safe_name}** '
                 f'| {message.jump_url}'
             )
             for att in video_attachments:
