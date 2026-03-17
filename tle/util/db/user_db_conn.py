@@ -417,7 +417,8 @@ class UserDbConn(StarboardDbMixin):
                 created_at  REAL NOT NULL,
                 anonymous   INTEGER NOT NULL DEFAULT 0,
                 expires_at  REAL NOT NULL DEFAULT 0,
-                closed      INTEGER NOT NULL DEFAULT 0
+                closed      INTEGER NOT NULL DEFAULT 0,
+                formula     TEXT NOT NULL DEFAULT 'sum'
             )
         ''')
         self.conn.execute('''
@@ -1390,14 +1391,14 @@ class UserDbConn(StarboardDbMixin):
     # --- Rating-weighted polls ---
 
     def create_rpoll(self, guild_id, channel_id, question, options, created_by, created_at,
-                     anonymous=False, expires_at=None):
+                     anonymous=False, expires_at=None, formula='sum'):
         """Create a poll and its options. Returns the poll_id."""
         if expires_at is None:
             expires_at = created_at + 86400  # Default 24h
-        query = ('INSERT INTO rpoll (guild_id, channel_id, question, created_by, created_at, anonymous, expires_at) '
-                 'VALUES (?, ?, ?, ?, ?, ?, ?)')
+        query = ('INSERT INTO rpoll (guild_id, channel_id, question, created_by, created_at, anonymous, expires_at, formula) '
+                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         cur = self.conn.execute(query, (str(guild_id), str(channel_id), question,
-                                        str(created_by), created_at, int(anonymous), expires_at))
+                                        str(created_by), created_at, int(anonymous), expires_at, formula))
         poll_id = cur.lastrowid
         for i, label in enumerate(options):
             self.conn.execute(
@@ -1419,7 +1420,7 @@ class UserDbConn(StarboardDbMixin):
         """Get a poll by ID. Returns namedtuple or None."""
         return self._fetchone(
             'SELECT poll_id, guild_id, channel_id, message_id, question, created_by, created_at, '
-            'anonymous, expires_at, closed '
+            'anonymous, expires_at, closed, formula '
             'FROM rpoll WHERE poll_id = ?',
             params=(poll_id,), row_factory=namedtuple_factory
         )
@@ -1428,7 +1429,7 @@ class UserDbConn(StarboardDbMixin):
         """Get a poll by its Discord message_id."""
         return self._fetchone(
             'SELECT poll_id, guild_id, channel_id, message_id, question, created_by, created_at, '
-            'anonymous, expires_at, closed '
+            'anonymous, expires_at, closed, formula '
             'FROM rpoll WHERE message_id = ?',
             params=(str(message_id),), row_factory=namedtuple_factory
         )
@@ -1501,7 +1502,7 @@ class UserDbConn(StarboardDbMixin):
         """Get all open polls that have a message_id (i.e., were successfully posted)."""
         return self._fetchall(
             'SELECT poll_id, guild_id, channel_id, message_id, question, created_by, created_at, '
-            'anonymous, expires_at, closed '
+            'anonymous, expires_at, closed, formula '
             'FROM rpoll WHERE message_id IS NOT NULL AND closed = 0',
             row_factory=namedtuple_factory
         )
@@ -1516,9 +1517,16 @@ class UserDbConn(StarboardDbMixin):
         import time
         return self._fetchall(
             'SELECT poll_id, guild_id, channel_id, message_id, question, created_by, created_at, '
-            'anonymous, expires_at, closed '
+            'anonymous, expires_at, closed, formula '
             'FROM rpoll WHERE closed = 0 AND expires_at <= ? AND message_id IS NOT NULL',
             params=(time.time(),), row_factory=namedtuple_factory
+        )
+
+    def get_rpoll_vote_ratings(self, poll_id):
+        """Get individual vote ratings for formula-based scoring."""
+        return self._fetchall(
+            'SELECT option_index, rating FROM rpoll_vote WHERE poll_id = ?',
+            params=(poll_id,), row_factory=namedtuple_factory
         )
 
     # ── General key-value store ──────────────────────────────────────────
@@ -1545,4 +1553,3 @@ class UserDbConn(StarboardDbMixin):
 
     def close(self):
         self.conn.close()
-

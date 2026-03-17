@@ -281,3 +281,15 @@ def upgrade_1_9_0(db):
     )
     db.commit()
     logger.info('1.9.0: Backfilled expiration data for existing polls')
+
+
+@registry.register('1.10.0', 'Poll scoring formula')
+def upgrade_1_10_0(db):
+    logger.info('1.10.0: Adding formula column to rpoll table')
+    try:
+        db.execute("ALTER TABLE rpoll ADD COLUMN formula TEXT NOT NULL DEFAULT 'sum'")
+        logger.info('1.10.0: Added formula column')
+    except Exception as e:
+        logger.debug(f'1.10.0: formula column already exists or error: {e}')
+    db.commit()
+    logger.info('1.10.0: Upgrade complete')

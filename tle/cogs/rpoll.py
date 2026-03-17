@@ -24,6 +24,11 @@ MAX_OPTIONS = 5
 _DEFAULT_DURATION = 86400  # 24 hours in seconds
 _SAFETY_NET_INTERVAL = 300  # Safety-net sweep every 5 minutes
 _DURATION_RE = re.compile(r'^\+(\d+)([mhd])$')
+_VALID_FORMULAS = ('sum', 'exp')
+_FORMULA_LABELS = {
+    'sum': 'sum of ratings',
+    'exp': 'exponential — higher ratings weigh more',
+}
 
 
 class RpollError(commands.CommandError):
@@ -46,8 +51,28 @@ def _parse_duration(token):
     return None
 
 
+def _apply_formula(formula, ratings):
+    """Apply a scoring formula to a list of individual ratings. Returns total score."""
+    if formula == 'exp':
+        return round(sum(2 ** (r / 400) * 100 for r in ratings))
+    return sum(ratings)
+
+
+def _compute_totals_map(poll_id, formula):
+    """Compute per-option totals using the given scoring formula."""
+    if formula == 'exp':
+        votes = cf_common.user_db.get_rpoll_vote_ratings(poll_id)
+        totals = {}
+        for vote in votes:
+            score = 2 ** (vote.rating / 400) * 100
+            totals[vote.option_index] = totals.get(vote.option_index, 0) + score
+        return {k: round(v) for k, v in totals.items()}
+    totals = cf_common.user_db.get_rpoll_totals(poll_id)
+    return {row.option_index: row.total_rating for row in totals}
+
+
 def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None,
-                      expires_at=None, closed=False):
+                      expires_at=None, closed=False, formula='sum'):
     """Build the embed for a rating poll.
 
     Args:
@@ -92,11 +117,15 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
                 mentions = ', '.join(f'<@{uid}>' for uid in user_ids)
                 lines.append(f'{label}: {mentions}')
 
+    # Formula description
+    formula_label = _FORMULA_LABELS.get(formula, formula)
+    lines.append(f'\n*Scoring: {formula_label}*')
+
     # Expiry info in description
     if closed:
-        lines.append('\n**Poll has ended.**')
+        lines.append('**Poll has ended.**')
     elif expires_at:
-        lines.append(f'\nEnds <t:{int(expires_at)}:R>')
+        lines.append(f'Ends <t:{int(expires_at)}:R>')
 
     embed = discord.Embed(
         title=question,
@@ -107,7 +136,7 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
     return embed
 
 
-def _build_results_embed(question, options, totals_map, vote_count):
+def _build_results_embed(question, options, totals_map, vote_count, formula='sum'):
     """Build a compact embed for the poll expiry reply."""
     grand_total = sum(totals_map.get(idx, 0) for idx, _ in options)
     parts = []
@@ -119,8 +148,9 @@ def _build_results_embed(question, options, totals_map, vote_count):
         else:
             parts.append(f'**{label}** 0')
     votes_str = f'{vote_count} vote{"s" if vote_count != 1 else ""}'
+    formula_label = _FORMULA_LABELS.get(formula, formula)
     return discord.Embed(
-        description=f'**{question}**\n{" / ".join(parts)} ({votes_str})',
+        description=f'**{question}**\n{" / ".join(parts)} ({votes_str})\n*{formula_label}*',
         color=discord_common.random_cf_color(),
     )
 
@@ -185,8 +215,7 @@ class RpollButton(discord.ui.Button):
         )
 
         options = cf_common.user_db.get_rpoll_options(self.poll_id)
-        totals = cf_common.user_db.get_rpoll_totals(self.poll_id)
-        totals_map = {row.option_index: row.total_rating for row in totals}
+        totals_map = _compute_totals_map(self.poll_id, poll.formula)
         vote_count = cf_common.user_db.get_rpoll_vote_count(self.poll_id)
 
         voters_map = None
@@ -203,6 +232,7 @@ class RpollButton(discord.ui.Button):
             vote_count,
             voters_map,
             expires_at=poll.expires_at,
+            formula=poll.formula,
         )
 
         action = 'voted for' if added else 'removed vote from'
@@ -312,8 +342,7 @@ class Rpoll(commands.Cog):
         logger.info(f'rpoll: Closed expired poll {poll.poll_id}')
 
         options = cf_common.user_db.get_rpoll_options(poll.poll_id)
-        totals = cf_common.user_db.get_rpoll_totals(poll.poll_id)
-        totals_map = {row.option_index: row.total_rating for row in totals}
+        totals_map = _compute_totals_map(poll.poll_id, poll.formula)
         vote_count = cf_common.user_db.get_rpoll_vote_count(poll.poll_id)
 
         voters_map = None
@@ -327,6 +356,7 @@ class Rpoll(commands.Cog):
         closed_embed = _build_poll_embed(
             poll.question, option_pairs, totals_map, vote_count,
             voters_map, expires_at=poll.expires_at, closed=True,
+            formula=poll.formula,
         )
         disabled_view = _build_disabled_view(poll.poll_id, len(options))
 
@@ -349,6 +379,7 @@ class Rpoll(commands.Cog):
         try:
             results_embed = _build_results_embed(
                 poll.question, option_pairs, totals_map, vote_count,
+                formula=poll.formula,
             )
             ref = discord.MessageReference(
                 message_id=int(poll.message_id), channel_id=int(poll.channel_id),
@@ -365,12 +396,14 @@ class Rpoll(commands.Cog):
         Usage: ;rpoll "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +anon "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +2h "What's the best approach?" BFS,DFS,Dijkstra
+               ;rpoll +exp "What's the best approach?" BFS,DFS,Dijkstra
 
         Each voter's CF rating is added to their chosen option(s).
         Users without a linked CF handle count as 0.
         You can vote for multiple options. Click again to un-vote.
         Use +anon to hide who voted for what.
         Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
+        Scoring: +sum (default) or +exp (exponential, higher ratings weigh more).
         """
         args = args.strip()
         # Normalize smart/curly quotes (common on macOS) to straight quotes
@@ -378,12 +411,16 @@ class Rpoll(commands.Cog):
         args = args.replace('\u2018', "'").replace('\u2019', "'")
         anonymous = False
         duration = _DEFAULT_DURATION
+        formula = 'sum'
 
-        # Parse flags: +anon and +duration (in any order, before the question)
+        # Parse flags: +anon, +duration, +formula (in any order, before the question)
         while args.startswith('+'):
             token = args.split(None, 1)[0]
             if token == '+anon':
                 anonymous = True
+                args = args[len(token):].lstrip()
+            elif token.lstrip('+') in _VALID_FORMULAS:
+                formula = token.lstrip('+')
                 args = args[len(token):].lstrip()
             else:
                 parsed = _parse_duration(token)
@@ -420,7 +457,8 @@ class Rpoll(commands.Cog):
 
         poll_id = cf_common.user_db.create_rpoll(
             ctx.guild.id, ctx.channel.id, question, options,
-            ctx.author.id, now, anonymous=anonymous, expires_at=expires_at
+            ctx.author.id, now, anonymous=anonymous, expires_at=expires_at,
+            formula=formula,
         )
 
         embed = _build_poll_embed(
@@ -429,6 +467,7 @@ class Rpoll(commands.Cog):
             {},
             0,
             expires_at=expires_at,
+            formula=formula,
         )
         view = RpollView(poll_id, len(options))
         msg = await ctx.send(embed=embed, view=view)
