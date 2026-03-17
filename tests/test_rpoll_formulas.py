@@ -50,5 +50,20 @@ class TestApplyFormula:
     def test_team_zero_rating_does_not_change_positive_vote(self):
         assert _apply_formula('team', [0, 1500]) == 1500
 
+    def test_osu_empty(self):
+        assert _apply_formula('osu', []) == 0
+
+    def test_osu_single_rating(self):
+        assert _apply_formula('osu', [1500]) == 1500
+
+    def test_osu_sorts_before_weighting(self):
+        assert _apply_formula('osu', [1000, 2000]) == 2670
+
+    def test_osu_multiple_ratings(self):
+        assert _apply_formula('osu', [2400, 1200, 1200]) == 3743
+
+    def test_osu_zero_rating_does_not_change_positive_vote(self):
+        assert _apply_formula('osu', [0, 1500]) == 1500
+
     def test_unknown_formula_falls_back_to_sum(self):
         assert _apply_formula('unknown', [1200, 1800]) == 3000

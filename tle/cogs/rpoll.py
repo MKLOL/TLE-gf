@@ -25,11 +25,12 @@ MAX_OPTIONS = 5
 _DEFAULT_DURATION = 86400  # 24 hours in seconds
 _SAFETY_NET_INTERVAL = 300  # Safety-net sweep every 5 minutes
 _DURATION_RE = re.compile(r'^\+(\d+)([mhd])$')
-_VALID_FORMULAS = ('sum', 'exp', 'team')
+_VALID_FORMULAS = ('sum', 'exp', 'team', 'osu')
 _FORMULA_LABELS = {
     'sum': 'sum of ratings',
     'exp': 'exponential: `2^(rating/400) * 100`',
     'team': 'team Elo: solo rating with 50% win vs all voters',
+    'osu': 'osu-style: top vote full, then `0.67x`, `0.67^2x`, ...',
 }
 
 
@@ -61,6 +62,8 @@ def _apply_formula(formula, ratings):
         if not ratings:
             return 0
         return _compose_team_rating(ratings)
+    if formula == 'osu':
+        return _compose_osu_score(ratings)
     return sum(ratings)
 
 
@@ -86,9 +89,16 @@ def _compose_team_rating(ratings):
     return round((left + right) / 2)
 
 
+def _compose_osu_score(ratings, decay=0.67):
+    """Weight sorted ratings by a fixed decay, like osu pp weighting."""
+    sorted_ratings = sorted(ratings, reverse=True)
+    total = sum(rating * (decay ** index) for index, rating in enumerate(sorted_ratings))
+    return round(total)
+
+
 def _compute_totals_map(poll_id, formula):
     """Compute per-option totals using the given scoring formula."""
-    if formula in {'exp', 'team'}:
+    if formula in {'exp', 'team', 'osu'}:
         votes = cf_common.user_db.get_rpoll_vote_ratings(poll_id)
         totals = {}
         for vote in votes:
@@ -428,13 +438,14 @@ class Rpoll(commands.Cog):
                ;rpoll +2h "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +exp "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +team "What's the best approach?" BFS,DFS,Dijkstra
+               ;rpoll +osu "What's the best approach?" BFS,DFS,Dijkstra
 
         Each voter's CF rating is added to their chosen option(s).
         Users without a linked CF handle count as 0.
         You can vote for multiple options. Click again to un-vote.
         Use +anon to hide who voted for what.
         Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
-        Scoring: +sum (default), +exp (`2^(rating/400) * 100`), or +team (team Elo).
+        Scoring: +sum (default), +exp (`2^(rating/400) * 100`), +team (team Elo), or +osu (0.67 decay).
         """
         args = args.strip()
         # Normalize smart/curly quotes (common on macOS) to straight quotes

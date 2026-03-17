@@ -357,6 +357,11 @@ class TestFormulaDb:
         poll = db.get_rpoll(pid)
         assert poll.formula == 'team'
 
+    def test_custom_formula_osu(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='osu')
+        poll = db.get_rpoll(pid)
+        assert poll.formula == 'osu'
+
     def test_formula_in_get_by_message_id(self, db):
         pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='exp')
         db.set_rpoll_message_id(pid, 12345)
