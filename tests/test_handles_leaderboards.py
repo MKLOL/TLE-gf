@@ -131,3 +131,91 @@ def test_monthlygudgitters_uses_paginator_and_month_start_rating(monkeypatch):
     assert embed.title == 'MGG Leaderboard (Mar 2025)'
     assert '**#1** <@1> — **8** pts | `h1` (1700)' in embed.description
     assert '`h2`' not in embed.description
+
+
+def test_ggimg_sends_top_20_color_image_rankings(monkeypatch):
+    User = namedtuple('User', 'rating')
+    members = [_FakeMember(i, f'user{i}') for i in range(1, 23)]
+    guild = _FakeGuild(1, members)
+    sent = {}
+
+    async def fake_send(*, file=None):
+        sent['file'] = file
+
+    ctx = SimpleNamespace(
+        author=members[0],
+        guild=guild,
+        channel=object(),
+        send=fake_send,
+    )
+    user_db = _FakeUserDb(
+        gudgitters=[(str(i), 200 - i) for i in range(1, 23)],
+        handles={str(i): f'h{i}' for i in range(1, 23)},
+        users={f'h{i}': User(1500 + i) for i in range(1, 23)},
+    )
+
+    original_user_db = cf_common.user_db
+    cf_common.user_db = user_db
+    captured = {}
+
+    def fake_get_gudgitters_image(rankings):
+        captured['rankings'] = rankings
+        return 'fake-image'
+
+    monkeypatch.setattr(handles_module, 'get_gudgitters_image', fake_get_gudgitters_image)
+    try:
+        asyncio.run(Handles.ggimg(_make_handles_cog(), ctx))
+    finally:
+        cf_common.user_db = original_user_db
+
+    assert sent['file'] == 'fake-image'
+    assert len(captured['rankings']) == 20
+    assert captured['rankings'][0] == (0, 'user1', 'h1', 1501, 199)
+    assert captured['rankings'][-1] == (19, 'user20', 'h20', 1520, 180)
+
+
+def test_mggimg_sends_monthly_image_rankings(monkeypatch):
+    User = namedtuple('User', 'rating')
+    RatingChange = namedtuple('RatingChange', 'ratingUpdateTimeSeconds newRating')
+    members = [_FakeMember(1, 'u1'), _FakeMember(2, 'u2')]
+    guild = _FakeGuild(1, members)
+    sent = {}
+
+    async def fake_send(*, file=None):
+        sent['file'] = file
+
+    ctx = SimpleNamespace(
+        author=members[0],
+        guild=guild,
+        channel=object(),
+        send=fake_send,
+    )
+    user_db = _FakeUserDb(
+        monthly_entries=[('1', 0, 1741000000), ('2', 0, 1741000000)],
+        handles={'1': 'h1', '2': 'h2'},
+        users={'h1': User(2000), 'h2': User(2200)},
+    )
+    cache = _FakeRatingChangesCache({
+        'h1': [RatingChange(1740700000, 1700)],
+        'h2': [RatingChange(1740700000, 2200)],
+    })
+
+    original_user_db = cf_common.user_db
+    original_cache2 = cf_common.cache2
+    cf_common.user_db = user_db
+    cf_common.cache2 = SimpleNamespace(rating_changes_cache=cache)
+    captured = {}
+
+    def fake_get_gudgitters_image(rankings):
+        captured['rankings'] = rankings
+        return 'fake-monthly-image'
+
+    monkeypatch.setattr(handles_module, 'get_gudgitters_image', fake_get_gudgitters_image)
+    try:
+        asyncio.run(Handles.mggimg(_make_handles_cog(), ctx, 'div2', 'd=032025'))
+    finally:
+        cf_common.user_db = original_user_db
+        cf_common.cache2 = original_cache2
+
+    assert sent['file'] == 'fake-monthly-image'
+    assert captured['rankings'] == [(0, 'u1', 'h1', 1700, 8)]

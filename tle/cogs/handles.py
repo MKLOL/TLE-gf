@@ -584,6 +584,14 @@ class Handles(commands.Cog):
             pages.append((None, embed))
         return pages
 
+    def _make_gudgitter_image_rankings(self, ctx, rows, *, limit=20):
+        rankings = []
+        for i, row in enumerate(rows[:limit]):
+            member = ctx.guild.get_member(int(row.user_id))
+            display_name = member.display_name if member is not None else ''
+            rankings.append((i, display_name, row.handle, row.rating, row.score))
+        return rankings
+
     def _build_gudgitter_rows(self, ctx, entries, *, division=None, showall=False, start_time=None):
         rows = []
         cache = cf_common.cache2.rating_changes_cache if start_time is not None else None
@@ -666,6 +674,61 @@ class Handles(commands.Cog):
         pages = self._make_gudgitter_pages(ctx, rows, title)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=_PAGINATE_WAIT_TIME,
                            set_pagenum_footers=True, author_id=ctx.author.id)
+
+    @commands.command(brief="Show gudgitters as an image", usage="[div1|div2|div3] [+all]")
+    async def ggimg(self, ctx, *args):
+        """Show the top gitgudders as a color-coded image."""
+        res = cf_common.user_db.get_gudgitters()
+        res.sort(key=lambda r: r[1], reverse=True)
+
+        division, showall = _parse_gudgitter_args(args)
+        rows = self._build_gudgitter_rows(ctx, res, division=division, showall=showall)
+
+        if not rows:
+            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+        rankings = self._make_gudgitter_image_rankings(ctx, rows)
+        await ctx.send(file=get_gudgitters_image(rankings))
+
+    @commands.command(brief="Show monthly gudgitters as an image", usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def mggimg(self, ctx, *args):
+        """Show the top monthly gitgudders as a color-coded image."""
+        now = datetime.datetime.now()
+        for arg in args:
+            if arg[0:2] == 'd=':
+                now = parse_date(arg[2:])
+
+        start_time, end_time = cf_common.get_start_and_end_of_month(now)
+
+        morePointsActive = False
+        morePointsTime = end_time - cfc._ONE_WEEK_DURATION
+        if start_time >= cfc._GITGUD_MORE_POINTS_START_TIME:
+            morePointsActive = True
+
+        division, showall = _parse_gudgitter_args(args)
+
+        results = cf_common.user_db.get_gudgitters_timerange(start_time, end_time)
+        res = {}
+        for entry in results:
+            res[entry[0]] = 0
+        for entry in results:
+            if len(entry) >= 3:
+                score = cfc._calculateGitgudScoreForDelta(int(entry[1]))
+                res[entry[0]] += 2 * score if morePointsActive and int(entry[2]) >= morePointsTime else score
+            else:
+                raise HandleCogError(f'Tuple size {len(entry)} for entry {entry[0]}')
+
+        rows = self._build_gudgitter_rows(
+            ctx,
+            sorted(res.items(), key=lambda item: item[1], reverse=True),
+            division=division,
+            showall=showall,
+            start_time=start_time,
+        )
+
+        if not rows:
+            raise HandleCogError('No one has completed a gitgud challenge, send ;gitgud to request and ;gotgud to mark it as complete')
+        rankings = self._make_gudgitter_image_rankings(ctx, rows)
+        await ctx.send(file=get_gudgitters_image(rankings))
 
     @handle.command(brief="Show all handles")
     async def list(self, ctx, *countries):
