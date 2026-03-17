@@ -538,6 +538,22 @@ class UserDbConn(StarboardDbMixin):
         '''
         return self.conn.execute(query).fetchall()
 
+    def get_gudgitter_score(self, user_id):
+        query = '''
+            SELECT score FROM user_challenge WHERE user_id = ?
+        '''
+        row = self.conn.execute(query, (str(user_id),)).fetchone()
+        return row[0] if row is not None else 0
+
+    def get_gudgitters_timerange_for_user(self, user_id, timestamp_start, timestamp_end):
+        query = '''
+            SELECT rating_delta, issue_time
+            FROM challenge
+            WHERE user_id = ? AND finish_time >= ? AND finish_time <= ?
+            ORDER BY issue_time
+        '''
+        return self.conn.execute(query, (str(user_id), timestamp_start, timestamp_end)).fetchall()
+
     def howgud(self, user_id):
         query = '''
             SELECT rating_delta FROM challenge WHERE user_id = ? AND finish_time IS NOT NULL

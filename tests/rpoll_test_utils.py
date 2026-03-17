@@ -66,6 +66,29 @@ class FakeRpollDb:
                 friend_of_count INTEGER, title_photo TEXT
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE challenge (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT NOT NULL,
+                issue_time    REAL NOT NULL,
+                finish_time   REAL,
+                problem_name  TEXT NOT NULL,
+                contest_id    INTEGER NOT NULL,
+                p_index       INTEGER NOT NULL,
+                rating_delta  INTEGER NOT NULL,
+                status        INTEGER NOT NULL
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE user_challenge (
+                user_id              TEXT PRIMARY KEY,
+                active_challenge_id  INTEGER,
+                issue_time           REAL,
+                score                INTEGER NOT NULL,
+                num_completed        INTEGER NOT NULL,
+                num_skipped          INTEGER NOT NULL
+            )
+        ''')
         self.conn.commit()
 
     def _fetchone(self, query, params=(), row_factory=None):
@@ -99,6 +122,8 @@ class FakeRpollDb:
     close_rpoll = _UC.close_rpoll
     get_expired_unclosed_rpolls = _UC.get_expired_unclosed_rpolls
     get_rpoll_vote_ratings = _UC.get_rpoll_vote_ratings
+    get_gudgitter_score = _UC.get_gudgitter_score
+    get_gudgitters_timerange_for_user = _UC.get_gudgitters_timerange_for_user
     get_handle = _UC.get_handle
     fetch_cf_user = _UC.fetch_cf_user
 
@@ -114,6 +139,24 @@ class FakeRpollDb:
             ' rating, maxRating, last_online_time, registration_time, friend_of_count, title_photo) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (handle, '', '', '', '', '', 0, rating, rating, 0, 0, 0, '')
+        )
+        self.conn.commit()
+
+    def _seed_gudgitter_score(self, user_id, score):
+        self.conn.execute(
+            'INSERT OR REPLACE INTO user_challenge '
+            '(user_id, active_challenge_id, issue_time, score, num_completed, num_skipped) '
+            'VALUES (?, NULL, NULL, ?, 0, 0)',
+            (str(user_id), score)
+        )
+        self.conn.commit()
+
+    def _seed_monthly_gitgud_entry(self, user_id, issue_time, finish_time, rating_delta, problem_name='P'):
+        self.conn.execute(
+            'INSERT INTO challenge '
+            '(user_id, issue_time, finish_time, problem_name, contest_id, p_index, rating_delta, status) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (str(user_id), issue_time, finish_time, problem_name, 1, 0, rating_delta, 0)
         )
         self.conn.commit()
 

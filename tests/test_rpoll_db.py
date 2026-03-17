@@ -180,6 +180,23 @@ class TestUserRating:
         assert rating == 0
 
 
+class TestGitgudScores:
+    def test_all_time_gitgud_score(self, db):
+        db._seed_gudgitter_score('user1', 42)
+        assert db.get_gudgitter_score('user1') == 42
+
+    def test_missing_all_time_gitgud_score_defaults_zero(self, db):
+        assert db.get_gudgitter_score('missing') == 0
+
+    def test_monthly_gitgud_entries_for_user(self, db):
+        db._seed_monthly_gitgud_entry('user1', 1000, 2000, 150)
+        db._seed_monthly_gitgud_entry('user2', 1000, 2000, 250)
+        rows = db.get_gudgitters_timerange_for_user('user1', 1500, 2500)
+        assert len(rows) == 1
+        assert rows[0].rating_delta == 150
+        assert rows[0].issue_time == 1000
+
+
 class TestActiveRpolls:
     def test_returns_only_posted_polls(self, db):
         p1 = db.create_rpoll(GUILD, CHANNEL, 'Q1', ['A', 'B'], 'u', 1.0)
@@ -361,6 +378,16 @@ class TestFormulaDb:
         pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='osu')
         poll = db.get_rpoll(pid)
         assert poll.formula == 'osu'
+
+    def test_custom_formula_gg(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='gg')
+        poll = db.get_rpoll(pid)
+        assert poll.formula == 'gg'
+
+    def test_custom_formula_mgg(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='mgg')
+        poll = db.get_rpoll(pid)
+        assert poll.formula == 'mgg'
 
     def test_formula_in_get_by_message_id(self, db):
         pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='exp')

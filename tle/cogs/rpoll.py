@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import re
 import time
@@ -25,13 +26,21 @@ MAX_OPTIONS = 5
 _DEFAULT_DURATION = 86400  # 24 hours in seconds
 _SAFETY_NET_INTERVAL = 300  # Safety-net sweep every 5 minutes
 _DURATION_RE = re.compile(r'^\+(\d+)([mhd])$')
-_VALID_FORMULAS = ('sum', 'exp', 'team', 'osu')
+_VALID_FORMULAS = ('sum', 'exp', 'team', 'osu', 'gg', 'mgg')
 _FORMULA_LABELS = {
     'sum': 'sum of ratings',
     'exp': 'exponential: `2^(rating/400) * 100`',
     'team': 'team Elo: solo rating with 50% win vs all voters',
     'osu': 'osu-style: top vote full, then `0.67x`, `0.67^2x`, ...',
+    'gg': 'gitgud: all-time gg score',
+    'mgg': 'monthly gitgud: score for poll creation month',
 }
+
+_GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
+_GITGUD_SCORE_DISTRIB_MIN = -400
+_GITGUD_SCORE_DISTRIB_MAX = 300
+_ONE_WEEK_DURATION = 7 * 24 * 60 * 60
+_GITGUD_MORE_POINTS_START_TIME = 1680300000
 
 
 class RpollError(commands.CommandError):
@@ -94,6 +103,43 @@ def _compose_osu_score(ratings, decay=0.67):
     sorted_ratings = sorted(ratings, reverse=True)
     total = sum(rating * (decay ** index) for index, rating in enumerate(sorted_ratings))
     return round(total)
+
+
+def _calculate_gitgud_score_for_delta(delta):
+    """Match the gg/mgg point distribution."""
+    if delta <= _GITGUD_SCORE_DISTRIB_MIN:
+        return _GITGUD_SCORE_DISTRIB[0]
+    if delta >= _GITGUD_SCORE_DISTRIB_MAX:
+        return _GITGUD_SCORE_DISTRIB[-1]
+    index = (delta - _GITGUD_SCORE_DISTRIB_MIN) // 100
+    return _GITGUD_SCORE_DISTRIB[index]
+
+
+def _get_monthly_gitgud_score(user_id, created_at):
+    """Match ;mgg semantics for the month the poll was created in."""
+    created_dt = datetime.datetime.fromtimestamp(created_at)
+    start_time, end_time = cf_common.get_start_and_end_of_month(created_dt)
+    more_points_time = end_time - _ONE_WEEK_DURATION
+    more_points_active = start_time >= _GITGUD_MORE_POINTS_START_TIME
+    entries = cf_common.user_db.get_gudgitters_timerange_for_user(user_id, start_time, end_time)
+
+    score = 0
+    for rating_delta, issue_time in entries:
+        entry_score = _calculate_gitgud_score_for_delta(int(rating_delta))
+        if more_points_active and int(issue_time) >= more_points_time:
+            score += 2 * entry_score
+        else:
+            score += entry_score
+    return score
+
+
+def _get_vote_weight(poll, user_id, guild_id):
+    """Get the numeric vote weight for the current poll formula."""
+    if poll.formula == 'gg':
+        return cf_common.user_db.get_gudgitter_score(user_id)
+    if poll.formula == 'mgg':
+        return _get_monthly_gitgud_score(user_id, poll.created_at)
+    return cf_common.user_db.get_rpoll_user_rating(user_id, guild_id)
 
 
 def _compute_totals_map(poll_id, formula):
@@ -249,7 +295,7 @@ class RpollButton(discord.ui.Button):
         user_id = interaction.user.id
         guild_id = interaction.guild_id
 
-        rating = cf_common.user_db.get_rpoll_user_rating(user_id, guild_id)
+        rating = _get_vote_weight(poll, user_id, guild_id)
         added = cf_common.user_db.toggle_rpoll_vote(
             self.poll_id, user_id, self.option_index, rating
         )
@@ -439,13 +485,15 @@ class Rpoll(commands.Cog):
                ;rpoll +exp "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +team "What's the best approach?" BFS,DFS,Dijkstra
                ;rpoll +osu "What's the best approach?" BFS,DFS,Dijkstra
+               ;rpoll +gg "What's the best approach?" BFS,DFS,Dijkstra
+               ;rpoll +mgg "What's the best approach?" BFS,DFS,Dijkstra
 
         Each voter's CF rating is added to their chosen option(s).
         Users without a linked CF handle count as 0.
         You can vote for multiple options. Click again to un-vote.
         Use +anon to hide who voted for what.
         Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
-        Scoring: +sum (default), +exp (`2^(rating/400) * 100`), +team (team Elo), or +osu (0.67 decay).
+        Scoring: +sum (default), +exp (`2^(rating/400) * 100`), +team (team Elo), +osu (0.67 decay), +gg, or +mgg.
         """
         args = args.strip()
         # Normalize smart/curly quotes (common on macOS) to straight quotes

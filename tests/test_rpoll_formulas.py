@@ -1,5 +1,13 @@
 """Formula behavior tests for rpoll."""
-from tle.cogs.rpoll import _apply_formula
+import datetime
+from collections import namedtuple
+
+import pytest
+
+from tle.cogs.rpoll import (_apply_formula, _calculate_gitgud_score_for_delta,
+                            _get_monthly_gitgud_score, _get_vote_weight)
+from tle.util import codeforces_common as cf_common
+from tests.rpoll_test_utils import FakeRpollDb
 
 
 class TestApplyFormula:
@@ -67,3 +75,56 @@ class TestApplyFormula:
 
     def test_unknown_formula_falls_back_to_sum(self):
         assert _apply_formula('unknown', [1200, 1800]) == 3000
+
+
+class TestGitgudFormulaHelpers:
+    def test_gitgud_score_for_delta_midrange(self):
+        assert _calculate_gitgud_score_for_delta(0) == 8
+
+    def test_gitgud_score_for_delta_low_cap(self):
+        assert _calculate_gitgud_score_for_delta(-500) == 1
+
+    def test_gitgud_score_for_delta_high_cap(self):
+        assert _calculate_gitgud_score_for_delta(500) == 23
+
+    @pytest.fixture
+    def fake_db(self):
+        database = FakeRpollDb()
+        original = cf_common.user_db
+        cf_common.user_db = database
+        try:
+            yield database
+        finally:
+            cf_common.user_db = original
+            database.close()
+
+    def test_monthly_gitgud_score_for_poll_month(self, fake_db):
+        march = datetime.datetime(2026, 3, 17, 12, 0, 0).timestamp()
+        march_5 = datetime.datetime(2026, 3, 5, 12, 0, 0).timestamp()
+        march_10 = datetime.datetime(2026, 3, 10, 12, 0, 0).timestamp()
+        april_2 = datetime.datetime(2026, 4, 2, 12, 0, 0).timestamp()
+        fake_db._seed_monthly_gitgud_entry('user1', march_5, march_10, 0)
+        fake_db._seed_monthly_gitgud_entry('user1', april_2, april_2, 300)
+        assert _get_monthly_gitgud_score('user1', march) == 8
+
+    def test_monthly_gitgud_score_applies_double_points_in_last_week(self, fake_db):
+        march = datetime.datetime(2026, 3, 17, 12, 0, 0).timestamp()
+        march_26 = datetime.datetime(2026, 3, 26, 12, 0, 0).timestamp()
+        march_27 = datetime.datetime(2026, 3, 27, 12, 0, 0).timestamp()
+        fake_db._seed_monthly_gitgud_entry('user1', march_26, march_27, 0)
+        assert _get_monthly_gitgud_score('user1', march) == 16
+
+    def test_vote_weight_uses_gg_score(self, fake_db):
+        fake_db._seed_gudgitter_score('user1', 42)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='gg', created_at=datetime.datetime(2026, 3, 17, 12, 0, 0).timestamp())
+        assert _get_vote_weight(poll, 'user1', 123) == 42
+
+    def test_vote_weight_uses_mgg_score_for_poll_month(self, fake_db):
+        created_at = datetime.datetime(2026, 3, 17, 12, 0, 0).timestamp()
+        march_5 = datetime.datetime(2026, 3, 5, 12, 0, 0).timestamp()
+        march_10 = datetime.datetime(2026, 3, 10, 12, 0, 0).timestamp()
+        fake_db._seed_monthly_gitgud_entry('user1', march_5, march_10, 0)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='mgg', created_at=created_at)
+        assert _get_vote_weight(poll, 'user1', 123) == 8

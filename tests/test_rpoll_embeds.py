@@ -278,6 +278,16 @@ class TestBuildResultsEmbed:
         result = _build_results_embed('Q?', options, {0: 1500}, 1, formula='osu')
         assert _FORMULA_LABELS['osu'] in result.description
 
+    def test_shows_gg_formula_label(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_embed('Q?', options, {0: 1500}, 1, formula='gg')
+        assert _FORMULA_LABELS['gg'] in result.description
+
+    def test_shows_mgg_formula_label(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_embed('Q?', options, {0: 1500}, 1, formula='mgg')
+        assert _FORMULA_LABELS['mgg'] in result.description
+
     def test_default_formula_label(self):
         options = [(0, 'A'), (1, 'B')]
         result = _build_results_embed('Q?', options, {0: 1500}, 1)
@@ -300,6 +310,14 @@ class TestBuildPollEmbedFormula:
     def test_osu_formula_label_shown(self):
         embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='osu')
         assert _FORMULA_LABELS['osu'] in embed.description
+
+    def test_gg_formula_label_shown(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='gg')
+        assert _FORMULA_LABELS['gg'] in embed.description
+
+    def test_mgg_formula_label_shown(self):
+        embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='mgg')
+        assert _FORMULA_LABELS['mgg'] in embed.description
 
     def test_formula_label_line_shown(self):
         embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='sum')
