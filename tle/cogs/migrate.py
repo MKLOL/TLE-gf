@@ -505,5 +505,5 @@ class Migrate(commands.Cog):
             logger.info(f'Migration resume: {resumed} migration(s) resumed across all guilds')
 
 
-def setup(bot):
-    bot.add_cog(Migrate(bot))
+async def setup(bot):
+    await bot.add_cog(Migrate(bot))
