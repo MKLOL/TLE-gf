@@ -34,7 +34,7 @@ from tle.cogs._migrate_retry import discord_retry, RetryExhaustedError
 logger = logging.getLogger(__name__)
 
 # Rate limit delay between Discord API calls during crawl/post
-_RATE_DELAY = 1.5
+_RATE_DELAY = 0.5
 
 # Retry parameters for Discord API calls
 _MAX_RETRIES = 5
