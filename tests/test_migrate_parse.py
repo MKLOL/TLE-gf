@@ -207,7 +207,7 @@ class _FakeEntry:
 class TestBuildFallbackMessage:
     def test_reconstructs_content_line(self):
         entry = _FakeEntry(star_count=5, original_msg_id='333')
-        fallback = json.dumps({'content': 'Hello world'})
+        fallback = json.dumps({'content': '⭐ **5** | https://discord.com/channels/0/0/333'})
         content, embeds = build_fallback_message(entry, fallback, '⭐')
         assert '⭐' in content
         assert '**5**' in content

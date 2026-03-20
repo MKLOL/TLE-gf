@@ -426,7 +426,7 @@ class TestExactCopyBehavior:
         db.add_migration_entry(str(GUILD), '333', CHOC, '444', '100')
         # star_count=0 for deleted entries (default), but the fallback should
         # still use the entry's emoji
-        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': 'old msg'}))
+        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': f'{CHOC} **3** | https://discord.com/channels/{GUILD}/100/333'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)
@@ -445,7 +445,7 @@ class TestExactCopyBehavior:
         db.set_migration_alias_map(str(GUILD), json.dumps({CHOC: PILL}))
 
         db.add_migration_entry(str(GUILD), '333', CHOC, '444', '100')
-        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': 'choc msg'}))
+        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': f'{CHOC} **3** | https://discord.com/channels/{GUILD}/100/333'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)

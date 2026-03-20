@@ -87,7 +87,7 @@ class TestPostOrdering:
     def test_uses_fallback_for_deleted(self, db):
         db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
         db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
-        fallback = json.dumps({'content': 'Deleted msg'})
+        fallback = json.dumps({'content': f'{PILL} **3** | https://discord.com/channels/{GUILD}/100/333'})
         db.update_migration_entry_deleted('333', PILL, fallback)
 
         entries = db.get_migration_entries_for_posting(str(GUILD))

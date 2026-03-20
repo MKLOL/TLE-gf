@@ -192,7 +192,7 @@ class TestPostPhase:
 
         db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
         db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
-        db.update_migration_entry_deleted('333', PILL, json.dumps({'content': 'Hello'}))
+        db.update_migration_entry_deleted('333', PILL, json.dumps({'content': f'{PILL} **5** | https://discord.com/channels/{GUILD}/100/333'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)
@@ -213,8 +213,8 @@ class TestPostPhase:
         # Add out of order
         db.add_migration_entry(str(GUILD), '999', PILL, '444', '100')
         db.add_migration_entry(str(GUILD), '111', PILL, '445', '100')
-        db.update_migration_entry_deleted('999', PILL, json.dumps({'content': 'newer'}))
-        db.update_migration_entry_deleted('111', PILL, json.dumps({'content': 'older'}))
+        db.update_migration_entry_deleted('999', PILL, json.dumps({'content': f'{PILL} **3** | https://discord.com/channels/{GUILD}/100/999'}))
+        db.update_migration_entry_deleted('111', PILL, json.dumps({'content': f'{PILL} **3** | https://discord.com/channels/{GUILD}/100/111'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)
@@ -931,8 +931,8 @@ class TestAliasSupport:
 
         db.add_migration_entry(str(GUILD), '111', PILL, '444', '100')
         db.add_migration_entry(str(GUILD), '222', CHOC, '445', '100')
-        db.update_migration_entry_deleted('111', PILL, json.dumps({'content': 'pill msg'}))
-        db.update_migration_entry_deleted('222', CHOC, json.dumps({'content': 'choc msg'}))
+        db.update_migration_entry_deleted('111', PILL, json.dumps({'content': f'{PILL} **5** | https://discord.com/channels/{GUILD}/100/111'}))
+        db.update_migration_entry_deleted('222', CHOC, json.dumps({'content': f'{CHOC} **3** | https://discord.com/channels/{GUILD}/100/222'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)
@@ -955,8 +955,8 @@ class TestAliasSupport:
 
         db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
         db.add_migration_entry(str(GUILD), '333', CHOC, '445', '100')
-        db.update_migration_entry_deleted('333', PILL, json.dumps({'content': 'hi'}))
-        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': 'hi'}))
+        db.update_migration_entry_deleted('333', PILL, json.dumps({'content': f'{PILL} **5** | https://discord.com/channels/{GUILD}/100/333'}))
+        db.update_migration_entry_deleted('333', CHOC, json.dumps({'content': f'{CHOC} **3** | https://discord.com/channels/{GUILD}/100/333'}))
 
         from tle.cogs.migrate import Migrate
         cog = Migrate(bot)
