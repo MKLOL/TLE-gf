@@ -252,46 +252,16 @@ class Migrate(commands.Cog):
 
         post_done = 0
         post_failed = 0
-        color = constants._DEFAULT_STAR_COLOR
 
         for entry in entries:
             try:
-                if entry.crawl_status == 'crawled' and entry.source_channel_id:
-                    # Try to fetch original and build proper starboard message
-                    original_msg = None
-                    try:
-                        source_channel = await self._fetch_source_channel(
-                            int(entry.source_channel_id))
-                        original_msg = await discord_retry(
-                            lambda: source_channel.fetch_message(int(entry.original_msg_id)),
-                            max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
-                        )
-                    except (discord.NotFound, discord.Forbidden):
-                        pass  # permanent — fall through to fallback
-                    except RetryExhaustedError:
-                        pass  # fall through to fallback
-
-                    if original_msg is not None:
-                        content, embeds, files = await Starboard.build_starboard_message(
-                            original_msg, entry.emoji, entry.star_count, color
-                        )
-                        sent = await discord_retry(
-                            lambda: new_channel.send(content=content, embeds=embeds, files=files),
-                            max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
-                        )
-                    else:
-                        content, embeds = build_fallback_message(entry, entry.embed_fallback, entry.emoji)
-                        sent = await discord_retry(
-                            lambda: new_channel.send(content=content, embeds=embeds),
-                            max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
-                        )
-                else:
-                    # Deleted original — use fallback
-                    content, embeds = build_fallback_message(entry, entry.embed_fallback, entry.emoji)
-                    sent = await discord_retry(
-                        lambda: new_channel.send(content=content, embeds=embeds),
-                        max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
-                    )
+                # Always copy the old bot's message exactly — same content,
+                # same embeds. No re-fetching, no re-rendering.
+                content, embeds = build_fallback_message(entry, entry.embed_fallback, entry.emoji)
+                sent = await discord_retry(
+                    lambda: new_channel.send(content=content, embeds=embeds),
+                    max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
+                )
 
                 db.update_migration_entry_posted(entry.original_msg_id, entry.emoji, str(sent.id))
                 post_done += 1
