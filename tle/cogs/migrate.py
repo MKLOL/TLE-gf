@@ -760,6 +760,36 @@ class Migrate(commands.Cog):
 
         # Reset all entries back to crawled/deleted
         db.reset_all_entries_for_repost(guild_id)
+
+        # Backfill missing embed_fallback by reading old bot messages
+        missing = db.get_entries_missing_fallback(guild_id)
+        if missing:
+            await ctx.send(f'Backfilling {len(missing)} entries with missing embed data '
+                           f'from old channel...')
+            old_channel = self.bot.get_channel(int(migration.old_channel_id))
+            if old_channel is not None:
+                # Build lookup: old_bot_msg_id -> list of entries
+                by_bot_msg = {}
+                for entry in missing:
+                    by_bot_msg.setdefault(entry.old_bot_msg_id, []).append(entry)
+
+                filled = 0
+                for bot_msg_id, entries_for_msg in by_bot_msg.items():
+                    try:
+                        old_bot_msg = await discord_retry(
+                            lambda: old_channel.fetch_message(int(bot_msg_id)),
+                            max_retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY,
+                        )
+                        fallback = serialize_embed_fallback(old_bot_msg)
+                        for entry in entries_for_msg:
+                            db.set_embed_fallback(entry.original_msg_id, entry.emoji, fallback)
+                            filled += 1
+                    except (discord.NotFound, discord.Forbidden, RetryExhaustedError) as e:
+                        logger.warning(f'Migration restart-post: could not fetch old bot msg '
+                                       f'{bot_msg_id}: {e}')
+                    await asyncio.sleep(_RATE_DELAY)
+                await ctx.send(f'Backfilled {filled}/{len(missing)} entries.')
+
         db.update_migration_status(guild_id, 'posting')
         db.set_migration_post_totals(guild_id, 0)
         db.update_migration_post_done(guild_id, 0)

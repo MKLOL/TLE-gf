@@ -186,6 +186,23 @@ class MigrationDbMixin:
         )
         self.conn.commit()
 
+    def get_entries_missing_fallback(self, guild_id):
+        """Get entries that have no embed_fallback data, keyed by old_bot_msg_id."""
+        return self.conn.execute(
+            'SELECT * FROM starboard_migration_entry '
+            'WHERE guild_id = ? AND embed_fallback IS NULL AND crawl_status != ?',
+            (str(guild_id), 'pending')
+        ).fetchall()
+
+    def set_embed_fallback(self, original_msg_id, emoji, fallback_json):
+        """Set embed_fallback on an existing entry."""
+        self.conn.execute(
+            'UPDATE starboard_migration_entry SET embed_fallback = ? '
+            'WHERE original_msg_id = ? AND emoji = ?',
+            (fallback_json, str(original_msg_id), emoji)
+        )
+        self.conn.commit()
+
     def get_all_posted_msg_ids(self, guild_id):
         """Get new_starboard_msg_id for all posted entries (for bulk deletion)."""
         rows = self.conn.execute(
