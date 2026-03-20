@@ -742,11 +742,17 @@ class Migrate(commands.Cog):
             await ctx.send('No migration in progress.')
             return
 
-        if guild_id in self._tasks:
-            task = self._tasks[guild_id]
-            if not task.done():
-                await ctx.send('Migration task is still running. Use `;migrate pause` first.')
-                return
+        # Stop any running/paused task first
+        event = self._paused.pop(guild_id, None)
+        if event is not None:
+            event.set()
+        task = self._tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
         db = cf_common.user_db
         new_channel = self.bot.get_channel(int(migration.new_channel_id))

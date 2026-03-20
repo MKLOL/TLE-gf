@@ -1074,26 +1074,32 @@ class TestRestartPost:
         finally:
             cf_common.user_db = old_db
 
-    def test_restart_post_blocks_if_task_running(self, db):
+    def test_restart_post_cancels_running_task(self, db):
+        """restart-post should cancel a running/paused task automatically."""
+        new_channel = _FakeChannel(channel_id=200)
         from tle.cogs.migrate import Migrate
         from tle.util import codeforces_common as cf_common
         old_db = cf_common.user_db
         cf_common.user_db = db
         try:
             db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
-            cog = Migrate(_FakeBot())
+            cog = Migrate(_FakeBot(channels=[new_channel]))
 
             async def test():
-                dummy_task = asyncio.create_task(asyncio.sleep(10))
+                # Simulate a paused task
+                event = asyncio.Event()
+                cog._paused[GUILD] = event
+                dummy_task = asyncio.create_task(event.wait())
                 cog._tasks[GUILD] = dummy_task
+
                 ctx = _FakeCtx()
                 await cog.restart_post.__wrapped__(cog, ctx)
-                assert 'still running' in ctx.sent[0]
-                dummy_task.cancel()
-                try:
-                    await dummy_task
-                except asyncio.CancelledError:
-                    pass
+
+                # Task should have been cancelled
+                assert dummy_task.done()
+                assert GUILD not in cog._paused
+                # Should have proceeded (not blocked)
+                assert any('Deleting' in msg for msg in ctx.sent)
 
             _run(test())
         finally:
