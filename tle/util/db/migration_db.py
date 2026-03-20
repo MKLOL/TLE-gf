@@ -145,11 +145,11 @@ class MigrationDbMixin:
         self.conn.commit()
 
     def get_migration_entries_for_posting(self, guild_id):
-        """Get entries ready for posting, ordered chronologically by snowflake."""
+        """Get entries ready for posting, ordered by old bot post (starboard order)."""
         return self.conn.execute(
             'SELECT * FROM starboard_migration_entry '
             'WHERE guild_id = ? AND crawl_status IN (?, ?) '
-            'ORDER BY CAST(original_msg_id AS INTEGER) ASC',
+            'ORDER BY CAST(old_bot_msg_id AS INTEGER) ASC',
             (str(guild_id), 'crawled', 'deleted')
         ).fetchall()
 

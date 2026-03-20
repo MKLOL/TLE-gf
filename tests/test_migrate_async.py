@@ -204,13 +204,14 @@ class TestPostPhase:
         entry = db.get_migration_entry('333', PILL)
         assert entry.crawl_status == 'posted'
 
-    def test_post_chronological_order(self, db):
-        """Posts should be in snowflake order (oldest first)."""
+    def test_post_starboard_order(self, db):
+        """Posts should be in old starboard order (by old_bot_msg_id), not original msg order."""
         new_channel = _FakeChannel(channel_id=200)
         bot = _FakeBot(channels=[new_channel])
 
         db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
-        # Add out of order
+        # original_msg_id 999 was starboarded FIRST (old_bot_msg_id 444)
+        # original_msg_id 111 was starboarded SECOND (old_bot_msg_id 445)
         db.add_migration_entry(str(GUILD), '999', PILL, '444', '100')
         db.add_migration_entry(str(GUILD), '111', PILL, '445', '100')
         db.update_migration_entry_deleted('999', PILL, json.dumps({'content': f'{PILL} **3** | https://discord.com/channels/{GUILD}/100/999'}))
@@ -221,9 +222,9 @@ class TestPostPhase:
         _run(cog._post_phase(GUILD, 200, {PILL}, db))
 
         assert len(new_channel.sent) == 2
-        # First sent should be for msg 111 (older)
-        assert '111' in new_channel.sent[0].content
-        assert '999' in new_channel.sent[1].content
+        # old_bot_msg_id 444 (original 999) posted first, then 445 (original 111)
+        assert '999' in new_channel.sent[0].content
+        assert '111' in new_channel.sent[1].content
 
     def test_post_fetches_thread_channel(self, db):
         """Post phase should use fetch_channel for threads not in cache."""

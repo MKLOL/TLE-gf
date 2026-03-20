@@ -67,14 +67,14 @@ class TestCrawlParsing:
 
 
 class TestPostOrdering:
-    """Test that posting phase orders by snowflake (chronological)."""
+    """Test that posting phase orders by old_bot_msg_id (starboard order)."""
 
-    def test_posts_oldest_first(self, db):
+    def test_posts_in_starboard_order(self, db):
         db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
-        # Add entries with snowflake IDs (higher = newer)
-        db.add_migration_entry(str(GUILD), '9999', PILL, '444', '100')
-        db.add_migration_entry(str(GUILD), '1111', PILL, '445', '100')
-        db.add_migration_entry(str(GUILD), '5555', PILL, '446', '100')
+        # old_bot_msg_ids: 446, 444, 445 — starboard order is 444, 445, 446
+        db.add_migration_entry(str(GUILD), '9999', PILL, '446', '100')
+        db.add_migration_entry(str(GUILD), '1111', PILL, '444', '100')
+        db.add_migration_entry(str(GUILD), '5555', PILL, '445', '100')
 
         db.update_migration_entry_crawled('9999', PILL, '500', '777', 3)
         db.update_migration_entry_crawled('1111', PILL, '500', '778', 7)
@@ -82,6 +82,7 @@ class TestPostOrdering:
 
         entries = db.get_migration_entries_for_posting(str(GUILD))
         ids = [e.original_msg_id for e in entries]
+        # Ordered by old_bot_msg_id: 444 (orig 1111), 445 (orig 5555), 446 (orig 9999)
         assert ids == ['1111', '5555', '9999']
 
     def test_uses_fallback_for_deleted(self, db):

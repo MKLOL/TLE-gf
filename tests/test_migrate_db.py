@@ -225,18 +225,20 @@ class TestMigrationEntries:
         assert entry.crawl_status == 'posted'
         assert entry.new_starboard_msg_id == '888'
 
-    def test_get_for_posting_chronological_order(self, db):
-        """Entries should be ordered by snowflake ASC (chronological)."""
+    def test_get_for_posting_starboard_order(self, db):
+        """Entries should be ordered by old_bot_msg_id ASC (starboard order)."""
         db.create_migration(GUILD, '100', '200', '💊', 1000.0)
-        # Add out of order — 999 is newer than 111
+        # original 999 was starboarded first (old_bot_msg_id 444)
+        # original 111 was starboarded second (old_bot_msg_id 445)
         db.add_migration_entry(GUILD, '999', PILL, '444', '100')
         db.add_migration_entry(GUILD, '111', PILL, '445', '100')
         db.update_migration_entry_crawled('999', PILL, '500', '777', 3)
         db.update_migration_entry_crawled('111', PILL, '500', '778', 7)
         entries = db.get_migration_entries_for_posting(GUILD)
         assert len(entries) == 2
-        assert entries[0].original_msg_id == '111'
-        assert entries[1].original_msg_id == '999'
+        # 444 < 445, so original 999 comes first
+        assert entries[0].original_msg_id == '999'
+        assert entries[1].original_msg_id == '111'
 
     def test_get_for_posting_includes_deleted(self, db):
         db.create_migration(GUILD, '100', '200', '💊', 1000.0)
