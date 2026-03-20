@@ -594,3 +594,96 @@ class TestViewFailedCommand:
             assert '2.' in msg
         finally:
             self._teardown_cog()
+
+
+# =====================================================================
+# Pause / unpause tests
+# =====================================================================
+
+
+class TestPauseUnpause:
+    """Test ;migrate pause and ;migrate unpause."""
+
+    def test_pause_blocks_post_phase(self, db):
+        """Paused migration should stop processing after the current message."""
+        new_channel = _FakeChannel(channel_id=200)
+        bot = _FakeBot(channels=[new_channel])
+
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.add_migration_entry(str(GUILD), '111', PILL, '441', '100')
+        db.add_migration_entry(str(GUILD), '222', PILL, '442', '100')
+        db.update_migration_entry_deleted('111', PILL, json.dumps({'content': 'first'}))
+        db.update_migration_entry_deleted('222', PILL, json.dumps({'content': 'second'}))
+
+        from tle.cogs.migrate import Migrate
+        cog = Migrate(bot)
+
+        # Pre-set the pause event (cleared = paused)
+        event = asyncio.Event()
+        cog._paused[GUILD] = event
+
+        # Run post phase in a task — it should process msg 111 then block
+        async def run_and_unpause():
+            post_task = asyncio.create_task(
+                cog._post_phase(GUILD, 200, {PILL}, db))
+            # Give it time to process the first message and hit the pause
+            await asyncio.sleep(0.05)
+            # Should have posted 1 message so far
+            assert len(new_channel.sent) == 1
+            # Unpause to let it finish
+            event.set()
+            await post_task
+
+        _run(run_and_unpause())
+
+        # Both should be posted now
+        assert len(new_channel.sent) == 2
+        assert db.get_migration_entry('111', PILL).crawl_status == 'posted'
+        assert db.get_migration_entry('222', PILL).crawl_status == 'posted'
+
+    def test_pause_no_task_running(self, db):
+        """Pause with no running task should report an error."""
+        from tle.cogs.migrate import Migrate
+        cog = Migrate(_FakeBot())
+
+        ctx = _FakeCtx()
+        _run(cog.pause.__wrapped__(cog, ctx))
+        assert 'No migration task' in ctx.sent[0]
+
+    def test_unpause_not_paused(self, db):
+        """Unpause when not paused should report an error."""
+        from tle.cogs.migrate import Migrate
+        cog = Migrate(_FakeBot())
+
+        ctx = _FakeCtx()
+        _run(cog.unpause.__wrapped__(cog, ctx))
+        assert 'not paused' in ctx.sent[0]
+
+    def test_cancel_unpauses_first(self, db):
+        """Cancel should unpause to allow the task to receive cancellation."""
+        from tle.cogs.migrate import Migrate
+        from tle.util import codeforces_common as cf_common
+        old_db = cf_common.user_db
+        cf_common.user_db = db
+        try:
+            cog = Migrate(_FakeBot())
+            event = asyncio.Event()
+            cog._paused[GUILD] = event
+            assert not event.is_set()
+
+            db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+
+            async def test_cancel():
+                async def dummy():
+                    await event.wait()
+
+                task = asyncio.create_task(dummy())
+                cog._tasks[GUILD] = task
+                ctx = _FakeCtx()
+                await cog.cancel.__wrapped__(cog, ctx)
+                assert event.is_set()
+                assert GUILD not in cog._paused
+
+            _run(test_cancel())
+        finally:
+            cf_common.user_db = old_db

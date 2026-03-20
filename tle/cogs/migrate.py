@@ -45,11 +45,20 @@ _RETRY_BASE_DELAY = 2.0
 class Migrate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self._tasks = {}  # guild_id -> asyncio.Task
+        self._tasks = {}   # guild_id -> asyncio.Task
+        self._paused = {}  # guild_id -> asyncio.Event (clear = paused)
 
     # ------------------------------------------------------------------
     # Background crawl + post task
     # ------------------------------------------------------------------
+
+    async def _wait_if_paused(self, guild_id):
+        """Block until unpaused. Returns immediately if not paused."""
+        event = self._paused.get(guild_id)
+        if event is not None and not event.is_set():
+            logger.info(f'Migration: guild={guild_id} paused, waiting...')
+            await event.wait()
+            logger.info(f'Migration: guild={guild_id} resumed from pause')
 
     async def _run_migration(self, guild_id, old_channel_id, new_channel_id, emoji_set):
         """Background task: crawl old channel, then post to new channel."""
@@ -159,6 +168,7 @@ class Migrate(commands.Cog):
                                f'emoji={emoji_str} msg={original_msg_id} RETRY EXHAUSTED: {e}')
                 db.update_migration_checkpoint(
                     guild_id, str(old_bot_msg.id), crawl_done, crawl_failed)
+                await self._wait_if_paused(guild_id)
                 await asyncio.sleep(_RATE_DELAY)
                 continue
 
@@ -207,6 +217,7 @@ class Migrate(commands.Cog):
                 guild_id, str(old_bot_msg.id), crawl_done, crawl_failed
             )
 
+            await self._wait_if_paused(guild_id)
             await asyncio.sleep(_RATE_DELAY)
 
         db.set_migration_crawl_total(guild_id, crawl_done)
@@ -299,6 +310,7 @@ class Migrate(commands.Cog):
                 post_failed += 1
                 db.update_migration_post_done(guild_id, post_done)
 
+            await self._wait_if_paused(guild_id)
             await asyncio.sleep(_RATE_DELAY)
 
         logger.info(f'Migration post: guild={guild_id} finished — '
@@ -709,6 +721,50 @@ class Migrate(commands.Cog):
         for chunk in chunks:
             await ctx.send(chunk)
 
+    @migrate.command(name='pause')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def pause(self, ctx):
+        """Pause the running migration after the current message finishes.
+
+        Usage: ;migrate pause
+        """
+        guild_id = ctx.guild.id
+
+        if guild_id not in self._tasks or self._tasks[guild_id].done():
+            await ctx.send('No migration task is running.')
+            return
+
+        event = self._paused.get(guild_id)
+        if event is not None and not event.is_set():
+            await ctx.send('Migration is already paused. Use `;migrate unpause` to continue.')
+            return
+
+        event = asyncio.Event()
+        # Event starts clear = paused
+        self._paused[guild_id] = event
+        logger.info(f'Migration pause: guild={guild_id} by {ctx.author}')
+        await ctx.send('Migration will pause after the current message. '
+                       'Use `;migrate unpause` to continue.')
+
+    @migrate.command(name='unpause')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def unpause(self, ctx):
+        """Resume a paused migration.
+
+        Usage: ;migrate unpause
+        """
+        guild_id = ctx.guild.id
+        event = self._paused.get(guild_id)
+
+        if event is None or event.is_set():
+            await ctx.send('Migration is not paused.')
+            return
+
+        event.set()
+        self._paused.pop(guild_id, None)
+        logger.info(f'Migration unpause: guild={guild_id} by {ctx.author}')
+        await ctx.send('Migration unpaused.')
+
     @migrate.command(name='cancel')
     @commands.has_role(constants.TLE_ADMIN)
     async def cancel(self, ctx):
@@ -722,6 +778,11 @@ class Migrate(commands.Cog):
 
         logger.info(f'Migration cancel: guild={guild_id} by {ctx.author} '
                      f'(was status={migration.status})')
+
+        # Unpause if paused (so the task can receive the cancel)
+        event = self._paused.pop(guild_id, None)
+        if event is not None:
+            event.set()
 
         # Cancel background task if running
         task = self._tasks.pop(guild_id, None)
