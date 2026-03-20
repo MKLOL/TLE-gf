@@ -491,9 +491,12 @@ class Migrate(commands.Cog):
         # Reset post_failed entries so they can be retried
         db.reset_post_failed_entries(guild_id)
 
-        # Determine which phase to resume
-        postable = db.get_migration_entries_for_posting(guild_id)
-        if postable:
+        # Determine which phase to resume.
+        # crawl_total is set at the END of the crawl phase. If it's 0, the crawl
+        # never finished and we must resume crawling — even if some entries are
+        # already crawled (they were crawled before the crash).
+        # If status is already 'posting', the crawl completed and we resume posting.
+        if migration.status == 'posting' or (migration.status == 'failed' and migration.crawl_total > 0):
             db.update_migration_status(guild_id, 'posting')
         else:
             db.update_migration_status(guild_id, 'crawling')

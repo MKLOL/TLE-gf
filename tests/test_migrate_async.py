@@ -543,10 +543,7 @@ class TestResumeLogic:
         try:
             db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
             db.update_migration_status(str(GUILD), 'failed')
-
-            # Simulate resume: no postable entries → set to crawling
-            postable = db.get_migration_entries_for_posting(str(GUILD))
-            assert len(postable) == 0
+            # crawl_total=0 means crawl never finished
             db.update_migration_status(str(GUILD), 'crawling')
 
             from tle.cogs.migrate import Migrate
@@ -555,6 +552,79 @@ class TestResumeLogic:
 
             migration = db.get_migration(str(GUILD))
             assert migration.status == 'done'
+        finally:
+            cf_common.user_db = old_db
+
+    def test_resume_failed_crawl_does_not_skip_to_posting(self, db):
+        """Bug fix: if crawl failed mid-way with entries already crawled,
+        resume must NOT jump to posting — it must finish crawling first."""
+        original1 = _FakeMessage(
+            msg_id=333, content='First',
+            reactions=[_FakeReaction(PILL, count=2, user_ids=[10])],
+            author=_FakeUser(777, 'Author'),
+        )
+        original2 = _FakeMessage(
+            msg_id=444, content='Second',
+            reactions=[_FakeReaction(PILL, count=3, user_ids=[20, 21])],
+            author=_FakeUser(888, 'Author2'),
+        )
+        source_channel = _FakeChannel(channel_id=222, messages=[original1, original2])
+
+        old_bot_msg1 = _FakeMessage(
+            msg_id=1001,
+            content=f'{PILL} **2** | https://discord.com/channels/{GUILD}/222/333'
+        )
+        old_bot_msg2 = _FakeMessage(
+            msg_id=1002,
+            content=f'{PILL} **3** | https://discord.com/channels/{GUILD}/222/444'
+        )
+        old_channel = _FakeChannel(channel_id=100, messages=[old_bot_msg1, old_bot_msg2])
+        new_channel = _FakeChannel(channel_id=200)
+
+        bot = _FakeBot(channels=[old_channel, source_channel, new_channel])
+
+        from tle.util import codeforces_common as cf_common
+        old_db = cf_common.user_db
+        cf_common.user_db = db
+
+        try:
+            # Simulate: crawl processed msg 333 then crashed (503 on msg 444)
+            db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+            db.add_migration_entry(str(GUILD), '333', PILL, '1001', '100')
+            db.update_migration_entry_crawled('333', PILL, '222', '777', 2)
+            db.update_migration_checkpoint(str(GUILD), '1001', 1, 0)
+            # crawl_total=0 because crawl never finished
+            db.update_migration_status(str(GUILD), 'failed')
+
+            migration = db.get_migration(str(GUILD))
+            assert migration.crawl_total == 0  # crawl didn't finish
+
+            # Resume should detect incomplete crawl and continue crawling
+            from tle.cogs.migrate import Migrate
+            cog = Migrate(bot)
+
+            # Simulate what resume command does
+            db.reset_post_failed_entries(str(GUILD))
+            if migration.status == 'posting' or (migration.status == 'failed' and migration.crawl_total > 0):
+                db.update_migration_status(str(GUILD), 'posting')
+            else:
+                db.update_migration_status(str(GUILD), 'crawling')
+
+            _run(cog._run_migration(GUILD, 100, 200, {PILL}))
+
+            # Should have crawled msg 444 (from checkpoint) and then posted both
+            entry444 = db.get_migration_entry('444', PILL)
+            assert entry444 is not None
+            assert entry444.crawl_status == 'posted'
+
+            entry333 = db.get_migration_entry('333', PILL)
+            assert entry333.crawl_status == 'posted'
+
+            migration = db.get_migration(str(GUILD))
+            assert migration.status == 'done'
+
+            # Both messages posted
+            assert len(new_channel.sent) == 2
         finally:
             cf_common.user_db = old_db
 
