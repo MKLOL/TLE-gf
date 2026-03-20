@@ -128,6 +128,16 @@ class Migrate(commands.Cog):
             # Try to fetch the original message
             original_msg = None
             source_channel = self.bot.get_channel(source_channel_id)
+            if source_channel is None:
+                # Threads (especially archived) aren't in the channel cache.
+                # Fall back to an API call.
+                try:
+                    source_channel = await self.bot.fetch_channel(source_channel_id)
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+                except discord.HTTPException as e:
+                    logger.warning(f'Migration crawl: guild={guild_id} [{crawl_done + 1}] '
+                                   f'fetch_channel failed for {source_channel_id}: {e}')
             try:
                 if source_channel is not None:
                     original_msg = await source_channel.fetch_message(original_msg_id)

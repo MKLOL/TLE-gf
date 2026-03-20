@@ -104,6 +104,12 @@ class _FakeBot:
     def get_channel(self, channel_id):
         return self._channels.get(channel_id)
 
+    async def fetch_channel(self, channel_id):
+        ch = self._channels.get(channel_id)
+        if ch is None:
+            raise discord.NotFound(None, 'Not found')
+        return ch
+
     async def wait_until_ready(self):
         pass
 

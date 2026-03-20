@@ -98,6 +98,45 @@ class TestCrawlPhase:
         assert entry is not None
         assert entry.crawl_status == 'deleted'
 
+    def test_crawl_fetches_thread_channel(self, db):
+        """Messages in threads (not in cache) should be fetched via API fallback."""
+        original = _FakeMessage(
+            msg_id=333, content='Thread message',
+            reactions=[_FakeReaction(PILL, count=2, user_ids=[10, 11])],
+            author=_FakeUser(777, 'Author'),
+        )
+        # Thread channel 222 is NOT passed to _FakeBot's channels list,
+        # so get_channel() returns None. But fetch_channel() should find it.
+        thread_channel = _FakeChannel(channel_id=222, messages=[original])
+
+        old_bot_msg = self._make_old_bot_msg(1001, PILL, 2, 222, 333)
+        old_channel = _FakeChannel(channel_id=100, messages=[old_bot_msg])
+
+        # Only old_channel in the cache; thread_channel added for fetch_channel
+        bot = _FakeBot(channels=[old_channel])
+        # Manually add thread to bot's internal dict so fetch_channel finds it
+        bot._channels[222] = thread_channel
+
+        # But simulate get_channel returning None for the thread
+        original_get = bot.get_channel
+        def get_channel_no_thread(cid):
+            if cid == 222:
+                return None  # thread not in cache
+            return original_get(cid)
+        bot.get_channel = get_channel_no_thread
+
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+
+        from tle.cogs.migrate import Migrate
+        cog = Migrate(bot)
+        _run(cog._crawl_phase(GUILD, 100, {PILL}, db))
+
+        entry = db.get_migration_entry('333', PILL)
+        assert entry is not None
+        assert entry.crawl_status == 'crawled'
+        assert entry.author_id == '777'
+        assert entry.star_count == 2
+
     def test_crawl_resumes_from_checkpoint(self, db):
         """Crawl should resume from the last checkpoint message ID."""
         old_bot_msg1 = self._make_old_bot_msg(1001, PILL, 3, 222, 333)
