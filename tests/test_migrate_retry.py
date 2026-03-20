@@ -975,3 +975,126 @@ class TestPauseCrawlPhase:
         # Both should be crawled now
         assert db.get_migration_entry('333', PILL).crawl_status == 'crawled'
         assert db.get_migration_entry('444', PILL).crawl_status == 'crawled'
+
+
+# =====================================================================
+# restart-post tests
+# =====================================================================
+
+
+class TestRestartPost:
+    """Test ;migrate restart-post command."""
+
+    def test_restart_post_deletes_and_reposts(self, db):
+        """restart-post should delete posted messages and re-run post phase."""
+        new_channel = _FakeChannel(channel_id=200)
+        bot = _FakeBot(channels=[new_channel])
+
+        from tle.util import codeforces_common as cf_common
+        old_db = cf_common.user_db
+        cf_common.user_db = db
+        try:
+            db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+            db.set_migration_crawl_total(str(GUILD), 2)
+
+            # Simulate two entries that were already posted
+            db.add_migration_entry(str(GUILD), '111', PILL, '441', '100')
+            db.add_migration_entry(str(GUILD), '222', PILL, '442', '100')
+            db.update_migration_entry_crawled('111', PILL, '500', '777', 3)
+            db.update_migration_entry_crawled('222', PILL, '500', '778', 5)
+            db.update_migration_entry_posted('111', PILL, '901')
+            db.update_migration_entry_posted('222', PILL, '902')
+            db.update_migration_status(str(GUILD), 'done')
+
+            # Put the "posted" messages in the new channel so they can be fetched+deleted
+            posted1 = _FakeMessage(msg_id=901, content=f'{PILL} **3**')
+            posted2 = _FakeMessage(msg_id=902, content=f'{PILL} **5**')
+            new_channel._messages[901] = posted1
+            new_channel._messages[902] = posted2
+
+            # Simulate what restart_post does (without running the background task)
+            msg_ids = db.get_all_posted_msg_ids(str(GUILD))
+            assert set(msg_ids) == {'901', '902'}
+
+            db.reset_all_entries_for_repost(str(GUILD))
+
+            # Entries should be back to crawled
+            e1 = db.get_migration_entry('111', PILL)
+            e2 = db.get_migration_entry('222', PILL)
+            assert e1.crawl_status == 'crawled'
+            assert e2.crawl_status == 'crawled'
+            assert e1.new_starboard_msg_id is None
+            assert e2.new_starboard_msg_id is None
+
+            # They should be postable again
+            entries = db.get_migration_entries_for_posting(str(GUILD))
+            assert len(entries) == 2
+        finally:
+            cf_common.user_db = old_db
+
+    def test_restart_post_resets_retry_exhausted_too(self, db):
+        """restart-post should also reset retry_exhausted entries."""
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
+        db.update_migration_entry_retry_exhausted('333', PILL, 'old error')
+
+        db.reset_all_entries_for_repost(str(GUILD))
+
+        entry = db.get_migration_entry('333', PILL)
+        assert entry.crawl_status == 'deleted'  # no source_channel_id
+        assert entry.last_error is None
+        assert entry.new_starboard_msg_id is None
+
+    def test_restart_post_resets_deleted_entries(self, db):
+        """Deleted entries with embed_fallback should remain postable after reset."""
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
+        fb = json.dumps({'content': f'{PILL} **3** | https://discord.com/channels/{GUILD}/100/333'})
+        db.update_migration_entry_deleted('333', PILL, fb)
+        db.update_migration_entry_posted('333', PILL, '901')
+
+        db.reset_all_entries_for_repost(str(GUILD))
+
+        entry = db.get_migration_entry('333', PILL)
+        assert entry.crawl_status == 'deleted'
+        assert entry.new_starboard_msg_id is None
+        # embed_fallback should be preserved
+        assert entry.embed_fallback == fb
+
+    def test_restart_post_no_migration(self, db):
+        from tle.cogs.migrate import Migrate
+        from tle.util import codeforces_common as cf_common
+        old_db = cf_common.user_db
+        cf_common.user_db = db
+        try:
+            cog = Migrate(_FakeBot())
+            ctx = _FakeCtx()
+            _run(cog.restart_post.__wrapped__(cog, ctx))
+            assert 'No migration' in ctx.sent[0]
+        finally:
+            cf_common.user_db = old_db
+
+    def test_restart_post_blocks_if_task_running(self, db):
+        from tle.cogs.migrate import Migrate
+        from tle.util import codeforces_common as cf_common
+        old_db = cf_common.user_db
+        cf_common.user_db = db
+        try:
+            db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+            cog = Migrate(_FakeBot())
+
+            async def test():
+                dummy_task = asyncio.create_task(asyncio.sleep(10))
+                cog._tasks[GUILD] = dummy_task
+                ctx = _FakeCtx()
+                await cog.restart_post.__wrapped__(cog, ctx)
+                assert 'still running' in ctx.sent[0]
+                dummy_task.cancel()
+                try:
+                    await dummy_task
+                except asyncio.CancelledError:
+                    pass
+
+            _run(test())
+        finally:
+            cf_common.user_db = old_db

@@ -726,6 +726,71 @@ class Migrate(commands.Cog):
         for chunk in chunks:
             await ctx.send(chunk)
 
+    @migrate.command(name='restart-post')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def restart_post(self, ctx):
+        """Delete all posted messages from the new channel and re-post everything.
+
+        Keeps crawl data intact — only the post phase is re-run.
+
+        Usage: ;migrate restart-post
+        """
+        guild_id = ctx.guild.id
+        migration = cf_common.user_db.get_migration(guild_id)
+
+        if migration is None:
+            await ctx.send('No migration in progress.')
+            return
+
+        if guild_id in self._tasks:
+            task = self._tasks[guild_id]
+            if not task.done():
+                await ctx.send('Migration task is still running. Use `;migrate pause` first.')
+                return
+
+        db = cf_common.user_db
+        new_channel = self.bot.get_channel(int(migration.new_channel_id))
+        if new_channel is None:
+            await ctx.send(f'New channel {migration.new_channel_id} not found.')
+            return
+
+        # Delete all messages the bot posted in the new channel
+        msg_ids = db.get_all_posted_msg_ids(guild_id)
+        await ctx.send(f'Deleting {len(msg_ids)} posted messages from {new_channel.mention}...')
+
+        deleted = 0
+        for msg_id in msg_ids:
+            try:
+                msg = await new_channel.fetch_message(int(msg_id))
+                await msg.delete()
+                deleted += 1
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+            await asyncio.sleep(0.3)
+
+        # Reset all entries back to crawled/deleted
+        db.reset_all_entries_for_repost(guild_id)
+        db.update_migration_status(guild_id, 'posting')
+        db.set_migration_post_totals(guild_id, 0)
+        db.update_migration_post_done(guild_id, 0)
+
+        # Re-launch post phase
+        emoji_set = set(migration.emojis.split(','))
+        task = asyncio.create_task(
+            self._run_migration(
+                guild_id,
+                int(migration.old_channel_id),
+                int(migration.new_channel_id),
+                emoji_set
+            )
+        )
+        self._tasks[guild_id] = task
+
+        logger.info(f'Migration restart-post: guild={guild_id} by {ctx.author} '
+                     f'deleted {deleted}/{len(msg_ids)} messages, re-posting')
+        await ctx.send(f'Deleted {deleted} messages. Re-posting now. '
+                       f'Use `;migrate status` to check progress.')
+
     @migrate.command(name='pause')
     @commands.has_role(constants.TLE_ADMIN)
     async def pause(self, ctx):

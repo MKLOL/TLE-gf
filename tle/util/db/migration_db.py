@@ -186,6 +186,31 @@ class MigrationDbMixin:
         )
         self.conn.commit()
 
+    def get_all_posted_msg_ids(self, guild_id):
+        """Get new_starboard_msg_id for all posted entries (for bulk deletion)."""
+        rows = self.conn.execute(
+            'SELECT new_starboard_msg_id FROM starboard_migration_entry '
+            'WHERE guild_id = ? AND new_starboard_msg_id IS NOT NULL',
+            (str(guild_id),)
+        ).fetchall()
+        return [r.new_starboard_msg_id for r in rows]
+
+    def reset_all_entries_for_repost(self, guild_id):
+        """Reset all non-pending entries back to crawled/deleted for re-posting.
+
+        Clears new_starboard_msg_id and last_error. Entries with source_channel_id
+        go to 'crawled', entries without go to 'deleted'.
+        """
+        self.conn.execute(
+            'UPDATE starboard_migration_entry '
+            'SET crawl_status = CASE '
+            'WHEN source_channel_id IS NOT NULL THEN ? ELSE ? END, '
+            'new_starboard_msg_id = NULL, last_error = NULL '
+            'WHERE guild_id = ? AND crawl_status != ?',
+            ('crawled', 'deleted', str(guild_id), 'pending')
+        )
+        self.conn.commit()
+
     def get_posted_migration_entries(self, guild_id):
         """Get all entries with crawl_status='posted', ordered chronologically."""
         return self.conn.execute(

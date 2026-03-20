@@ -64,6 +64,10 @@ class _FakeMessage:
         self.reference = None
         self.type = discord.MessageType.default
         self.attachments = []
+        self.deleted = False
+
+    async def delete(self):
+        self.deleted = True
 
 
 class _FakeChannel:
