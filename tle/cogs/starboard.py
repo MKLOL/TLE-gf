@@ -445,6 +445,30 @@ class Starboard(BackfillMixin, commands.Cog):
                         f'original_msg={original_message_id} by user={ctx.author.id}')
             await ctx.send(embed=discord_common.embed_alert('Not found in database'))
 
+    @starboard.command(brief='Show all configured starboard emojis')
+    async def show(self, ctx):
+        """Show all configured starboard emojis with their threshold, color, channel, and aliases."""
+        entries = cf_common.user_db.get_starboard_emojis_for_guild(ctx.guild.id)
+        if not entries:
+            raise StarboardCogError('No starboard emojis configured.')
+
+        aliases = cf_common.user_db.get_all_aliases_for_guild(ctx.guild.id)
+        alias_map = {}
+        for a in aliases:
+            alias_map.setdefault(a.main_emoji, []).append(a.alias_emoji)
+
+        lines = []
+        for e in entries:
+            channel = f'<#{e.channel_id}>' if e.channel_id else 'not set'
+            color = f'#{e.color:06x}' if e.color is not None else 'default'
+            line = f'{e.emoji}  threshold={e.threshold}  color={color}  channel={channel}'
+            emoji_aliases = alias_map.get(e.emoji)
+            if emoji_aliases:
+                line += f'  aliases={", ".join(emoji_aliases)}'
+            lines.append(line)
+
+        await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
+
     # --- Alias commands ---
 
     @starboard.group(brief='Manage emoji aliases', invoke_without_command=True)

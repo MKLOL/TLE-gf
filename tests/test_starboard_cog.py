@@ -990,3 +990,51 @@ class TestSnowflakeToUnixSql:
         assert dt_obj.year == 2025
         assert dt_obj.month == 3
         assert dt_obj.day == 1
+
+
+# =====================================================================
+# ;starboard show command
+# =====================================================================
+
+class TestStarboardShow:
+    """Test the show command's data retrieval and formatting logic."""
+
+    def test_show_single_emoji(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        db.set_starboard_channel(GUILD_A, STAR, '999888')
+        entries = db.get_starboard_emojis_for_guild(GUILD_A)
+        aliases = db.get_all_aliases_for_guild(GUILD_A)
+        assert len(entries) == 1
+        assert len(aliases) == 0
+        assert entries[0].emoji == STAR
+        assert entries[0].threshold == 3
+        assert entries[0].color == 0xffaa10
+        assert entries[0].channel_id == '999888'
+
+    def test_show_multiple_emojis(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        db.add_starboard_emoji(GUILD_A, FIRE, 5, 0xff0000)
+        db.set_starboard_channel(GUILD_A, STAR, '100')
+        db.set_starboard_channel(GUILD_A, FIRE, '200')
+        entries = db.get_starboard_emojis_for_guild(GUILD_A)
+        assert len(entries) == 2
+
+    def test_show_includes_aliases(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        db.add_starboard_alias(GUILD_A, THUMBS_UP, STAR)
+        db.add_starboard_alias(GUILD_A, FIRE, STAR)
+        aliases = db.get_all_aliases_for_guild(GUILD_A)
+        alias_map = {}
+        for a in aliases:
+            alias_map.setdefault(a.main_emoji, []).append(a.alias_emoji)
+        assert STAR in alias_map
+        assert set(alias_map[STAR]) == {THUMBS_UP, FIRE}
+
+    def test_show_empty_starboard(self, db):
+        entries = db.get_starboard_emojis_for_guild(GUILD_A)
+        assert entries == []
+
+    def test_show_channel_not_set(self, db):
+        db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
+        entries = db.get_starboard_emojis_for_guild(GUILD_A)
+        assert entries[0].channel_id is None

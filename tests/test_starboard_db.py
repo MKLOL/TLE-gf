@@ -511,3 +511,39 @@ class TestGetStarboardEntriesForMessage:
 
     def test_returns_empty_for_unknown(self, db):
         assert db.get_starboard_entries_for_message('unknown') == []
+
+
+# =====================================================================
+# Get all emoji configs for a guild (used by ;starboard show)
+# =====================================================================
+
+class TestGetStarboardEmojisForGuild:
+    def test_empty(self, db):
+        assert db.get_starboard_emojis_for_guild(GUILD) == []
+
+    def test_returns_all_emojis(self, db):
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_emoji(GUILD, FIRE, 5, 0xff0000)
+        entries = db.get_starboard_emojis_for_guild(GUILD)
+        emojis = {e.emoji for e in entries}
+        assert emojis == {STAR, FIRE}
+
+    def test_includes_threshold_and_color(self, db):
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        entries = db.get_starboard_emojis_for_guild(GUILD)
+        assert entries[0].threshold == 3
+        assert entries[0].color == 0xffaa10
+
+    def test_includes_channel_id(self, db):
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.set_starboard_channel(GUILD, STAR, '123456')
+        entries = db.get_starboard_emojis_for_guild(GUILD)
+        assert entries[0].channel_id == '123456'
+
+    def test_per_guild_isolation(self, db):
+        GUILD_B = 222222222222222222
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_emoji(GUILD_B, FIRE, 5, 0xff0000)
+        entries = db.get_starboard_emojis_for_guild(GUILD)
+        assert len(entries) == 1
+        assert entries[0].emoji == STAR
