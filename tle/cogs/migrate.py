@@ -770,14 +770,23 @@ class Migrate(commands.Cog):
         await ctx.send(f'Deleting {len(msg_ids)} posted messages from {new_channel.mention}...')
 
         deleted = 0
+        failed = 0
         for msg_id in msg_ids:
             try:
                 msg = await new_channel.fetch_message(int(msg_id))
                 await msg.delete()
                 deleted += 1
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
+            except discord.NotFound:
+                deleted += 1  # already gone
+            except (discord.Forbidden, discord.HTTPException) as e:
+                failed += 1
+                if failed <= 3:
+                    logger.warning(f'Migration restart-post: failed to delete msg {msg_id}: {e}')
             await asyncio.sleep(0.3)
+
+        if failed > 0:
+            await ctx.send(f'Warning: failed to delete {failed} messages '
+                           f'(bot may lack Manage Messages permission).')
 
         # Reset all entries back to crawled/deleted
         db.reset_all_entries_for_repost(guild_id)
