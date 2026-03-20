@@ -121,13 +121,18 @@ class Migrate(commands.Cog):
             )
 
             # Try to fetch the original message
+            original_msg = None
+            source_channel = self.bot.get_channel(source_channel_id)
             try:
-                source_channel = self.bot.get_channel(source_channel_id)
-                if source_channel is None:
-                    raise discord.NotFound(None, 'channel not found')
+                if source_channel is not None:
+                    original_msg = await source_channel.fetch_message(original_msg_id)
+            except (discord.NotFound, discord.Forbidden):
+                pass
+            except discord.HTTPException as e:
+                logger.warning(f'Migration crawl: guild={guild_id} [{crawl_done + 1}] '
+                               f'HTTP error for msg={original_msg_id}: {e}')
 
-                original_msg = await source_channel.fetch_message(original_msg_id)
-
+            if original_msg is not None:
                 # Count reactions and collect reactors for this emoji
                 star_count = 0
                 reactor_ids = []
@@ -150,9 +155,8 @@ class Migrate(commands.Cog):
                 logger.info(f'Migration crawl: guild={guild_id} [{crawl_done}] '
                             f'emoji={emoji_str} msg={original_msg_id} '
                             f'author={original_msg.author} count={star_count}')
-
-            except (discord.NotFound, discord.Forbidden):
-                # Original message deleted or inaccessible — serialize old bot embed as fallback
+            else:
+                # Original message deleted, inaccessible, or channel gone
                 fallback = serialize_embed_fallback(old_bot_msg)
                 db.update_migration_entry_deleted(
                     str(original_msg_id), emoji_str, fallback
@@ -160,15 +164,7 @@ class Migrate(commands.Cog):
                 crawl_done += 1
                 crawl_failed += 1
                 logger.info(f'Migration crawl: guild={guild_id} [{crawl_done}] '
-                            f'emoji={emoji_str} msg={original_msg_id} DELETED/FORBIDDEN')
-
-            except discord.HTTPException as e:
-                # Mark entry as deleted so it's not orphaned as 'pending'
-                db.update_migration_entry_deleted(str(original_msg_id), emoji_str, None)
-                crawl_failed += 1
-                crawl_done += 1
-                logger.warning(f'Migration crawl: guild={guild_id} [{crawl_done}] '
-                               f'HTTP error for msg={original_msg_id}: {e}')
+                            f'emoji={emoji_str} msg={original_msg_id} DELETED/INACCESSIBLE')
 
             # Checkpoint after each message
             db.update_migration_checkpoint(
@@ -202,17 +198,20 @@ class Migrate(commands.Cog):
             try:
                 if entry.crawl_status == 'crawled' and entry.source_channel_id:
                     # Try to fetch original and build proper starboard message
-                    try:
-                        source_channel = self.bot.get_channel(int(entry.source_channel_id))
-                        if source_channel is None:
-                            raise discord.NotFound(None, 'channel gone')
-                        original_msg = await source_channel.fetch_message(int(entry.original_msg_id))
+                    original_msg = None
+                    source_channel = self.bot.get_channel(int(entry.source_channel_id))
+                    if source_channel is not None:
+                        try:
+                            original_msg = await source_channel.fetch_message(int(entry.original_msg_id))
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                            pass
+
+                    if original_msg is not None:
                         content, embeds, files = await Starboard.build_starboard_message(
                             original_msg, entry.emoji, entry.star_count, color
                         )
                         sent = await new_channel.send(content=content, embeds=embeds, files=files)
-                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                        # Fall back to simple content line
+                    else:
                         content, embeds = build_fallback_message(entry, entry.embed_fallback, entry.emoji)
                         sent = await new_channel.send(content=content, embeds=embeds)
                 else:
