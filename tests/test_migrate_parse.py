@@ -196,9 +196,12 @@ class TestSerializeEmbedFallback:
 
 
 class _FakeEntry:
-    def __init__(self, star_count=5, original_msg_id='333'):
+    def __init__(self, star_count=5, original_msg_id='333',
+                 guild_id=None, source_channel_id=None):
         self.star_count = star_count
         self.original_msg_id = original_msg_id
+        self.guild_id = guild_id
+        self.source_channel_id = source_channel_id
 
 
 class TestBuildFallbackMessage:
@@ -246,3 +249,21 @@ class TestBuildFallbackMessage:
         entry = _FakeEntry(star_count=0)
         content, embeds = build_fallback_message(entry, '{}', '⭐')
         assert '**0**' in content
+
+    def test_jump_url_uses_real_ids_when_available(self):
+        """Crawled entries should have a proper jump URL, not channels/0/0/."""
+        entry = _FakeEntry(guild_id='111', source_channel_id='222')
+        content, embeds = build_fallback_message(entry, '{}', '⭐')
+        assert 'discord.com/channels/111/222/333' in content
+
+    def test_jump_url_falls_back_to_zero_when_no_ids(self):
+        """Deleted entries with no source_channel_id get 0 placeholders."""
+        entry = _FakeEntry()  # no guild_id or source_channel_id
+        content, embeds = build_fallback_message(entry, '{}', '⭐')
+        assert 'discord.com/channels/0/0/333' in content
+
+    def test_jump_url_partial_ids(self):
+        """Entry with guild_id but no source_channel_id."""
+        entry = _FakeEntry(guild_id='111')
+        content, embeds = build_fallback_message(entry, '{}', '⭐')
+        assert 'discord.com/channels/111/0/333' in content

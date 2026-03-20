@@ -225,6 +225,42 @@ class TestPostPhase:
         assert '111' in new_channel.sent[0].content
         assert '999' in new_channel.sent[1].content
 
+    def test_post_fetches_thread_channel(self, db):
+        """Post phase should use fetch_channel for threads not in cache."""
+        original = _FakeMessage(
+            msg_id=333, content='Thread message',
+            reactions=[_FakeReaction(PILL, count=2, user_ids=[10, 11])],
+            author=_FakeUser(777, 'Author'),
+        )
+        thread_channel = _FakeChannel(channel_id=222, messages=[original])
+        new_channel = _FakeChannel(channel_id=200)
+
+        bot = _FakeBot(channels=[new_channel])
+        # Thread is reachable via fetch_channel but not get_channel
+        bot._channels[222] = thread_channel
+        original_get = bot.get_channel
+        def get_channel_no_thread(cid):
+            if cid == 222:
+                return None
+            return original_get(cid)
+        bot.get_channel = get_channel_no_thread
+
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.add_migration_entry(str(GUILD), '333', PILL, '444', '100')
+        db.update_migration_entry_crawled('333', PILL, '222', '777', 2)
+
+        from tle.cogs.migrate import Migrate
+        cog = Migrate(bot)
+        _run(cog._post_phase(GUILD, 200, {PILL}, db))
+
+        assert len(new_channel.sent) == 1
+        # Should have used build_starboard_message (not fallback)
+        # The content should have the pill emoji and count
+        assert PILL in new_channel.sent[0].content
+
+        entry = db.get_migration_entry('333', PILL)
+        assert entry.crawl_status == 'posted'
+
     def test_post_channel_not_found(self, db):
         """Post should fail gracefully if new channel doesn't exist."""
         bot = _FakeBot(channels=[])
