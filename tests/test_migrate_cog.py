@@ -5,6 +5,8 @@ from tests._migrate_fakes import (
     _FakeMigrateDb, GUILD, PILL, CHOC, db, _zero_rate_delay,
 )
 from tle.cogs._migrate_helpers import parse_old_bot_message, build_fallback_message
+from tle.util.db.user_db_conn import namedtuple_factory
+from tle import constants
 
 
 # =====================================================================
@@ -228,3 +230,241 @@ class TestStarboardMessageIntegration:
         choc_msg = db.get_starboard_message_v1('333', CHOC)
         assert pill_msg.starboard_msg_id == '888'
         assert choc_msg.starboard_msg_id == '889'
+
+
+# =====================================================================
+# Complete with reaction-based crawl
+# =====================================================================
+
+
+def _run_complete_import(db, guild_id, new_channel_id):
+    """Reproduce the complete phase import logic from migrate.py lines 488-570.
+
+    This mirrors the actual raw-SQL transaction the cog runs, including alias
+    resolution, deduplication, and merged reactor counts.
+    """
+    migration = db.get_migration(str(guild_id))
+    emojis = migration.emojis.split(',')
+    alias_map = db.get_migration_alias_map(guild_id)
+    main_emojis = set(emojis) - set(alias_map.keys()) if alias_map else set(emojis)
+
+    posted_entries = db.get_posted_migration_entries(str(guild_id))
+
+    conn = db.conn
+    seen_msgs = set()
+    imported = 0
+    for entry in posted_entries:
+        resolved_emoji = alias_map.get(entry.emoji, entry.emoji) if alias_map else entry.emoji
+
+        dedup_key = (entry.original_msg_id, resolved_emoji)
+        if dedup_key in seen_msgs:
+            continue
+        seen_msgs.add(dedup_key)
+
+        star_count = entry.star_count or 0
+        if alias_map:
+            all_family = [resolved_emoji] + [k for k, v in alias_map.items()
+                                              if v == resolved_emoji]
+            merged_count = db.get_merged_reactor_count(entry.original_msg_id, all_family)
+            if merged_count > 0:
+                star_count = merged_count
+
+        conn.execute(
+            'INSERT OR IGNORE INTO starboard_message_v1 '
+            '(original_msg_id, starboard_msg_id, guild_id, emoji, author_id, channel_id) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (str(entry.original_msg_id), str(entry.new_starboard_msg_id),
+             str(guild_id), resolved_emoji,
+             str(entry.author_id) if entry.author_id else None,
+             str(entry.source_channel_id) if entry.source_channel_id else None)
+        )
+        if star_count > 0:
+            conn.execute(
+                'UPDATE starboard_message_v1 SET star_count = ? '
+                'WHERE original_msg_id = ? AND emoji = ?',
+                (star_count, str(entry.original_msg_id), resolved_emoji)
+            )
+        imported += 1
+
+    for emoji in main_emojis:
+        conn.execute(
+            'INSERT INTO starboard_emoji_v1 (guild_id, emoji, threshold, color) '
+            'VALUES (?, ?, ?, ?) '
+            'ON CONFLICT(guild_id, emoji) DO UPDATE SET threshold = excluded.threshold, '
+            'color = excluded.color',
+            (str(guild_id), emoji, 1, constants._DEFAULT_STAR_COLOR)
+        )
+        conn.execute(
+            'UPDATE starboard_emoji_v1 SET channel_id = ? WHERE guild_id = ? AND emoji = ?',
+            (str(new_channel_id), str(guild_id), emoji)
+        )
+
+    for alias_emoji, main_emoji in alias_map.items():
+        conn.execute(
+            'INSERT OR REPLACE INTO starboard_alias (guild_id, alias_emoji, main_emoji) '
+            'VALUES (?, ?, ?)',
+            (str(guild_id), alias_emoji, main_emoji)
+        )
+
+    conn.commit()
+    return imported
+
+
+# Use a second emoji that acts as an alias — "catshock" placeholder
+CATSHOCK = '\N{FACE SCREAMING IN FEAR}'
+
+
+class TestCompleteWithReactionCrawl:
+    """Test the complete phase when entries were crawled from actual reactions."""
+
+    def test_complete_with_reaction_based_star_counts(self, db):
+        """star_count from actual reaction.count should be preserved in starboard_message_v1."""
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.update_migration_status(str(GUILD), 'done')
+
+        # Entry 1: reaction.count = 12 (the actual reaction count, not displayed_count)
+        db.add_migration_entry(str(GUILD), '1001', PILL, '5001', '100')
+        db.update_migration_entry_crawled('1001', PILL, '300', '801', 12)
+        db.update_migration_entry_posted('1001', PILL, '9001')
+
+        # Entry 2: reaction.count = 3
+        db.add_migration_entry(str(GUILD), '1002', PILL, '5002', '100')
+        db.update_migration_entry_crawled('1002', PILL, '300', '802', 3)
+        db.update_migration_entry_posted('1002', PILL, '9002')
+
+        # Entry 3: reaction.count = 0 (edge case — no reactions found)
+        db.add_migration_entry(str(GUILD), '1003', PILL, '5003', '100')
+        db.update_migration_entry_crawled('1003', PILL, '300', '803', 0)
+        db.update_migration_entry_posted('1003', PILL, '9003')
+
+        imported = _run_complete_import(db, GUILD, '200')
+        assert imported == 3
+
+        msg1 = db.get_starboard_message_v1('1001', PILL)
+        assert msg1 is not None
+        assert msg1.star_count == 12
+        assert msg1.author_id == '801'
+
+        msg2 = db.get_starboard_message_v1('1002', PILL)
+        assert msg2 is not None
+        assert msg2.star_count == 3
+        assert msg2.author_id == '802'
+
+        msg3 = db.get_starboard_message_v1('1003', PILL)
+        assert msg3 is not None
+        assert msg3.star_count == 0  # no reactions, stays at default 0
+
+    def test_complete_star_leaderboard_after_migration(self, db):
+        """get_starboard_star_leaderboard should rank authors by total stars after import."""
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.update_migration_status(str(GUILD), 'done')
+
+        # Author 801: two messages with star_count 10 and 5 => total 15
+        db.add_migration_entry(str(GUILD), '1001', PILL, '5001', '100')
+        db.update_migration_entry_crawled('1001', PILL, '300', '801', 10)
+        db.update_migration_entry_posted('1001', PILL, '9001')
+
+        db.add_migration_entry(str(GUILD), '1002', PILL, '5002', '100')
+        db.update_migration_entry_crawled('1002', PILL, '300', '801', 5)
+        db.update_migration_entry_posted('1002', PILL, '9002')
+
+        # Author 802: one message with star_count 20 => total 20
+        db.add_migration_entry(str(GUILD), '1003', PILL, '5003', '100')
+        db.update_migration_entry_crawled('1003', PILL, '300', '802', 20)
+        db.update_migration_entry_posted('1003', PILL, '9003')
+
+        # Author 803: one message with star_count 7 => total 7
+        db.add_migration_entry(str(GUILD), '1004', PILL, '5004', '100')
+        db.update_migration_entry_crawled('1004', PILL, '300', '803', 7)
+        db.update_migration_entry_posted('1004', PILL, '9004')
+
+        _run_complete_import(db, GUILD, '200')
+
+        lb = db.get_starboard_star_leaderboard(str(GUILD), PILL)
+        assert len(lb) == 3
+        # Ranked: 802 (20), 801 (15), 803 (7)
+        assert lb[0].author_id == '802'
+        assert lb[0].total_stars == 20
+        assert lb[1].author_id == '801'
+        assert lb[1].total_stars == 15
+        assert lb[2].author_id == '803'
+        assert lb[2].total_stars == 7
+
+    def test_complete_message_leaderboard_after_migration(self, db):
+        """get_starboard_leaderboard should rank authors by message count after import."""
+        db.create_migration(str(GUILD), '100', '200', PILL, 1000.0)
+        db.update_migration_status(str(GUILD), 'done')
+
+        # Author 801: 3 starboarded messages
+        for i, orig_id in enumerate(['1001', '1002', '1003']):
+            db.add_migration_entry(str(GUILD), orig_id, PILL, str(5000 + i), '100')
+            db.update_migration_entry_crawled(orig_id, PILL, '300', '801', 4)
+            db.update_migration_entry_posted(orig_id, PILL, str(9000 + i))
+
+        # Author 802: 1 starboarded message
+        db.add_migration_entry(str(GUILD), '1004', PILL, '5010', '100')
+        db.update_migration_entry_crawled('1004', PILL, '300', '802', 6)
+        db.update_migration_entry_posted('1004', PILL, '9010')
+
+        # Author 803: 2 starboarded messages
+        for i, orig_id in enumerate(['1005', '1006']):
+            db.add_migration_entry(str(GUILD), orig_id, PILL, str(5020 + i), '100')
+            db.update_migration_entry_crawled(orig_id, PILL, '300', '803', 2)
+            db.update_migration_entry_posted(orig_id, PILL, str(9020 + i))
+
+        _run_complete_import(db, GUILD, '200')
+
+        lb = db.get_starboard_leaderboard(str(GUILD), PILL)
+        assert len(lb) == 3
+        # Ranked: 801 (3 messages), 803 (2 messages), 802 (1 message)
+        assert lb[0].author_id == '801'
+        assert lb[0].message_count == 3
+        assert lb[1].author_id == '803'
+        assert lb[1].message_count == 2
+        assert lb[2].author_id == '802'
+        assert lb[2].message_count == 1
+
+    def test_complete_with_entries_from_same_original_different_display_emoji(self, db):
+        """Two migration entries for the same original_msg_id but different old bot display
+        emojis (pill vs catshock). Both resolve to PILL via alias. Complete should import
+        only one starboard message (dedup)."""
+        # Migration with both emojis; CATSHOCK is aliased to PILL
+        db.create_migration(str(GUILD), '100', '200', f'{PILL},{CATSHOCK}', 1000.0)
+        db.set_migration_alias_map(str(GUILD), json.dumps({CATSHOCK: PILL}))
+        db.update_migration_status(str(GUILD), 'done')
+
+        # Same original_msg_id=1001, two entries under different emoji columns
+        # Entry from old bot message that displayed PILL
+        db.add_migration_entry(str(GUILD), '1001', PILL, '5001', '100')
+        db.update_migration_entry_crawled('1001', PILL, '300', '801', 8)
+        db.update_migration_entry_posted('1001', PILL, '9001')
+
+        # Entry from old bot message that displayed CATSHOCK for the same original
+        db.add_migration_entry(str(GUILD), '1001', CATSHOCK, '5002', '100')
+        db.update_migration_entry_crawled('1001', CATSHOCK, '300', '801', 5)
+        db.update_migration_entry_posted('1001', CATSHOCK, '9002')
+
+        # Add reactors so merged count can be computed
+        db.bulk_add_reactors('1001', PILL, ['u1', 'u2', 'u3', 'u4', 'u5'])
+        db.bulk_add_reactors('1001', CATSHOCK, ['u3', 'u4', 'u5', 'u6', 'u7'])
+        # Unique reactors across both: u1, u2, u3, u4, u5, u6, u7 = 7
+
+        imported = _run_complete_import(db, GUILD, '200')
+
+        # Only one message should be imported (dedup on resolved emoji)
+        assert imported == 1
+
+        msg = db.get_starboard_message_v1('1001', PILL)
+        assert msg is not None
+        assert msg.author_id == '801'
+        # Star count should be the merged reactor count (7 unique users)
+        assert msg.star_count == 7
+
+        # No entry under CATSHOCK — it was resolved to PILL
+        catshock_msg = db.get_starboard_message_v1('1001', CATSHOCK)
+        assert catshock_msg is None
+
+        # Emoji config should only be created for the main emoji (PILL), not the alias
+        pill_config = db.get_starboard_entry(str(GUILD), PILL)
+        assert pill_config is not None
+        assert pill_config.channel_id == '200'
