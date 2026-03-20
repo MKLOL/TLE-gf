@@ -219,6 +219,11 @@ class Migrate(commands.Cog):
                     # Try to fetch original and build proper starboard message
                     original_msg = None
                     source_channel = self.bot.get_channel(int(entry.source_channel_id))
+                    if source_channel is None:
+                        try:
+                            source_channel = await self.bot.fetch_channel(int(entry.source_channel_id))
+                        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                            pass
                     if source_channel is not None:
                         try:
                             original_msg = await source_channel.fetch_message(int(entry.original_msg_id))

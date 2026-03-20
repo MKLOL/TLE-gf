@@ -110,7 +110,9 @@ def build_fallback_message(entry, fallback_json, emoji_str):
     import discord
 
     count = entry.star_count if entry.star_count is not None else 0
-    jump_url = f'https://discord.com/channels/0/0/{entry.original_msg_id}'
+    guild_id = getattr(entry, 'guild_id', None) or '0'
+    channel_id = getattr(entry, 'source_channel_id', None) or '0'
+    jump_url = f'https://discord.com/channels/{guild_id}/{channel_id}/{entry.original_msg_id}'
     content = _starboard_content(emoji_str, count, jump_url)
 
     embeds = []
