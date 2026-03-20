@@ -1209,7 +1209,8 @@ class TestCrawlIgnoresDisplayEmoji:
         assert set(choc_reactors) == {'20', '21'}
 
     def test_display_pill_original_no_matching_reactions(self, db):
-        """Old bot displays pill but original has no matching reactions -- handled as deleted."""
+        """Old bot displays pill but original has no matching reactions —
+        should still be crawled using the displayed count from the old bot header."""
         original = _FakeMessage(
             msg_id=333, content='Hello',
             reactions=[_FakeReaction('\N{THUMBS UP SIGN}', count=5, user_ids=[10, 11, 12, 13, 14])],
@@ -1227,10 +1228,12 @@ class TestCrawlIgnoresDisplayEmoji:
         cog = Migrate(bot)
         _run(cog._crawl_phase(GUILD, 100, {PILL}, db))
 
-        # Entry should be stored as deleted (using the parsed emoji as fallback)
+        # Entry should be crawled with the displayed count (3) from old bot header
         entry = db.get_migration_entry('333', PILL)
         assert entry is not None
-        assert entry.crawl_status == 'deleted'
+        assert entry.crawl_status == 'crawled'
+        assert entry.star_count == 3
+        assert entry.author_id == '777'
 
     def test_two_old_bot_msgs_same_original_no_duplicates(self, db):
         """Two old bot messages (pill and catshock) reference the same original -- no duplicate entries."""

@@ -214,15 +214,19 @@ class Migrate(commands.Cog):
                                 f'author={original_msg.author} count={star_count}')
 
                 if not found_any:
-                    # Original exists but has no matching reactions — store as deleted
-                    # with the parsed emoji so it still gets a fallback post
+                    # Original exists but has no matching reactions — reactions
+                    # were likely on the old bot's starboard post, not the original.
+                    # Use the displayed count from the old bot's header and mark
+                    # as crawled (not deleted — the message is real).
                     emoji_str = _parsed_emoji
                     db.add_migration_entry(
                         guild_id, str(original_msg_id), emoji_str,
                         str(old_bot_msg.id), str(old_channel_id)
                     )
-                    db.update_migration_entry_deleted(
-                        str(original_msg_id), emoji_str, fallback
+                    db.update_migration_entry_crawled(
+                        str(original_msg_id), emoji_str,
+                        str(source_channel_id), str(original_msg.author.id),
+                        displayed_count, fallback
                     )
 
                 crawl_done += 1
