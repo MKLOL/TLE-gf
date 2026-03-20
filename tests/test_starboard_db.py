@@ -547,3 +547,139 @@ class TestGetStarboardEmojisForGuild:
         entries = db.get_starboard_emojis_for_guild(GUILD)
         assert len(entries) == 1
         assert entries[0].emoji == STAR
+
+
+# =====================================================================
+# Delete emoji isolation — verify deleting one emoji doesn't affect others
+# =====================================================================
+
+PILL = '\N{PILL}'
+CHOC = '\N{CHOCOLATE BAR}'
+
+
+class TestDeleteEmojiIsolation:
+    """Verify that deleting an emoji (with aliases) doesn't touch
+    another emoji's messages, reactors, aliases, or config —
+    even when the same original message has entries for both."""
+
+    def _setup_two_emojis_same_message(self, db):
+        """Set up: message 333 is on both the pill starboard and the star starboard.
+        Pill has chocolate as an alias. Star has fire as an alias."""
+        # Emoji configs
+        db.add_starboard_emoji(GUILD, PILL, 3, 0xffaa10)
+        db.set_starboard_channel(GUILD, PILL, '100')
+        db.add_starboard_emoji(GUILD, STAR, 5, 0xff0000)
+        db.set_starboard_channel(GUILD, STAR, '200')
+
+        # Aliases
+        db.add_starboard_alias(GUILD, CHOC, PILL)
+        db.add_starboard_alias(GUILD, FIRE, STAR)
+
+        # Same original message tracked under both emojis
+        db.add_starboard_message_v1('333', 'sb_pill', GUILD, PILL, author_id='user1')
+        db.update_starboard_star_count('333', PILL, 10)
+        db.add_starboard_message_v1('333', 'sb_star', GUILD, STAR, author_id='user1')
+        db.update_starboard_star_count('333', STAR, 20)
+
+        # Reactors under pill, chocolate (alias), star, fire (alias)
+        db.add_reactor('333', PILL, 'reactor1')
+        db.add_reactor('333', PILL, 'reactor2')
+        db.add_reactor('333', CHOC, 'reactor3')   # alias of pill
+        db.add_reactor('333', STAR, 'reactor4')
+        db.add_reactor('333', STAR, 'reactor5')
+        db.add_reactor('333', FIRE, 'reactor6')   # alias of star
+
+    def test_delete_pill_preserves_star_message(self, db):
+        self._setup_two_emojis_same_message(db)
+        db.remove_starboard_emoji(GUILD, PILL)
+
+        # Star message must still exist
+        msg = db.get_starboard_message_v1('333', STAR)
+        assert msg is not None
+        assert msg.star_count == 20
+        assert msg.author_id == 'user1'
+
+        # Pill message must be gone
+        assert db.get_starboard_message_v1('333', PILL) is None
+
+    def test_delete_pill_preserves_star_reactors(self, db):
+        self._setup_two_emojis_same_message(db)
+        db.remove_starboard_emoji(GUILD, PILL)
+
+        # Star reactors untouched
+        assert db.get_reactor_count('333', STAR) == 2
+        star_reactors = db.get_reactors('333', STAR)
+        assert 'reactor4' in star_reactors
+        assert 'reactor5' in star_reactors
+
+        # Fire (alias of star) reactors untouched
+        assert db.get_reactor_count('333', FIRE) == 1
+        assert 'reactor6' in db.get_reactors('333', FIRE)
+
+        # Pill and chocolate reactors gone
+        assert db.get_reactor_count('333', PILL) == 0
+        assert db.get_reactor_count('333', CHOC) == 0
+
+    def test_delete_pill_preserves_star_config(self, db):
+        self._setup_two_emojis_same_message(db)
+        db.remove_starboard_emoji(GUILD, PILL)
+
+        # Star config still there
+        entry = db.get_starboard_entry(GUILD, STAR)
+        assert entry is not None
+        assert entry.threshold == 5
+        assert entry.channel_id == '200'
+
+        # Pill config gone
+        assert db.get_starboard_entry(GUILD, PILL) is None
+
+    def test_delete_pill_preserves_star_aliases(self, db):
+        self._setup_two_emojis_same_message(db)
+        db.remove_starboard_emoji(GUILD, PILL)
+
+        # Star's alias (fire) still registered
+        assert db.resolve_alias(GUILD, FIRE) == STAR
+        family = db.get_emoji_family(GUILD, STAR)
+        assert FIRE in family
+
+        # Pill's alias (chocolate) gone
+        assert db.resolve_alias(GUILD, CHOC) is None
+
+    def test_delete_pill_other_messages_untouched(self, db):
+        """A different message tracked only under star must survive pill deletion."""
+        self._setup_two_emojis_same_message(db)
+
+        # Message 444 only on star starboard
+        db.add_starboard_message_v1('444', 'sb_star2', GUILD, STAR, author_id='user2')
+        db.update_starboard_star_count('444', STAR, 15)
+        db.add_reactor('444', STAR, 'reactor7')
+        db.add_reactor('444', FIRE, 'reactor8')
+
+        db.remove_starboard_emoji(GUILD, PILL)
+
+        msg = db.get_starboard_message_v1('444', STAR)
+        assert msg is not None
+        assert msg.star_count == 15
+        assert db.get_reactor_count('444', STAR) == 1
+        assert db.get_reactor_count('444', FIRE) == 1
+
+    def test_delete_star_preserves_pill(self, db):
+        """Reverse: delete star, pill must survive."""
+        self._setup_two_emojis_same_message(db)
+        db.remove_starboard_emoji(GUILD, STAR)
+
+        # Pill message and reactors intact
+        msg = db.get_starboard_message_v1('333', PILL)
+        assert msg is not None
+        assert msg.star_count == 10
+        assert db.get_reactor_count('333', PILL) == 2
+        assert db.get_reactor_count('333', CHOC) == 1
+
+        # Pill config and alias intact
+        assert db.get_starboard_entry(GUILD, PILL) is not None
+        assert db.resolve_alias(GUILD, CHOC) == PILL
+
+        # Star stuff gone
+        assert db.get_starboard_message_v1('333', STAR) is None
+        assert db.get_starboard_entry(GUILD, STAR) is None
+        assert db.resolve_alias(GUILD, FIRE) is None
