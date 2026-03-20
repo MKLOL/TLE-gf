@@ -101,6 +101,37 @@ class _StubEmbed:
     def set_author(self, *, name=None, icon_url=None, url=None):
         self.author_data = {'name': name, 'icon_url': icon_url, 'url': url}
 
+    def to_dict(self):
+        d = {}
+        if self.title: d['title'] = self.title
+        if self.description: d['description'] = self.description
+        if self.color is not None: d['color'] = int(self.color) if not isinstance(self.color, int) else self.color
+        if self.fields: d['fields'] = list(self.fields)
+        if self.footer: d['footer'] = self.footer
+        if self.image_url: d['image'] = {'url': self.image_url}
+        if self.author_data: d['author'] = self.author_data
+        if self.timestamp: d['timestamp'] = str(self.timestamp)
+        return d
+
+    @classmethod
+    def from_dict(cls, data):
+        e = cls(
+            title=data.get('title'),
+            description=data.get('description'),
+            color=data.get('color'),
+            timestamp=data.get('timestamp'),
+        )
+        for f in data.get('fields', []):
+            e.add_field(name=f.get('name'), value=f.get('value'), inline=f.get('inline', True))
+        if data.get('footer'):
+            e.set_footer(text=data['footer'].get('text'), icon_url=data['footer'].get('icon_url'))
+        if data.get('image'):
+            e.set_image(url=data['image'].get('url'))
+        if data.get('author'):
+            a = data['author']
+            e.set_author(name=a.get('name'), icon_url=a.get('icon_url'), url=a.get('url'))
+        return e
+
 _discord_mod.Embed = _StubEmbed
 _discord_mod.MessageType = type('MessageType', (), {'default': 0, 'reply': 1})
 

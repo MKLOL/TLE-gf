@@ -103,6 +103,18 @@ class _FakeEmbed:
         self.footer = footer
         self.timestamp = timestamp
 
+    def to_dict(self):
+        d = {}
+        if self.title: d['title'] = self.title
+        if self.description: d['description'] = self.description
+        if self.color is not None: d['color'] = int(self.color)
+        if self.image: d['image'] = {'url': self.image.url}
+        if self.author_data: d['author'] = self.author_data
+        if self.fields: d['fields'] = list(self.fields)
+        if self.footer: d['footer'] = self.footer
+        if self.timestamp: d['timestamp'] = str(self.timestamp)
+        return d
+
 
 class _FakeImage:
     def __init__(self, url):
@@ -131,7 +143,7 @@ class TestSerializeEmbedFallback:
         msg = _FakeMsg(embeds=[embed])
         result = serialize_embed_fallback(msg)
         data = json.loads(result)
-        assert data['embeds'][0]['image_url'] == 'https://example.com/img.png'
+        assert data['embeds'][0]['image']['url'] == 'https://example.com/img.png'
 
     def test_embed_with_author(self):
         embed = _FakeEmbed(author_data={'name': 'Bob', 'icon_url': 'https://x.com/a.png', 'url': None})
@@ -226,7 +238,7 @@ class TestBuildFallbackMessage:
     def test_handles_image(self):
         entry = _FakeEntry()
         fallback = json.dumps({
-            'embeds': [{'image_url': 'https://example.com/img.png'}],
+            'embeds': [{'image': {'url': 'https://example.com/img.png'}}],
         })
         content, embeds = build_fallback_message(entry, fallback, '⭐')
         assert len(embeds) == 1
