@@ -183,6 +183,20 @@ async def build_starboard_message(message, emoji_str, count, color):
         # already have one from attachments.
         if not image_url and message.embeds:
             for e in message.embeds:
+                logger.info(
+                    '[gifv-debug] embed type=%r url=%r '
+                    'image=%r thumbnail=%r video=%r '
+                    'thumbnail.url=%r thumbnail.proxy_url=%r '
+                    'video.url=%r',
+                    getattr(e, 'type', None),
+                    getattr(e, 'url', None),
+                    getattr(e, 'image', None),
+                    getattr(e, 'thumbnail', None),
+                    getattr(e, 'video', None),
+                    getattr(getattr(e, 'thumbnail', None), 'url', 'N/A'),
+                    getattr(getattr(e, 'thumbnail', None), 'proxy_url', 'N/A'),
+                    getattr(getattr(e, 'video', None), 'url', 'N/A'),
+                )
                 if e.type == 'image' and e.url:
                     embed.set_image(url=e.url)
                     break
@@ -193,13 +207,18 @@ async def build_starboard_message(message, emoji_str, count, color):
                     # animated version via Discord's CDN proxy.
                     proxy = getattr(e.thumbnail, 'proxy_url', None) or ''
                     if proxy.rsplit('.', 1)[-1] in ('png', 'jpg', 'jpeg', 'webp'):
-                        embed.set_image(url=proxy.rsplit('.', 1)[0] + '.gif')
+                        chosen = proxy.rsplit('.', 1)[0] + '.gif'
                     elif e.thumbnail and e.thumbnail.url:
                         raw = str(e.thumbnail.url)
                         if raw.rsplit('.', 1)[-1] in ('png', 'jpg', 'jpeg', 'webp'):
-                            embed.set_image(url=raw.rsplit('.', 1)[0] + '.gif')
+                            chosen = raw.rsplit('.', 1)[0] + '.gif'
                         else:
-                            embed.set_image(url=raw)
+                            chosen = raw
+                    else:
+                        chosen = None
+                    logger.info('[gifv-debug] chosen image URL: %r', chosen)
+                    if chosen:
+                        embed.set_image(url=chosen)
                     break
                 if e.type == 'rich' and e.image and e.image.url:
                     embed.set_image(url=e.image.url)
