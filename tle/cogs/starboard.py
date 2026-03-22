@@ -252,6 +252,23 @@ class Starboard(BackfillMixin, commands.Cog):
         if channel is None:
             raise StarboardCogError(f'Source channel {payload.channel_id} not found in bot cache')
         message = await channel.fetch_message(payload.message_id)
+
+        # --- temporary debug dump ---
+        logger.info('[msg-debug] id=%s content=%r type=%s attachments=%d embeds=%d',
+                    message.id, message.content[:200] if message.content else '', message.type,
+                    len(message.attachments), len(message.embeds))
+        for i, att in enumerate(message.attachments):
+            logger.info('[msg-debug]   attachment[%d] filename=%r url=%r content_type=%r',
+                        i, att.filename, att.url, getattr(att, 'content_type', None))
+        for i, e in enumerate(message.embeds):
+            logger.info('[msg-debug]   embed[%d] type=%r url=%r', i, e.type, e.url)
+            logger.info('[msg-debug]   embed[%d] thumbnail=%r', i, getattr(e.thumbnail, '__dict__', None) if e.thumbnail else None)
+            logger.info('[msg-debug]   embed[%d] video=%r', i, getattr(e.video, '__dict__', None) if e.video else None)
+            logger.info('[msg-debug]   embed[%d] image=%r', i, getattr(e.image, '__dict__', None) if e.image else None)
+            logger.info('[msg-debug]   embed[%d] provider=%r', i, getattr(e.provider, '__dict__', None) if e.provider else None)
+            logger.info('[msg-debug]   embed[%d] description=%r title=%r', i, e.description, e.title)
+        # --- end debug dump ---
+
         if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
                 or (len(message.content) == 0 and len(message.attachments) == 0
                     and len(message.embeds) == 0)):
