@@ -373,7 +373,7 @@ class TestBuildStarboardMessage:
         assert len(embeds) == 1  # Only main embed
 
     def test_gifv_embed_swaps_tenor_format_code(self):
-        """Tenor GIFs: swap AAAAe format code to AAAAC and .png to .gif."""
+        """Tenor GIFs: swap AAAAe format code to AAAAC, add /m/ path, use media1."""
         class FakeVideo:
             url = 'https://media.tenor.com/-92EuoZ_JUUAAAPo/luigi-discord-mod.mp4'
         class FakeThumbnail:
@@ -388,7 +388,7 @@ class TestBuildStarboardMessage:
         msg = _FakeMessage(content='', embeds=[FakeGifvEmbed()])
         content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
         main_embed = embeds[0]
-        assert main_embed.image_url == 'https://media.tenor.com/-92EuoZ_JUUAAAAC/luigi-discord-mod.gif'
+        assert main_embed.image_url == 'https://media1.tenor.com/m/-92EuoZ_JUUAAAAC/luigi-discord-mod.gif'
 
     def test_gifv_embed_falls_back_to_static_thumbnail(self):
         """When thumbnail URL doesn't match Tenor pattern, use it as-is."""

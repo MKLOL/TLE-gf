@@ -202,17 +202,17 @@ async def build_starboard_message(message, emoji_str, count, color):
                     embed.set_image(url=e.url)
                     break
                 if e.type == 'gifv':
-                    # Tenor/Giphy gifv embeds: thumbnail.url is a static PNG
-                    # with format code AAAAe, video.url is an MP4 with AAAPo.
-                    # Tenor serves the animated GIF at format code AAAAC.
-                    # Derive the GIF URL from the thumbnail URL by swapping
-                    # the format code and extension.  Fall back to the static
-                    # thumbnail if the URL doesn't match the expected pattern.
+                    # Tenor gifv embeds: thumbnail.url is a static PNG like
+                    #   https://media.tenor.com/{ID}AAAAe/{name}.png
+                    # The actual animated GIF lives at:
+                    #   https://media1.tenor.com/m/{ID}AAAAC/{name}.gif
+                    # Swap the format code, add /m/ path, and use media1.
+                    # Falls back to static thumbnail if URL doesn't match.
                     chosen = None
                     thumb_url = getattr(e.thumbnail, 'url', None) or ''
                     gif_url = re.sub(
-                        r'(media\.tenor\.com/[^/]+?)AAAA[a-zA-Z0-9](/[^.]+)\.\w+$',
-                        r'\1AAAAC\2.gif',
+                        r'https?://media\.tenor\.com/([^/]+?)AAAA[a-zA-Z0-9](/[^.]+)\.\w+$',
+                        r'https://media1.tenor.com/m/\1AAAAC\2.gif',
                         thumb_url,
                     )
                     if gif_url != thumb_url:
