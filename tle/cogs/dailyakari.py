@@ -243,6 +243,20 @@ class DailyAkari(commands.Cog):
         if parsed is None:
             return
 
+        existing = cf_common.user_db.get_dailyakari_result_for_user_puzzle(
+            message.guild.id, message.author.id, parsed.puzzle_number
+        )
+        if existing is not None and str(existing.message_id) != str(message.id):
+            logger.info(
+                'DailyAkari result ignored: guild=%s msg=%s user=%s puzzle=%s first_msg=%s',
+                message.guild.id,
+                message.id,
+                message.author.id,
+                parsed.puzzle_number,
+                existing.message_id,
+            )
+            return
+
         cf_common.user_db.save_dailyakari_result(
             message.id,
             message.guild.id,
@@ -291,7 +305,8 @@ class DailyAkari(commands.Cog):
             return
         cf_common.user_db.delete_dailyakari_result(payload.message_id)
 
-    @commands.group(brief='Daily Akari commands', invoke_without_command=True)
+    @commands.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
+                    invoke_without_command=True)
     async def akari(self, ctx):
         """Daily Akari add-on commands."""
         await ctx.send_help(ctx.command)
@@ -309,6 +324,20 @@ class DailyAkari(commands.Cog):
     async def clear(self, ctx):
         cf_common.user_db.clear_dailyakari_channel(ctx.guild.id)
         await ctx.send(embed=discord_common.embed_success('Daily Akari channel cleared.'))
+
+    @akari.command(brief='Remove a user result for a puzzle', usage='@user puzzle_id')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def remove(self, ctx, member: discord.Member, puzzle_id: int):
+        rc = cf_common.user_db.delete_dailyakari_result_for_user_puzzle(
+            ctx.guild.id, member.id, puzzle_id
+        )
+        if not rc:
+            raise DailyAkariCogError(
+                f'No Daily Akari result found for {member.mention} on puzzle `{puzzle_id}`.'
+            )
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed Daily Akari result for {member.mention} on puzzle `{puzzle_id}`.'
+        ))
 
     @akari.command(brief='Show Daily Akari settings')
     async def show(self, ctx):

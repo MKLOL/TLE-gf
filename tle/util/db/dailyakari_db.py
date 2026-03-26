@@ -59,6 +59,16 @@ class DailyAkariDbMixin:
             (str(message_id),)
         ).fetchone()
 
+    def get_dailyakari_result_for_user_puzzle(self, guild_id, user_id, puzzle_number):
+        return self.conn.execute(
+            '''
+            SELECT *
+            FROM dailyakari_result
+            WHERE guild_id = ? AND user_id = ? AND puzzle_number = ?
+            ''',
+            (str(guild_id), str(user_id), int(puzzle_number))
+        ).fetchone()
+
     def get_dailyakari_results_for_user(self, guild_id, user_id):
         return self.conn.execute(
             '''
@@ -84,3 +94,14 @@ class DailyAkariDbMixin:
             ''',
             (str(guild_id), *user_ids)
         ).fetchall()
+
+    def delete_dailyakari_result_for_user_puzzle(self, guild_id, user_id, puzzle_number):
+        rc = self.conn.execute(
+            '''
+            DELETE FROM dailyakari_result
+            WHERE guild_id = ? AND user_id = ? AND puzzle_number = ?
+            ''',
+            (str(guild_id), str(user_id), int(puzzle_number))
+        ).rowcount
+        self.conn.commit()
+        return rc

@@ -198,6 +198,18 @@ class TestDbMixin:
         assert len(rows) == 1
         assert rows[0].message_id == '1'
 
+    def test_result_for_user_puzzle(self, db):
+        db.save_dailyakari_result(1, 100, 200, 300, 445, '2026-03-26', 100, 89, True)
+        row = db.get_dailyakari_result_for_user_puzzle(100, 300, 445)
+        assert row is not None
+        assert row.message_id == '1'
+
+    def test_delete_result_for_user_puzzle(self, db):
+        db.save_dailyakari_result(1, 100, 200, 300, 445, '2026-03-26', 100, 89, True)
+        rc = db.delete_dailyakari_result_for_user_puzzle(100, 300, 445)
+        assert rc == 1
+        assert db.get_dailyakari_result_for_user_puzzle(100, 300, 445) is None
+
 
 class _FakeGuild:
     def __init__(self, guild_id):
@@ -256,6 +268,28 @@ class TestCogIngest:
         await cog.on_message(message)
 
         assert db.get_dailyakari_result(123) is None
+
+    @pytest.mark.asyncio
+    async def test_only_first_message_counts_for_user_puzzle(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'dailyakari', '1')
+        db.set_dailyakari_channel(1, 10)
+
+        cog = DailyAkari(bot=None)
+        first = _FakeMessage(
+            123, 1, 10, 999,
+            'Daily Akari 445\n✅2026-03-26✅\n🌟 Perfect! 🕓 1:29\nhttps://dailyakari.com/'
+        )
+        second = _FakeMessage(
+            124, 1, 10, 999,
+            'Daily Akari 445\n✅2026-03-26✅\n🎯 96% 🕓 1:00\nhttps://dailyakari.com/'
+        )
+        await cog.on_message(first)
+        await cog.on_message(second)
+
+        row = db.get_dailyakari_result_for_user_puzzle(1, 999, 445)
+        assert row is not None
+        assert row.message_id == '123'
 
 
 class TestUpgrade:
