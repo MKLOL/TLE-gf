@@ -81,7 +81,7 @@ class TestParsing:
         parsed = _parse_dailyakari_message(
             'Daily Akari 😊 445\n'
             '✅2026-03-26 (Thu)✅\n'
-            '🌟    🕓 1:29\n'
+            '🌟 Perfect!   🕓 1:29\n'
             'https://dailyakari.com/'
         )
         assert parsed is not None
