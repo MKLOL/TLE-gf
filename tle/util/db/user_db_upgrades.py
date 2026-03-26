@@ -356,3 +356,29 @@ def upgrade_1_13_0(db):
         logger.debug(f'1.13.0: last_error column already exists or error: {e}')
     db.commit()
     logger.info('1.13.0: Upgrade complete')
+
+
+@registry.register('1.14.0', 'Daily Akari tables')
+def upgrade_1_14_0(db):
+    logger.info('1.14.0: Creating Daily Akari tables')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS dailyakari_config (
+            guild_id    TEXT PRIMARY KEY,
+            channel_id  TEXT NOT NULL
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS dailyakari_result (
+            message_id     TEXT PRIMARY KEY,
+            guild_id       TEXT NOT NULL,
+            channel_id     TEXT NOT NULL,
+            user_id        TEXT NOT NULL,
+            puzzle_number  INTEGER NOT NULL,
+            puzzle_date    TEXT NOT NULL,
+            accuracy       INTEGER NOT NULL,
+            time_seconds   INTEGER NOT NULL,
+            is_perfect     INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    db.commit()
+    logger.info('1.14.0: Daily Akari tables created')

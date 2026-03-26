@@ -19,7 +19,7 @@ from tle.cogs._starboard_helpers import _parse_jump_url
 
 logger = logging.getLogger(__name__)
 
-_KNOWN_FEATURES = ['starboard_leaderboard']
+_KNOWN_FEATURES = ['starboard_leaderboard', 'dailyakari']
 
 RESTART = 42
 
@@ -142,7 +142,7 @@ class Meta(commands.Cog):
     @commands.has_role(constants.TLE_ADMIN)
     async def config(self, ctx):
         """List or toggle feature flags for this guild.
-        Known features: starboard_leaderboard"""
+        Known features: starboard_leaderboard, dailyakari"""
         configs = cf_common.user_db.get_all_guild_configs(ctx.guild.id)
         if not configs:
             await ctx.send(embed=discord_common.embed_neutral('No features enabled.'))
