@@ -279,6 +279,17 @@ def _compute_dailyakari_top(rows):
     return sorted(wins_by_user.items(), key=lambda item: (-item[1], int(item[0])))
 
 
+def _safe_member_name(member):
+    return discord.utils.escape_mentions(member.display_name)
+
+
+def _safe_user_name(guild, user_id):
+    member = guild.get_member(int(user_id))
+    if member is not None:
+        return _safe_member_name(member)
+    return f'user `{user_id}`'
+
+
 class DailyAkari(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -448,10 +459,11 @@ class DailyAkari(commands.Cog):
         )
         if not rc:
             raise DailyAkariCogError(
-                f'No Daily Akari result found for {member.mention} on puzzle `{puzzle_id}`.'
+                f'No Daily Akari result found for `{_safe_member_name(member)}` '
+                f'on puzzle `{puzzle_id}`.'
             )
         await ctx.send(embed=discord_common.embed_success(
-            f'Removed Daily Akari result for {member.mention} on puzzle `{puzzle_id}`.'
+            f'Removed Daily Akari result for `{_safe_member_name(member)}` on puzzle `{puzzle_id}`.'
         ))
 
     @akari.command(brief='Show Daily Akari settings')
@@ -481,8 +493,8 @@ class DailyAkari(commands.Cog):
             raise DailyAkariCogError('These users have no common Daily Akari puzzles yet.')
 
         description = '\n'.join([
-            f'{member1.mention}: **{stats["score1"]:g}** points, **{stats["wins1"]}** wins',
-            f'{member2.mention}: **{stats["score2"]:g}** points, **{stats["wins2"]}** wins',
+            f'`{_safe_member_name(member1)}`: **{stats["score1"]:g}** points, **{stats["wins1"]}** wins',
+            f'`{_safe_member_name(member2)}`: **{stats["score2"]:g}** points, **{stats["wins2"]}** wins',
             f'Ties: **{stats["ties"]}**',
             f'Common puzzles: **{stats["common_count"]}**',
         ])
@@ -511,7 +523,7 @@ class DailyAkari(commands.Cog):
         rows = cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member.id, dlo, dhi)
         streak = _compute_dailyakari_streak(rows)
         if not rows:
-            raise DailyAkariCogError(f'No Daily Akari results found for {member.mention}.')
+            raise DailyAkariCogError(f'No Daily Akari results found for `{_safe_member_name(member)}`.')
 
         best = _pick_best_results(rows)
         latest_row = best[max(best)]
@@ -519,7 +531,7 @@ class DailyAkari(commands.Cog):
         embed = discord.Embed(
             title='Daily Akari Streak',
             description='\n'.join([
-                f'{member.mention}: **{streak}** consecutive perfect day(s)',
+                f'`{_safe_member_name(member)}`: **{streak}** consecutive perfect day(s)',
                 f'Latest result: **{latest_status}** in **{_format_duration(latest_row.time_seconds)}**',
             ]),
             color=discord_common.random_cf_color(),
@@ -542,9 +554,8 @@ class DailyAkari(commands.Cog):
             lines = []
             for i, (user_id, wins) in enumerate(chunk):
                 rank = page_idx * per_page + i + 1
-                member = ctx.guild.get_member(int(user_id))
-                mention = member.mention if member else f'<@{user_id}>'
-                lines.append(f'**#{rank}** {mention} — **{wins}** wins')
+                name = _safe_user_name(ctx.guild, user_id)
+                lines.append(f'**#{rank}** `{name}` — **{wins}** wins')
             embed = discord.Embed(
                 title='Daily Akari Winners',
                 description='\n'.join(lines),
