@@ -184,6 +184,14 @@ class Minigames(commands.Cog):
                 status['scanned'] += 1
                 if message.author.bot or not message.content:
                     continue
+
+                # Save every non-bot message for future reparse
+                cf_common.user_db.save_raw_message(
+                    message.id, guild_id, channel_id, message.author.id,
+                    message.created_at.isoformat(), message.content,
+                    commit=False,
+                )
+
                 cleaned = strip_codeblock(message.content)
                 results = game.parse(cleaned)
                 if not results:
@@ -476,7 +484,55 @@ class Minigames(commands.Cog):
             ctx.guild.id, game.name)
         self._import_status.pop(key, None)
         await ctx.send(embed=discord_common.embed_success(
-            f'Deleted {deleted} imported {game.display_name} row(s).'))
+            f'Deleted {deleted} imported {game.display_name} row(s). '
+            f'Raw messages preserved for reparse.'))
+
+    async def _cmd_reparse(self, ctx, game):
+        raw_messages = cf_common.user_db.get_raw_messages_for_guild(ctx.guild.id)
+        if not raw_messages:
+            raise MinigameCogError(
+                f'No raw messages stored. Run an import first to populate them.')
+
+        deleted = cf_common.user_db.clear_imported_minigame_results(
+            ctx.guild.id, game.name)
+        parsed_count = 0
+        skipped = []
+
+        for row in raw_messages:
+            cleaned = strip_codeblock(row.raw_content)
+            results = game.parse(cleaned)
+            if not results:
+                if game.detect and game.detect.search(cleaned):
+                    skipped.append(row.message_id)
+                continue
+            puzzle_date_fallback = dt.date.fromisoformat(row.created_at[:10])
+            for parsed in results:
+                puzzle_date = parsed.puzzle_date or puzzle_date_fallback
+                cf_common.user_db.save_imported_minigame_result(
+                    row.message_id, row.guild_id, game.name, row.channel_id,
+                    row.user_id, parsed.puzzle_number,
+                    puzzle_date.isoformat(), parsed.accuracy,
+                    parsed.time_seconds, parsed.is_perfect,
+                    row.raw_content, commit=False,
+                )
+                parsed_count += 1
+        cf_common.user_db.conn.commit()
+
+        lines = [
+            f'raw messages scanned: **{len(raw_messages)}**',
+            f'previous imported rows cleared: **{deleted}**',
+            f'results parsed: **{parsed_count}**',
+        ]
+        if skipped:
+            lines.append(
+                f'detected but unparseable: **{len(skipped)}** '
+                f'(IDs: {", ".join(skipped[:10])}{"…" if len(skipped) > 10 else ""})')
+        logger.info(
+            '%s reparse: guild=%s raw=%d cleared=%d parsed=%d skipped=%d',
+            game.display_name, ctx.guild.id, len(raw_messages), deleted,
+            parsed_count, len(skipped),
+        )
+        await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
 
     # ── Command tree: ;minigames ────────────────────────────────────────
 
@@ -555,6 +611,11 @@ class Minigames(commands.Cog):
     async def akari_import_clear(self, ctx):
         await self._cmd_import_clear(ctx, AKARI_GAME)
 
+    @akari.command(name='reparse', brief='Reparse all stored raw messages')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def akari_reparse(self, ctx):
+        await self._cmd_reparse(ctx, AKARI_GAME)
+
     # ── GuessGame commands: ;minigames guessgame … ──────────────────────
 
     @minigames.group(name='guessgame', aliases=['gg'], brief='GuessThe.Game commands',
@@ -623,6 +684,11 @@ class Minigames(commands.Cog):
     @commands.has_role(constants.TLE_ADMIN)
     async def gg_import_clear(self, ctx):
         await self._cmd_import_clear(ctx, GUESSGAME_GAME)
+
+    @guessgame.command(name='reparse', brief='Reparse all stored raw messages')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def gg_reparse(self, ctx):
+        await self._cmd_reparse(ctx, GUESSGAME_GAME)
 
     # ── Error handler ───────────────────────────────────────────────────
 

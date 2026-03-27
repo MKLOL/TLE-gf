@@ -426,3 +426,23 @@ def upgrade_1_15_0(db):
     ''')
     db.commit()
     logger.info('1.15.0: Minigame import table created')
+
+
+@registry.register('1.16.0', 'Minigame raw message table')
+def upgrade_1_16_0(db):
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS minigame_raw_message (
+            message_id  TEXT NOT NULL PRIMARY KEY,
+            guild_id    TEXT NOT NULL,
+            channel_id  TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            raw_content TEXT NOT NULL
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_raw_message_guild
+            ON minigame_raw_message (guild_id)
+    ''')
+    db.commit()
+    logger.info('1.16.0: Minigame raw message table created')

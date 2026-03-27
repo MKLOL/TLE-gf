@@ -72,6 +72,16 @@ class FakeMinigameDb(MinigameDbMixin):
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_raw_message (
+                message_id  TEXT NOT NULL PRIMARY KEY,
+                guild_id    TEXT NOT NULL,
+                channel_id  TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                raw_content TEXT NOT NULL
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS guild_config (
                 guild_id    TEXT,
                 key         TEXT,
@@ -372,6 +382,51 @@ class TestDbMixin:
         db.save_minigame_result(1, 100, _GAME, 200, 300, 445, '2026-03-26', 100, 89, True, 'edited')
         row = db.get_minigame_result(1)
         assert row.raw_content == 'edited'
+
+    def test_raw_message_storage_and_reparse(self, db):
+        """Raw messages are stored and can be reparsed into import results."""
+        content = (
+            'Daily Akari \U0001f60a 445\n'
+            '\u27052026-03-26 (Thu)\u2705\n'
+            '\U0001f31f Perfect!   \U0001f553 1:29\n'
+            'https://dailyakari.com/'
+        )
+        db.save_raw_message(1, 100, 200, 300, '2026-03-26T12:00:00', content)
+        db.save_raw_message(2, 100, 200, 301, '2026-03-26T12:05:00', 'not a game msg')
+
+        raws = db.get_raw_messages_for_guild(100)
+        assert len(raws) == 2
+
+        # Simulate reparse: parse raw content and save matches
+        from tle.cogs._minigame_akari import parse_akari_message
+        from tle.cogs._minigame_common import strip_codeblock
+        parsed_count = 0
+        for row in raws:
+            results = parse_akari_message(strip_codeblock(row.raw_content))
+            for r in results:
+                db.save_imported_minigame_result(
+                    row.message_id, row.guild_id, _GAME, row.channel_id,
+                    row.user_id, r.puzzle_number,
+                    r.puzzle_date.isoformat(), r.accuracy,
+                    r.time_seconds, r.is_perfect, row.raw_content,
+                )
+                parsed_count += 1
+
+        assert parsed_count == 1
+        rows = db.get_minigame_results_for_user(100, _GAME, 300)
+        assert len(rows) == 1
+        assert rows[0].puzzle_number == 445
+
+    def test_clear_imported_per_channel(self, db):
+        """Import clear with channel_id only removes that channel's rows."""
+        db.save_imported_minigame_result(1, 100, _GAME, 200, 300, 445, '2026-03-26', 100, 89, True, 'c1')
+        db.save_imported_minigame_result(2, 100, _GAME, 201, 301, 446, '2026-03-27', 100, 90, True, 'c2')
+        deleted = db.clear_imported_minigame_results(100, _GAME, channel_id=200)
+        assert deleted == 1
+        # Channel 201's result should survive
+        rows = db.get_minigame_results_for_guild(100, _GAME)
+        assert len(rows) == 1
+        assert rows[0].channel_id == '201'
 
 
 class _FakeGuild:

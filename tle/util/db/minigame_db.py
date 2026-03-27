@@ -197,6 +197,44 @@ class MinigameDbMixin:
         self.conn.commit()
         return rc
 
+    # ── Raw messages ─────────────────────────────────────────────────
+
+    def save_raw_message(self, message_id, guild_id, channel_id, user_id,
+                         created_at, raw_content, commit=True):
+        self.conn.execute(
+            '''
+            INSERT OR IGNORE INTO minigame_raw_message
+                (message_id, guild_id, channel_id, user_id, created_at, raw_content)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''',
+            (str(message_id), str(guild_id), str(channel_id), str(user_id),
+             str(created_at), str(raw_content))
+        )
+        if commit:
+            self.conn.commit()
+
+    def get_raw_messages_for_guild(self, guild_id):
+        return self.conn.execute(
+            'SELECT * FROM minigame_raw_message WHERE guild_id = ? ORDER BY CAST(message_id AS INTEGER)',
+            (str(guild_id),)
+        ).fetchall()
+
+    def clear_raw_messages(self, guild_id, channel_id=None):
+        if channel_id is not None:
+            rc = self.conn.execute(
+                'DELETE FROM minigame_raw_message WHERE guild_id = ? AND channel_id = ?',
+                (str(guild_id), str(channel_id))
+            ).rowcount
+        else:
+            rc = self.conn.execute(
+                'DELETE FROM minigame_raw_message WHERE guild_id = ?',
+                (str(guild_id),)
+            ).rowcount
+        self.conn.commit()
+        return rc
+
+    # ── Queries ──────────────────────────────────────────────────────
+
     def get_minigame_result(self, message_id):
         return self.conn.execute(
             'SELECT * FROM minigame_result WHERE message_id = ?',

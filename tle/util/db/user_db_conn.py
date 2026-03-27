@@ -337,6 +337,20 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             CREATE INDEX IF NOT EXISTS idx_minigame_import_result_date
                 ON minigame_import_result (guild_id, game, puzzle_date)
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_raw_message (
+                message_id  TEXT NOT NULL PRIMARY KEY,
+                guild_id    TEXT NOT NULL,
+                channel_id  TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                raw_content TEXT NOT NULL
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_minigame_raw_message_guild
+                ON minigame_raw_message (guild_id)
+        ''')
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS rankup ('
             'guild_id     TEXT PRIMARY KEY,'
