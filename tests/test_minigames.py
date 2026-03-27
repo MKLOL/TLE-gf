@@ -1,4 +1,5 @@
 """Tests for the minigames system (Daily Akari, etc.)."""
+import asyncio
 import datetime as dt
 import sqlite3
 from collections import namedtuple
@@ -296,8 +297,7 @@ class _FakeMessage:
 
 
 class TestCogIngest:
-    @pytest.mark.asyncio
-    async def test_ingests_only_enabled_configured_channel(self, db, monkeypatch):
+    def test_ingests_only_enabled_configured_channel(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(1, 'akari', '1')
         db.set_minigame_channel(1, _GAME, 10)
@@ -307,7 +307,7 @@ class TestCogIngest:
             123, 1, 10, 999,
             'Daily Akari 445\n✅2026-03-26✅\n🌟 🕓 1:29\nhttps://dailyakari.com/'
         )
-        await cog.on_message(message)
+        asyncio.run(cog.on_message(message))
 
         row = db.get_minigame_result(123)
         assert row is not None
@@ -316,8 +316,7 @@ class TestCogIngest:
         assert row.channel_id == '10'
         assert row.game == _GAME
 
-    @pytest.mark.asyncio
-    async def test_ignores_disabled_feature(self, db, monkeypatch):
+    def test_ignores_disabled_feature(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_channel(1, _GAME, 10)
 
@@ -326,12 +325,11 @@ class TestCogIngest:
             123, 1, 10, 999,
             'Daily Akari 445\n✅2026-03-26✅\n🌟 🕓 1:29\nhttps://dailyakari.com/'
         )
-        await cog.on_message(message)
+        asyncio.run(cog.on_message(message))
 
         assert db.get_minigame_result(123) is None
 
-    @pytest.mark.asyncio
-    async def test_only_first_message_counts_for_user_puzzle(self, db, monkeypatch):
+    def test_only_first_message_counts_for_user_puzzle(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(1, 'akari', '1')
         db.set_minigame_channel(1, _GAME, 10)
@@ -345,15 +343,17 @@ class TestCogIngest:
             124, 1, 10, 999,
             'Daily Akari 445\n✅2026-03-26✅\n🎯 96% 🕓 1:00\nhttps://dailyakari.com/'
         )
-        await cog.on_message(first)
-        await cog.on_message(second)
+
+        async def _inner():
+            await cog.on_message(first)
+            await cog.on_message(second)
+        asyncio.run(_inner())
 
         row = db.get_minigame_result_for_user_puzzle(1, _GAME, 999, 445)
         assert row is not None
         assert row.message_id == '123'
 
-    @pytest.mark.asyncio
-    async def test_edit_in_non_configured_channel_is_ignored(self, db, monkeypatch):
+    def test_edit_in_non_configured_channel_is_ignored(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(1, 'akari', '1')
         db.set_minigame_channel(1, _GAME, 10)
@@ -362,9 +362,117 @@ class TestCogIngest:
         # Edit a message in channel 99 (not the configured channel 10)
         before = _FakeMessage(50, 1, 99, 999, 'old content')
         after = _FakeMessage(50, 1, 99, 999, 'new content')
-        await cog.on_message_edit(before, after)
+        asyncio.run(cog.on_message_edit(before, after))
         # Should not trigger any DB writes — no result to find or delete
         assert db.get_minigame_result(50) is None
+
+
+class TestCogSafety:
+    """Tests for cog robustness: exception handling, cancellation, cleanup."""
+
+    def test_import_cancellation_rolls_back_partial_batch(self, db, monkeypatch):
+        """Cancelling an import mid-batch should not leave orphan rows
+        that get committed by a later DB operation."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+
+        akari_fmt = 'Daily Akari {n}\n\u27052026-03-26\u2705\n\U0001f31f \U0001f553 1:29\nhttps://dailyakari.com/'
+        messages = [
+            _FakeMessage(i, 1, 10, 999, akari_fmt.format(n=i))
+            for i in range(1, 6)
+        ]
+
+        class _CancelAfterN:
+            """Async iterator that yields n items then raises CancelledError."""
+            def __init__(self, msgs, n):
+                self._msgs = iter(msgs)
+                self._n = n
+                self._count = 0
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                if self._count >= self._n:
+                    raise asyncio.CancelledError()
+                try:
+                    msg = next(self._msgs)
+                except StopIteration:
+                    raise StopAsyncIteration
+                self._count += 1
+                return msg
+
+        class _FakeChan:
+            id = 10
+            def history(self, **kw):
+                return _CancelAfterN(messages, 3)
+
+        class _FakeBot:
+            def get_channel(self, cid):
+                return _FakeChan()
+
+        from tle.cogs._minigame_akari import AKARI_GAME
+        cog = Minigames(bot=_FakeBot())
+        key = (1, 'akari')
+        cog._import_status[key] = {
+            'state': 'running', 'done': 0,
+            'latest_message_id': None, 'error': None,
+        }
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(cog._run_import(1, 10, AKARI_GAME))
+
+        # A subsequent operation that calls commit() should NOT leak the orphan rows
+        db.save_minigame_result(999, 1, 'akari', 10, 888, 999, '2026-04-01', 100, 50, 1)
+
+        rows = db.conn.execute('SELECT * FROM minigame_import_result').fetchall()
+        assert len(rows) == 0
+
+    def test_cog_unload_cancels_import_tasks(self):
+        """cog_unload should cancel all running import tasks."""
+        cog = Minigames(bot=None)
+
+        async def _test():
+            async def long_task():
+                await asyncio.sleep(10000)
+
+            task = asyncio.create_task(long_task())
+            cog._import_tasks[(1, 'akari')] = task
+            await cog.cog_unload()
+            assert task.cancelled()
+
+        asyncio.run(_test())
+
+    def test_on_message_catches_exceptions(self, db, monkeypatch):
+        """on_message should not propagate exceptions from _ingest_message."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'akari', '1')
+        db.set_minigame_channel(1, _GAME, 10)
+
+        cog = Minigames(bot=None)
+
+        async def bad_ingest(msg, game):
+            raise RuntimeError('DB exploded')
+        monkeypatch.setattr(cog, '_ingest_message', bad_ingest)
+
+        message = _FakeMessage(123, 1, 10, 999, 'anything')
+        # Should not raise
+        asyncio.run(cog.on_message(message))
+
+    def test_on_message_edit_catches_exceptions(self, db, monkeypatch):
+        """on_message_edit should not propagate exceptions."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'akari', '1')
+        db.set_minigame_channel(1, _GAME, 10)
+
+        cog = Minigames(bot=None)
+
+        async def bad_ingest(msg, game):
+            raise RuntimeError('DB exploded')
+        monkeypatch.setattr(cog, '_ingest_message', bad_ingest)
+
+        content = 'Daily Akari 445\n\u27052026-03-26\u2705\n\U0001f31f \U0001f553 1:29\nhttps://dailyakari.com/'
+        before = _FakeMessage(50, 1, 10, 999, 'old content')
+        after = _FakeMessage(50, 1, 10, 999, content)
+        # Should not raise
+        asyncio.run(cog.on_message_edit(before, after))
 
 
 class TestUpgrade:

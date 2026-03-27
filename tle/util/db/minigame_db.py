@@ -77,7 +77,7 @@ class MinigameDbMixin:
             )
             SELECT *
             FROM (
-                SELECT DISTINCT all_rows.*
+                SELECT all_rows.*
                 FROM minigame_all all_rows
                 JOIN first_per_user_puzzle first_rows
                   ON all_rows.guild_id = first_rows.guild_id

@@ -387,6 +387,10 @@ def upgrade_1_14_0(db):
         CREATE INDEX IF NOT EXISTS idx_minigame_result_lookup
             ON minigame_result (guild_id, game, user_id, puzzle_number)
     ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_result_date
+            ON minigame_result (guild_id, game, puzzle_date)
+    ''')
     db.commit()
     logger.info('1.14.0: Minigame tables created')
 
@@ -411,6 +415,10 @@ def upgrade_1_15_0(db):
     db.execute('''
         CREATE INDEX IF NOT EXISTS idx_minigame_import_result_lookup
             ON minigame_import_result (guild_id, game, user_id, puzzle_number)
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_import_result_date
+            ON minigame_import_result (guild_id, game, puzzle_date)
     ''')
     db.commit()
     logger.info('1.15.0: Minigame import table created')

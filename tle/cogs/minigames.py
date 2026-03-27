@@ -46,6 +46,13 @@ class Minigames(commands.Cog):
         self._import_tasks = {}   # (guild_id, game_name) -> asyncio.Task
         self._import_status = {}  # (guild_id, game_name) -> dict
 
+    async def cog_unload(self):
+        tasks = list(self._import_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     # ── Helpers ─────────────────────────────────────────────────────────
 
     @staticmethod
@@ -119,30 +126,37 @@ class Minigames(commands.Cog):
             return
         game = self._game_for_channel(message)
         if game is not None:
-            await self._ingest_message(message, game)
+            try:
+                await self._ingest_message(message, game)
+            except Exception:
+                logger.error('Error ingesting message %s', message.id, exc_info=True)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before, after):
         if after.guild is None or after.author.bot or cf_common.user_db is None:
             return
-        # Only act on messages in a configured minigame channel
         game = self._game_for_channel(after)
         if game is None:
             return
-        parsed = game.parse(after.content)
-        if parsed is not None:
-            await self._ingest_message(after, game)
-        else:
-            # Message in a minigame channel was edited to no longer be a valid result
-            cf_common.user_db.delete_minigame_result(after.id)
-            cf_common.user_db.delete_imported_minigame_result(after.id)
+        try:
+            parsed = game.parse(after.content)
+            if parsed is not None:
+                await self._ingest_message(after, game)
+            else:
+                cf_common.user_db.delete_minigame_result(after.id)
+                cf_common.user_db.delete_imported_minigame_result(after.id)
+        except Exception:
+            logger.error('Error handling message edit %s', after.id, exc_info=True)
 
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload):
         if payload.guild_id is None or cf_common.user_db is None:
             return
-        cf_common.user_db.delete_minigame_result(payload.message_id)
-        cf_common.user_db.delete_imported_minigame_result(payload.message_id)
+        try:
+            cf_common.user_db.delete_minigame_result(payload.message_id)
+            cf_common.user_db.delete_imported_minigame_result(payload.message_id)
+        except Exception:
+            logger.error('Error handling message delete %s', payload.message_id, exc_info=True)
 
     # ── Import ──────────────────────────────────────────────────────────
 
@@ -192,11 +206,13 @@ class Minigames(commands.Cog):
             )
         except asyncio.CancelledError:
             status['state'] = 'cancelled'
+            cf_common.user_db.conn.rollback()
             logger.info('%s import cancelled: guild=%s', game.display_name, guild_id)
             raise
         except Exception as exc:
             status['state'] = 'failed'
             status['error'] = str(exc)
+            cf_common.user_db.conn.rollback()
             logger.error(
                 '%s import failed: guild=%s channel=%s',
                 game.display_name, guild_id, channel_id, exc_info=True,
