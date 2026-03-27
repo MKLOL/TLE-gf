@@ -424,6 +424,9 @@ _load_module('tle.util.db.starboard_db', os.path.join(_db_path, 'starboard_db.py
 # migration_db.py — standalone mixin, no heavy deps
 _load_module('tle.util.db.migration_db', os.path.join(_db_path, 'migration_db.py'))
 
+# minigame_db.py — standalone mixin, no heavy deps
+_load_module('tle.util.db.minigame_db', os.path.join(_db_path, 'minigame_db.py'))
+
 # user_db_conn.py imports discord.ext.commands, tle.util.codeforces_*, starboard_db, migration_db
 # All are stubbed/loaded above, so this should work now
 _load_module('tle.util.db.user_db_conn', os.path.join(_db_path, 'user_db_conn.py'))
@@ -456,3 +459,8 @@ _gc.rating_color_cycler = None  # stub — not used in pure-function tests
 _gc.get_current_figure_as_file = lambda: None
 
 _load_module('tle.cogs.versus', os.path.join(_cogs_path, 'versus.py'))
+
+# minigame cog modules
+_load_module('tle.cogs._minigame_common', os.path.join(_cogs_path, '_minigame_common.py'))
+_load_module('tle.cogs._minigame_akari', os.path.join(_cogs_path, '_minigame_akari.py'))
+_load_module('tle.cogs.minigames', os.path.join(_cogs_path, 'minigames.py'))

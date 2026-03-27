@@ -11,7 +11,7 @@ from tle.util.db.starboard_db import (
     StarboardDbMixin,
     snowflake_to_unix_sql, DISCORD_EPOCH_MS, SNOWFLAKE_TIMESTAMP_DIVISOR, _NO_TIME_BOUND,
 )
-from tle.util.db.dailyakari_db import DailyAkariDbMixin
+from tle.util.db.minigame_db import MinigameDbMixin
 from tle.util.db.migration_db import MigrationDbMixin
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ def namedtuple_factory(cursor, row):
     return Row(*row)
 
 
-class UserDbConn(DailyAkariDbMixin, StarboardDbMixin, MigrationDbMixin):
+class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def __init__(self, dbfile):
         logger.info(f'Opening user database: {dbfile}')
         self.conn = sqlite3.connect(dbfile)
@@ -282,15 +282,18 @@ class UserDbConn(DailyAkariDbMixin, StarboardDbMixin, MigrationDbMixin):
             )
         ''')
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS dailyakari_config (
-                guild_id    TEXT PRIMARY KEY,
-                channel_id  TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS minigame_config (
+                guild_id   TEXT NOT NULL,
+                game       TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                PRIMARY KEY (guild_id, game)
             )
         ''')
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS dailyakari_result (
+            CREATE TABLE IF NOT EXISTS minigame_result (
                 message_id     TEXT PRIMARY KEY,
                 guild_id       TEXT NOT NULL,
+                game           TEXT NOT NULL,
                 channel_id     TEXT NOT NULL,
                 user_id        TEXT NOT NULL,
                 puzzle_number  INTEGER NOT NULL,
@@ -301,9 +304,14 @@ class UserDbConn(DailyAkariDbMixin, StarboardDbMixin, MigrationDbMixin):
             )
         ''')
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS dailyakari_import_result (
+            CREATE INDEX IF NOT EXISTS idx_minigame_result_lookup
+                ON minigame_result (guild_id, game, user_id, puzzle_number)
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_import_result (
                 message_id     TEXT PRIMARY KEY,
                 guild_id       TEXT NOT NULL,
+                game           TEXT NOT NULL,
                 channel_id     TEXT NOT NULL,
                 user_id        TEXT NOT NULL,
                 puzzle_number  INTEGER NOT NULL,
@@ -312,6 +320,10 @@ class UserDbConn(DailyAkariDbMixin, StarboardDbMixin, MigrationDbMixin):
                 time_seconds   INTEGER NOT NULL,
                 is_perfect     INTEGER NOT NULL DEFAULT 0
             )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_minigame_import_result_lookup
+                ON minigame_import_result (guild_id, game, user_id, puzzle_number)
         ''')
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS rankup ('

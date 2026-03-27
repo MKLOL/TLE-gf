@@ -358,19 +358,22 @@ def upgrade_1_13_0(db):
     logger.info('1.13.0: Upgrade complete')
 
 
-@registry.register('1.14.0', 'Daily Akari tables')
+@registry.register('1.14.0', 'Minigame tables')
 def upgrade_1_14_0(db):
-    logger.info('1.14.0: Creating Daily Akari tables')
+    logger.info('1.14.0: Creating minigame tables')
     db.execute('''
-        CREATE TABLE IF NOT EXISTS dailyakari_config (
-            guild_id    TEXT PRIMARY KEY,
-            channel_id  TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS minigame_config (
+            guild_id   TEXT NOT NULL,
+            game       TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            PRIMARY KEY (guild_id, game)
         )
     ''')
     db.execute('''
-        CREATE TABLE IF NOT EXISTS dailyakari_result (
+        CREATE TABLE IF NOT EXISTS minigame_result (
             message_id     TEXT PRIMARY KEY,
             guild_id       TEXT NOT NULL,
+            game           TEXT NOT NULL,
             channel_id     TEXT NOT NULL,
             user_id        TEXT NOT NULL,
             puzzle_number  INTEGER NOT NULL,
@@ -380,17 +383,22 @@ def upgrade_1_14_0(db):
             is_perfect     INTEGER NOT NULL DEFAULT 0
         )
     ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_result_lookup
+            ON minigame_result (guild_id, game, user_id, puzzle_number)
+    ''')
     db.commit()
-    logger.info('1.14.0: Daily Akari tables created')
+    logger.info('1.14.0: Minigame tables created')
 
 
-@registry.register('1.15.0', 'Daily Akari import tables')
+@registry.register('1.15.0', 'Minigame import table')
 def upgrade_1_15_0(db):
-    logger.info('1.15.0: Creating Daily Akari import tables')
+    logger.info('1.15.0: Creating minigame import table')
     db.execute('''
-        CREATE TABLE IF NOT EXISTS dailyakari_import_result (
+        CREATE TABLE IF NOT EXISTS minigame_import_result (
             message_id     TEXT PRIMARY KEY,
             guild_id       TEXT NOT NULL,
+            game           TEXT NOT NULL,
             channel_id     TEXT NOT NULL,
             user_id        TEXT NOT NULL,
             puzzle_number  INTEGER NOT NULL,
@@ -400,5 +408,9 @@ def upgrade_1_15_0(db):
             is_perfect     INTEGER NOT NULL DEFAULT 0
         )
     ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_import_result_lookup
+            ON minigame_import_result (guild_id, game, user_id, puzzle_number)
+    ''')
     db.commit()
-    logger.info('1.15.0: Daily Akari import tables created')
+    logger.info('1.15.0: Minigame import table created')
