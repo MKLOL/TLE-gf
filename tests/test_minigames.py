@@ -836,28 +836,70 @@ class TestGuessGameScoring:
         Row = namedtuple('Row', 'accuracy time_seconds is_perfect')
         return Row(accuracy, time_seconds, accuracy == 6)
 
-    def test_earlier_green_wins(self):
-        # green_pos=2 (acc=5) vs green_pos=4 (acc=3)
-        s1, s2 = guessgame_score_matchup(self._row(5, 7), self._row(3, 7))
-        assert s1 == 1.0 and s2 == 0.0
+    def _approx(self, val, expected, tol=0.001):
+        return abs(val - expected) < tol
 
-    def test_same_green_earlier_yellow_wins(self):
-        # Both green_pos=3 (acc=4), yellow_pos=1 vs 2
-        s1, s2 = guessgame_score_matchup(self._row(4, 1), self._row(4, 2))
-        assert s1 == 1.0 and s2 == 0.0
+    def test_green_pos1_vs_all_red_is_max_blowout(self):
+        # strength 12 vs 0 → margin 0.5 → 1.0/0.0
+        s1, s2 = guessgame_score_matchup(self._row(6, 7), self._row(0, 7))
+        assert self._approx(s1, 1.0) and self._approx(s2, 0.0)
 
-    def test_no_green_vs_green_loses(self):
-        s1, s2 = guessgame_score_matchup(self._row(0, 5), self._row(3, 7))
-        assert s1 == 0.0 and s2 == 1.0
+    def test_green_pos6_vs_all_red_is_big_win(self):
+        # strength 7 vs 0 → margin 7/24 ≈ 0.292 → 0.792/0.208
+        s1, s2 = guessgame_score_matchup(self._row(1, 7), self._row(0, 7))
+        assert s1 > 0.75 and s2 < 0.25
+
+    def test_both_green_close_positions_is_tight(self):
+        # green pos 1 (12) vs green pos 2 (11) → margin 1/24 ≈ 0.042
+        s1, s2 = guessgame_score_matchup(self._row(6, 7), self._row(5, 7))
+        assert 0.5 < s1 < 0.6 and 0.4 < s2 < 0.5
+        assert self._approx(s1 + s2, 1.0)
+
+    def test_both_green_far_apart_is_wider(self):
+        # green pos 1 (12) vs green pos 6 (7) → margin 5/24 ≈ 0.208
+        s1, s2 = guessgame_score_matchup(self._row(6, 7), self._row(1, 7))
+        assert s1 > 0.7 and s2 < 0.3
+
+    def test_green_beats_yellow_decisively(self):
+        # green pos 6 (7) vs yellow pos 1 (3) → margin 4/24 ≈ 0.167
+        s1, s2 = guessgame_score_matchup(self._row(1, 7), self._row(0, 1))
+        assert s1 > 0.6 and s2 < 0.4
+
+    def test_yellow_beats_all_red_modestly(self):
+        # yellow pos 1 (3) vs all red (0) → margin 3/24 = 0.125
+        s1, s2 = guessgame_score_matchup(self._row(0, 1), self._row(0, 7))
+        assert 0.6 < s1 < 0.7 and 0.3 < s2 < 0.4
 
     def test_identical_results_tie(self):
         s1, s2 = guessgame_score_matchup(self._row(4, 2), self._row(4, 2))
         assert s1 == 0.5 and s2 == 0.5
 
-    def test_both_no_green_tiebreak_by_yellow(self):
-        # Both no green (acc=0), yellow_pos=2 vs 5
-        s1, s2 = guessgame_score_matchup(self._row(0, 2), self._row(0, 5))
-        assert s1 == 1.0 and s2 == 0.0
+    def test_all_red_vs_all_red_tie(self):
+        s1, s2 = guessgame_score_matchup(self._row(0, 7), self._row(0, 7))
+        assert s1 == 0.5 and s2 == 0.5
+
+    def test_same_green_same_score_regardless_of_yellow(self):
+        # Both green pos 3 — yellow shouldn't matter
+        s1, s2 = guessgame_score_matchup(self._row(4, 1), self._row(4, 5))
+        assert s1 == 0.5 and s2 == 0.5
+
+    def test_points_always_sum_to_one(self):
+        """Every matchup should distribute exactly 1.0 total points."""
+        cases = [
+            (self._row(6, 7), self._row(0, 7)),  # green 1 vs all red
+            (self._row(3, 7), self._row(1, 7)),   # green 4 vs green 6
+            (self._row(0, 2), self._row(0, 5)),    # yellow 2 vs yellow 5
+            (self._row(5, 7), self._row(0, 3)),    # green 2 vs yellow 3
+        ]
+        for r1, r2 in cases:
+            s1, s2 = guessgame_score_matchup(r1, r2)
+            assert self._approx(s1 + s2, 1.0), f'{s1} + {s2} != 1.0'
+
+    def test_green_vs_red_better_than_yellow_vs_red(self):
+        """Green win over all-red should award more points than yellow win over all-red."""
+        green_s1, _ = guessgame_score_matchup(self._row(1, 7), self._row(0, 7))
+        yellow_s1, _ = guessgame_score_matchup(self._row(0, 1), self._row(0, 7))
+        assert green_s1 > yellow_s1
 
     def test_missing_is_loss(self):
         """When missing_is_loss=True, absent player loses that puzzle."""

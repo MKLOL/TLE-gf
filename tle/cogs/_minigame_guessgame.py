@@ -88,15 +88,38 @@ def parse_guessgame_message(content):
     return results
 
 
+def _result_strength(row):
+    """Map a GuessTheGame result to a continuous strength score.
+
+    Green results (accuracy 1-6) map to 7.0-12.0, yellow-only results
+    map to 0.5-3.0, and all-red maps to 0.  The gap between the lowest
+    green (7.0) and the highest yellow (3.0) ensures green always
+    decisively beats yellow.
+    """
+    if row.accuracy > 0:
+        return 6.0 + row.accuracy          # 7.0 (green pos 6) to 12.0 (green pos 1)
+    if row.time_seconds < 7:
+        return (7 - row.time_seconds) * 0.5  # 0.5 (yellow pos 6) to 3.0 (yellow pos 1)
+    return 0.0                               # all red
+
+
+_MAX_STRENGTH = 12.0  # green at pos 1
+
+
 def guessgame_score_matchup(row1, row2):
-    """GuessGame scoring: earlier green wins; tiebreak by earlier yellow."""
-    a1, a2 = row1.accuracy, row2.accuracy  # higher = earlier green
-    if a1 != a2:
-        return (1.0, 0.0) if a1 > a2 else (0.0, 1.0)
-    t1, t2 = row1.time_seconds, row2.time_seconds  # lower = earlier yellow
-    if t1 != t2:
-        return (1.0, 0.0) if t1 < t2 else (0.0, 1.0)
-    return 0.5, 0.5
+    """Margin-based GuessGame scoring.
+
+    Each puzzle's 1.0 points are split based on the strength gap between
+    the two results.  Close green-vs-green matchups stay near 0.5/0.5;
+    green-vs-nothing yields a dominant win; yellow gets modest credit
+    over all-red.
+    """
+    s1 = _result_strength(row1)
+    s2 = _result_strength(row2)
+    if s1 == s2:
+        return 0.5, 0.5
+    margin = (s1 - s2) / (2 * _MAX_STRENGTH)
+    return (0.5 + margin, 0.5 - margin)
 
 
 def guessgame_is_eligible_winner(row):
