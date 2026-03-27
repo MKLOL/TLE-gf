@@ -58,7 +58,11 @@ _commands_mod.Cog = _StubCog
 _commands_mod.has_role = lambda role: (lambda f: f)
 _commands_mod.has_any_role = lambda *roles: (lambda f: f)
 _commands_mod.command = lambda **kw: (lambda f: f)
+_commands_mod.Converter = type('Converter', (), {})
 _commands_mod.MemberConverter = type('MemberConverter', (), {'__call__': lambda self, *a, **kw: None})
+_commands_mod.TextChannelConverter = type('TextChannelConverter', (), {'convert': lambda self, *a, **kw: None})
+_commands_mod.ThreadConverter = type('ThreadConverter', (), {'convert': lambda self, *a, **kw: None})
+_commands_mod.BadArgument = type('BadArgument', (Exception,), {})
 
 class _StubGroupResult:
     """Fake return value of @commands.group() — supports chained .command() and .group()."""

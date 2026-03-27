@@ -1,7 +1,6 @@
 import asyncio
 import datetime as dt
 import logging
-from typing import Union
 
 import discord
 from discord.ext import commands
@@ -27,6 +26,35 @@ _IMPORT_RATE_DELAY = 0.5
 
 class MinigameCogError(commands.CommandError):
     pass
+
+
+class ChannelOrThread(commands.Converter):
+    """Converter that finds text channels, threads, and archived threads.
+
+    discord.py's built-in converters only search the guild cache, so
+    archived threads (not in cache) can't be found by name or ID.
+    This falls back to bot.fetch_channel() for IDs and mentions.
+    """
+
+    async def convert(self, ctx, argument):
+        # Try the built-in converters first (handles mentions, cached channels/threads)
+        for converter in (commands.TextChannelConverter, commands.ThreadConverter):
+            try:
+                return await converter().convert(ctx, argument)
+            except commands.BadArgument:
+                continue
+
+        # Fall back to fetch_channel for raw IDs (handles archived threads)
+        try:
+            channel_id = int(argument.strip('<#>'))
+        except ValueError:
+            raise commands.BadArgument(f'Channel or thread "{argument}" not found.')
+        try:
+            return await ctx.bot.fetch_channel(channel_id)
+        except discord.NotFound:
+            raise commands.BadArgument(f'Channel or thread "{argument}" not found.')
+        except discord.Forbidden:
+            raise commands.BadArgument(f'I don\'t have access to channel "{argument}".')
 
 
 def _safe_member_name(member):
@@ -644,7 +672,7 @@ class Minigames(commands.Cog):
 
     @akari_import.command(name='start', brief='Rebuild imported history')
     @commands.has_role(constants.TLE_ADMIN)
-    async def akari_import_start(self, ctx, channel: Union[discord.TextChannel, discord.Thread] = None):
+    async def akari_import_start(self, ctx, channel: ChannelOrThread = None):
         await self._cmd_import_start(ctx, AKARI_GAME, channel)
 
     @akari_import.command(name='status', brief='Show import status')
@@ -718,7 +746,7 @@ class Minigames(commands.Cog):
 
     @gg_import.command(name='start', brief='Rebuild imported history')
     @commands.has_role(constants.TLE_ADMIN)
-    async def gg_import_start(self, ctx, channel: Union[discord.TextChannel, discord.Thread] = None):
+    async def gg_import_start(self, ctx, channel: ChannelOrThread = None):
         await self._cmd_import_start(ctx, GUESSGAME_GAME, channel)
 
     @gg_import.command(name='status', brief='Show import status')
