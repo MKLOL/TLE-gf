@@ -147,6 +147,8 @@ class Minigames(commands.Cog):
         if game is None:
             return
         try:
+            # Update raw content so future reparse uses the edited version
+            cf_common.user_db.update_raw_message(after.id, after.content)
             # Delete all existing live results for this message, then re-ingest.
             # Handles the case where an edit removes some results from a multi-result message.
             cf_common.user_db.delete_minigame_result(after.id)
@@ -165,6 +167,7 @@ class Minigames(commands.Cog):
         try:
             cf_common.user_db.delete_minigame_result(payload.message_id)
             cf_common.user_db.delete_imported_minigame_result(payload.message_id)
+            cf_common.user_db.delete_raw_message(payload.message_id)
         except Exception:
             logger.error('Error handling message delete %s', payload.message_id, exc_info=True)
 
@@ -205,9 +208,14 @@ class Minigames(commands.Cog):
 
             embed_fn = discord_common.embed_success if state == 'done' else discord_common.embed_alert
             await reply_message.reply(embed=embed_fn('\n'.join(lines)))
-        except Exception:
+        except BaseException:
             logger.warning('Failed to send import completion reply for guild=%s game=%s',
                            guild_id, game.name, exc_info=True)
+            # Clean up KVS key even on CancelledError
+            try:
+                cf_common.user_db.kvs_delete(kvs_key)
+            except Exception:
+                pass
 
     async def _run_import(self, guild_id, channel_id, game):
         key = (guild_id, game.name)

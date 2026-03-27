@@ -213,6 +213,21 @@ class MinigameDbMixin:
         if commit:
             self.conn.commit()
 
+    def update_raw_message(self, message_id, raw_content):
+        self.conn.execute(
+            'UPDATE minigame_raw_message SET raw_content = ? WHERE message_id = ?',
+            (str(raw_content), str(message_id))
+        )
+        self.conn.commit()
+
+    def delete_raw_message(self, message_id):
+        rc = self.conn.execute(
+            'DELETE FROM minigame_raw_message WHERE message_id = ?',
+            (str(message_id),)
+        ).rowcount
+        self.conn.commit()
+        return rc
+
     def get_raw_messages_for_guild(self, guild_id):
         return self.conn.execute(
             'SELECT * FROM minigame_raw_message WHERE guild_id = ? ORDER BY CAST(message_id AS INTEGER)',
