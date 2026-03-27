@@ -111,4 +111,5 @@ GUESSGAME_GAME = GameDef(
     parse=parse_guessgame_message,
     score_matchup=guessgame_score_matchup,
     is_eligible_winner=guessgame_is_eligible_winner,
+    missing_is_loss=True,
 )

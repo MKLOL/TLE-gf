@@ -729,6 +729,27 @@ class TestGuessGameScoring:
         s1, s2 = guessgame_score_matchup(self._row(0, 2), self._row(0, 5))
         assert s1 == 1.0 and s2 == 0.0
 
+    def test_missing_is_loss(self):
+        """When missing_is_loss=True, absent player loses that puzzle."""
+        Row = namedtuple('Row', 'message_id user_id puzzle_date puzzle_number is_perfect time_seconds accuracy')
+        rows1 = [
+            Row('1', '10', '2026-03-26', 1412, 1, 7, 6),
+            Row('3', '10', '2026-03-27', 1413, 0, 7, 3),
+        ]
+        rows2 = [
+            Row('2', '20', '2026-03-26', 1412, 0, 2, 4),
+        ]
+        # Without missing_is_loss: only puzzle 1412 compared
+        stats = compute_vs(rows1, rows2, guessgame_score_matchup, missing_is_loss=False)
+        assert stats['common_count'] == 1
+        assert stats['wins1'] == 1
+
+        # With missing_is_loss: puzzle 1413 counts as loss for player 2
+        stats = compute_vs(rows1, rows2, guessgame_score_matchup, missing_is_loss=True)
+        assert stats['common_count'] == 2
+        assert stats['wins1'] == 2
+        assert stats['wins2'] == 0
+
     def test_compute_vs_with_guessgame_scoring(self):
         Row = namedtuple('Row', 'message_id user_id puzzle_date puzzle_number is_perfect time_seconds accuracy')
         rows1 = [Row('1', '10', '2026-03-26', 1412, 1, 7, 6)]   # perfect (green pos 1)

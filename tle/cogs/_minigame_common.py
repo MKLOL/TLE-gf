@@ -37,6 +37,7 @@ class GameDef:
     # Optional per-game overrides (defaults = Akari-style scoring)
     score_matchup: Optional[Callable] = None
     is_eligible_winner: Optional[Callable] = None
+    missing_is_loss: bool = False  # if True, missing puzzle = automatic loss in VS
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -100,18 +101,29 @@ def default_is_eligible_winner(row):
     return bool(row.is_perfect)
 
 
-def compute_vs(rows1, rows2, score_fn=None):
+def compute_vs(rows1, rows2, score_fn=None, missing_is_loss=False):
     if score_fn is None:
         score_fn = default_score_matchup
     best1 = pick_best_results(rows1)
     best2 = pick_best_results(rows2)
-    common = sorted(set(best1) & set(best2))
+
+    if missing_is_loss:
+        puzzles = sorted(set(best1) | set(best2))
+    else:
+        puzzles = sorted(set(best1) & set(best2))
 
     score1, score2 = 0.0, 0.0
     wins1, wins2, ties = 0, 0, 0
 
-    for key in common:
-        pts1, pts2 = score_fn(best1[key], best2[key])
+    for key in puzzles:
+        r1 = best1.get(key)
+        r2 = best2.get(key)
+        if r1 is None:
+            pts1, pts2 = 0.0, 1.0
+        elif r2 is None:
+            pts1, pts2 = 1.0, 0.0
+        else:
+            pts1, pts2 = score_fn(r1, r2)
         score1 += pts1
         score2 += pts2
         if pts1 == pts2:
@@ -122,7 +134,7 @@ def compute_vs(rows1, rows2, score_fn=None):
             wins2 += 1
 
     return {
-        'common_count': len(common),
+        'common_count': len(puzzles),
         'score1': score1, 'score2': score2,
         'wins1': wins1, 'wins2': wins2, 'ties': ties,
     }

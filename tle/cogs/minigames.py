@@ -275,16 +275,16 @@ class Minigames(commands.Cog):
             ctx.guild.id, game.name, member1.id, dlo, dhi, plo, phi)
         rows2 = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member2.id, dlo, dhi, plo, phi)
-        stats = compute_vs(rows1, rows2, game.score_matchup)
+        stats = compute_vs(rows1, rows2, game.score_matchup, game.missing_is_loss)
         if stats['common_count'] == 0:
             raise MinigameCogError(
-                f'These users have no common {game.display_name} puzzles yet.')
+                f'These users have no {game.display_name} puzzles to compare.')
 
         description = '\n'.join([
             f'`{_safe_member_name(member1)}`: **{stats["score1"]:g}** points, **{stats["wins1"]}** wins',
             f'`{_safe_member_name(member2)}`: **{stats["score2"]:g}** points, **{stats["wins2"]}** wins',
             f'Ties: **{stats["ties"]}**',
-            f'Common puzzles: **{stats["common_count"]}**',
+            f'Puzzles: **{stats["common_count"]}**',
         ])
         embed = discord.Embed(
             title=f'{game.display_name} Head to Head',
