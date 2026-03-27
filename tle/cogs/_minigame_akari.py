@@ -6,12 +6,21 @@ import re
 from tle.cogs._minigame_common import ParsedResult, GameDef
 
 
-_FIRST_LINE_RE = re.compile(r'^Daily\s+Akari\b.*?\b(\d+)\s*$', re.IGNORECASE)
+_HEADER_RE = re.compile(r'^Daily\s+Akari\b', re.IGNORECASE)
+_HEADER_NUM_RE = re.compile(r'\b(\d+)\s*$')
 _DATE_RE = re.compile(
     r'(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|[A-Za-z]+ \d{1,2}, \d{4})'
 )
 _TIME_RE = re.compile(r'🕓\s*([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)')
 _ACCURACY_RE = re.compile(r'(\d{1,3})%')
+
+# Known anchor for inferring puzzle numbers from dates (1 puzzle per day).
+_ANCHOR_DATE = dt.date(2026, 3, 27)
+_ANCHOR_NUMBER = 446
+
+
+def _puzzle_number_from_date(puzzle_date):
+    return _ANCHOR_NUMBER + (puzzle_date - _ANCHOR_DATE).days
 
 
 def _parse_time(time_text):
@@ -49,16 +58,16 @@ def parse_akari_message(content):
     if len(lines) < 3:
         return []
 
-    # Search for the "Daily Akari <number>" header anywhere in the message
+    # Search for the "Daily Akari" header anywhere in the message
     # (users may prepend a URL, commentary, or invisible Unicode chars).
-    first_match = None
     header_idx = None
+    header_line = None
     for i, line in enumerate(lines):
-        first_match = _FIRST_LINE_RE.match(line)
-        if first_match is not None:
+        if _HEADER_RE.match(line):
             header_idx = i
+            header_line = line
             break
-    if first_match is None:
+    if header_idx is None:
         return []
 
     # Need at least a date line and a stats line after the header
@@ -96,8 +105,11 @@ def parse_akari_message(content):
     except ValueError:
         return []
 
+    num_match = _HEADER_NUM_RE.search(header_line)
+    puzzle_number = int(num_match.group(1)) if num_match else _puzzle_number_from_date(puzzle_date)
+
     return [ParsedResult(
-        puzzle_number=int(first_match.group(1)),
+        puzzle_number=puzzle_number,
         puzzle_date=puzzle_date,
         accuracy=accuracy,
         time_seconds=time_seconds,

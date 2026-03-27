@@ -170,6 +170,34 @@ class TestParsing:
         assert len(results) == 1
         assert results[0].puzzle_number == 445
 
+    def test_parse_no_puzzle_number(self):
+        """Older share text omits the puzzle number; infer from the date."""
+        results = parse_akari_message(
+            'Daily Akari 😊\n'
+            '✅Fri Oct 17, 2025✅\n'
+            '🌟 Perfect!   🕓 4:17'
+        )
+        assert len(results) == 1
+        parsed = results[0]
+        assert parsed.puzzle_date == dt.date(2025, 10, 17)
+        # 446 + (2025-10-17 - 2026-03-27).days = 446 + (-161) = 285
+        assert parsed.puzzle_number == 285
+        assert parsed.is_perfect is True
+        assert parsed.time_seconds == 257
+
+    def test_parse_no_number_partial(self):
+        results = parse_akari_message(
+            'Daily Akari\n'
+            '✅2025-12-25✅\n'
+            '🎯 90%   🕓 3:00'
+        )
+        assert len(results) == 1
+        parsed = results[0]
+        # 446 + (2025-12-25 - 2026-03-27).days = 446 + (-92) = 354
+        assert parsed.puzzle_number == 354
+        assert parsed.accuracy == 90
+        assert parsed.is_perfect is False
+
     def test_parse_rejects_invalid_message(self):
         assert parse_akari_message('hello world') == []
 
