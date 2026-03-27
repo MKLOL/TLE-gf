@@ -382,3 +382,23 @@ def upgrade_1_14_0(db):
     ''')
     db.commit()
     logger.info('1.14.0: Daily Akari tables created')
+
+
+@registry.register('1.15.0', 'Daily Akari import tables')
+def upgrade_1_15_0(db):
+    logger.info('1.15.0: Creating Daily Akari import tables')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS dailyakari_import_result (
+            message_id     TEXT PRIMARY KEY,
+            guild_id       TEXT NOT NULL,
+            channel_id     TEXT NOT NULL,
+            user_id        TEXT NOT NULL,
+            puzzle_number  INTEGER NOT NULL,
+            puzzle_date    TEXT NOT NULL,
+            accuracy       INTEGER NOT NULL,
+            time_seconds   INTEGER NOT NULL,
+            is_perfect     INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    db.commit()
+    logger.info('1.15.0: Daily Akari import tables created')

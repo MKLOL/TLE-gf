@@ -300,6 +300,19 @@ class UserDbConn(DailyAkariDbMixin, StarboardDbMixin, MigrationDbMixin):
                 is_perfect     INTEGER NOT NULL DEFAULT 0
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS dailyakari_import_result (
+                message_id     TEXT PRIMARY KEY,
+                guild_id       TEXT NOT NULL,
+                channel_id     TEXT NOT NULL,
+                user_id        TEXT NOT NULL,
+                puzzle_number  INTEGER NOT NULL,
+                puzzle_date    TEXT NOT NULL,
+                accuracy       INTEGER NOT NULL,
+                time_seconds   INTEGER NOT NULL,
+                is_perfect     INTEGER NOT NULL DEFAULT 0
+            )
+        ''')
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS rankup ('
             'guild_id     TEXT PRIMARY KEY,'

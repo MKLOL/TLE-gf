@@ -1,6 +1,8 @@
+import asyncio
 import datetime as dt
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import discord
@@ -9,10 +11,13 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import paginator
 
 logger = logging.getLogger(__name__)
 
 _FEATURE_FLAG = 'dailyakari'
+_TIMELINE_KEYWORDS = {'week', 'month', 'year'}
+_NO_TIME_BOUND = 10 ** 10
 
 _FIRST_LINE_RE = re.compile(r'^Daily\s+Akari\b.*?\b(\d+)\s*$', re.IGNORECASE)
 _DATE_RE = re.compile(
@@ -220,9 +225,65 @@ def _compute_dailyakari_streak(rows):
     return streak
 
 
+def _parse_dailyakari_args(args):
+    dlo = 0
+    dhi = _NO_TIME_BOUND
+
+    for arg in args:
+        lower = arg.lower()
+        if lower in _TIMELINE_KEYWORDS:
+            now = dt.datetime.now()
+            if lower == 'week':
+                monday = now - dt.timedelta(days=now.weekday())
+                dlo = time.mktime(monday.replace(hour=0, minute=0, second=0, microsecond=0).timetuple())
+            elif lower == 'month':
+                dlo = time.mktime(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+            elif lower == 'year':
+                dlo = time.mktime(now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+        elif lower.startswith('d>='):
+            dlo = max(dlo, cf_common.parse_date(arg[3:]))
+        elif lower.startswith('d<'):
+            dhi = min(dhi, cf_common.parse_date(arg[2:]))
+        else:
+            raise DailyAkariCogError(f'Unrecognized Daily Akari filter: `{arg}`.')
+    return dlo, dhi
+
+
+def _compute_dailyakari_top(rows):
+    wins_by_user = {}
+    best_by_user_puzzle = {}
+    for row in rows:
+        key = (str(row.user_id), _result_key(row))
+        prev = best_by_user_puzzle.get(key)
+        if prev is None or _result_sort_key(row) > _result_sort_key(prev):
+            best_by_user_puzzle[key] = row
+
+    best_per_puzzle = {}
+    for (_, puzzle_key), row in best_by_user_puzzle.items():
+        if not row.is_perfect:
+            continue
+        entry = best_per_puzzle.get(puzzle_key)
+        if entry is None or row.time_seconds < entry['time_seconds']:
+            best_per_puzzle[puzzle_key] = {
+                'time_seconds': row.time_seconds,
+                'rows': [row],
+            }
+        elif row.time_seconds == entry['time_seconds']:
+            entry['rows'].append(row)
+
+    for entry in best_per_puzzle.values():
+        for row in entry['rows']:
+            user_id = str(row.user_id)
+            wins_by_user[user_id] = wins_by_user.get(user_id, 0) + 1
+
+    return sorted(wins_by_user.items(), key=lambda item: (-item[1], int(item[0])))
+
+
 class DailyAkari(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._import_tasks = {}
+        self._import_status = {}
 
     @staticmethod
     def _is_enabled(guild_id):
@@ -232,6 +293,58 @@ class DailyAkari(commands.Cog):
     def _is_configured_channel(message):
         channel_id = cf_common.user_db.get_dailyakari_channel(message.guild.id)
         return channel_id is not None and str(message.channel.id) == str(channel_id)
+
+    @staticmethod
+    def _require_enabled(guild_id):
+        if cf_common.user_db.get_guild_config(guild_id, _FEATURE_FLAG) != '1':
+            raise DailyAkariCogError(
+                'Daily Akari is not enabled. An admin can enable it with `;meta config enable dailyakari`.'
+            )
+
+    async def _resolve_member(self, ctx, member_text):
+        try:
+            return await commands.MemberConverter().convert(ctx, member_text)
+        except commands.BadArgument as exc:
+            raise DailyAkariCogError(str(exc)) from exc
+
+    async def _run_import(self, guild_id, channel_id):
+        status = self._import_status[guild_id]
+        try:
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                raise DailyAkariCogError(f'Channel `{channel_id}` is not available.')
+
+            async for message in channel.history(oldest_first=True, limit=None):
+                if message.author.bot or not message.content:
+                    continue
+                parsed = _parse_dailyakari_message(message.content)
+                if parsed is None:
+                    continue
+
+                cf_common.user_db.save_imported_dailyakari_result(
+                    message.id,
+                    guild_id,
+                    channel_id,
+                    message.author.id,
+                    parsed.puzzle_number,
+                    parsed.puzzle_date.isoformat(),
+                    parsed.accuracy,
+                    parsed.time_seconds,
+                    parsed.is_perfect,
+                )
+                status['done'] += 1
+                status['latest_message_id'] = str(message.id)
+
+            status['state'] = 'done'
+        except asyncio.CancelledError:
+            status['state'] = 'cancelled'
+            raise
+        except Exception as exc:
+            status['state'] = 'failed'
+            status['error'] = str(exc)
+            logger.error('DailyAkari import failed: guild=%s channel=%s', guild_id, channel_id, exc_info=True)
+        finally:
+            self._import_tasks.pop(guild_id, None)
 
     async def _ingest_message(self, message):
         if message.guild is None or message.author.bot or cf_common.user_db is None:
@@ -298,12 +411,14 @@ class DailyAkari(commands.Cog):
                 await self._ingest_message(after)
                 return
         cf_common.user_db.delete_dailyakari_result(after.id)
+        cf_common.user_db.delete_imported_dailyakari_result(after.id)
 
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload):
         if payload.guild_id is None or cf_common.user_db is None:
             return
         cf_common.user_db.delete_dailyakari_result(payload.message_id)
+        cf_common.user_db.delete_imported_dailyakari_result(payload.message_id)
 
     @commands.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
                     invoke_without_command=True)
@@ -352,16 +467,14 @@ class DailyAkari(commands.Cog):
             lines.append('Enable it with `;meta config enable dailyakari`.')
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
 
-    @akari.command(brief='Head-to-head Daily Akari comparison', usage='@user1 @user2')
-    async def vs(self, ctx, member1: discord.Member, member2: discord.Member):
-        if not self._is_enabled(ctx.guild.id):
-            raise DailyAkariCogError(
-                'Daily Akari is not enabled. An admin can enable it with `;meta config enable dailyakari`.'
-            )
-
+    @akari.command(brief='Head-to-head Daily Akari comparison',
+                   usage='@user1 @user2 [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def vs(self, ctx, member1: discord.Member, member2: discord.Member, *args):
+        self._require_enabled(ctx.guild.id)
+        dlo, dhi = _parse_dailyakari_args(args)
         rows1, rows2 = (
-            cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member1.id),
-            cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member2.id),
+            cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member1.id, dlo, dhi),
+            cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member2.id, dlo, dhi),
         )
         stats = _compute_dailyakari_vs(rows1, rows2)
         if stats['common_count'] == 0:
@@ -380,15 +493,22 @@ class DailyAkari(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @akari.command(brief='Show current Daily Akari perfect streak', usage='[@user]')
-    async def streak(self, ctx, member: discord.Member = None):
-        if not self._is_enabled(ctx.guild.id):
-            raise DailyAkariCogError(
-                'Daily Akari is not enabled. An admin can enable it with `;meta config enable dailyakari`.'
-            )
+    @akari.command(brief='Show current Daily Akari perfect streak',
+                   usage='[@user] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def streak(self, ctx, *args):
+        self._require_enabled(ctx.guild.id)
 
-        member = member or ctx.author
-        rows = cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member.id)
+        filter_args = list(args)
+        member = ctx.author
+        if filter_args:
+            try:
+                member = await self._resolve_member(ctx, filter_args[0])
+                filter_args = filter_args[1:]
+            except DailyAkariCogError:
+                member = ctx.author
+
+        dlo, dhi = _parse_dailyakari_args(filter_args)
+        rows = cf_common.user_db.get_dailyakari_results_for_user(ctx.guild.id, member.id, dlo, dhi)
         streak = _compute_dailyakari_streak(rows)
         if not rows:
             raise DailyAkariCogError(f'No Daily Akari results found for {member.mention}.')
@@ -405,6 +525,111 @@ class DailyAkari(commands.Cog):
             color=discord_common.random_cf_color(),
         )
         await ctx.send(embed=embed)
+
+    @akari.command(brief='Show Daily Akari winners leaderboard',
+                   usage='[week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def top(self, ctx, *args):
+        self._require_enabled(ctx.guild.id)
+        dlo, dhi = _parse_dailyakari_args(args)
+        rows = cf_common.user_db.get_dailyakari_results_for_guild(ctx.guild.id, dlo, dhi)
+        winners = _compute_dailyakari_top(rows)
+        if not winners:
+            raise DailyAkariCogError('No Daily Akari winners found for this range.')
+
+        pages = []
+        per_page = 10
+        for page_idx, chunk in enumerate(paginator.chunkify(winners, per_page)):
+            lines = []
+            for i, (user_id, wins) in enumerate(chunk):
+                rank = page_idx * per_page + i + 1
+                member = ctx.guild.get_member(int(user_id))
+                mention = member.mention if member else f'<@{user_id}>'
+                lines.append(f'**#{rank}** {mention} — **{wins}** wins')
+            embed = discord.Embed(
+                title='Daily Akari Winners',
+                description='\n'.join(lines),
+                color=discord_common.random_cf_color(),
+            )
+            pages.append((None, embed))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id,
+        )
+
+    @akari.group(name='import', brief='Manage imported Daily Akari history', invoke_without_command=True)
+    @commands.has_role(constants.TLE_ADMIN)
+    async def import_group(self, ctx):
+        await ctx.send_help(ctx.command)
+
+    @import_group.command(name='start', brief='Rebuild imported Daily Akari history')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def import_start(self, ctx, channel: discord.TextChannel = None):
+        if ctx.guild.id in self._import_tasks:
+            task = self._import_tasks[ctx.guild.id]
+            if not task.done():
+                raise DailyAkariCogError('A Daily Akari import is already running.')
+
+        configured_channel_id = cf_common.user_db.get_dailyakari_channel(ctx.guild.id)
+        if channel is None and configured_channel_id is not None:
+            channel = ctx.guild.get_channel(int(configured_channel_id))
+        channel = channel or ctx.channel
+
+        deleted = cf_common.user_db.clear_imported_dailyakari_results(ctx.guild.id)
+        self._import_status[ctx.guild.id] = {
+            'state': 'running',
+            'channel_id': channel.id,
+            'done': 0,
+            'error': None,
+            'latest_message_id': None,
+            'cleared': deleted,
+            'started_at': dt.datetime.now(),
+        }
+        task = asyncio.create_task(self._run_import(ctx.guild.id, channel.id))
+        self._import_tasks[ctx.guild.id] = task
+
+        await ctx.send(embed=discord_common.embed_success(
+            f'Daily Akari import started for {channel.mention}. Cleared {deleted} imported row(s) first.'
+        ))
+
+    @import_group.command(name='status', brief='Show Daily Akari import status')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def import_status(self, ctx):
+        status = self._import_status.get(ctx.guild.id)
+        if status is None:
+            raise DailyAkariCogError('No Daily Akari import has been started.')
+
+        lines = [
+            f'state: `{status["state"]}`',
+            f'channel: <#{status["channel_id"]}>',
+            f'imported rows: **{status["done"]}**',
+        ]
+        if status['latest_message_id'] is not None:
+            lines.append(f'latest message: `{status["latest_message_id"]}`')
+        if status['error']:
+            lines.append(f'error: `{status["error"]}`')
+        await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
+
+    @import_group.command(name='cancel', brief='Cancel a running Daily Akari import')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def import_cancel(self, ctx):
+        task = self._import_tasks.get(ctx.guild.id)
+        if task is None or task.done():
+            raise DailyAkariCogError('No Daily Akari import is currently running.')
+        task.cancel()
+        await ctx.send(embed=discord_common.embed_success('Daily Akari import cancelled.'))
+
+    @import_group.command(name='clear', brief='Delete imported Daily Akari history for this guild')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def import_clear(self, ctx):
+        task = self._import_tasks.get(ctx.guild.id)
+        if task is not None and not task.done():
+            raise DailyAkariCogError('Cancel the running Daily Akari import before clearing it.')
+
+        deleted = cf_common.user_db.clear_imported_dailyakari_results(ctx.guild.id)
+        self._import_status.pop(ctx.guild.id, None)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Deleted {deleted} imported Daily Akari row(s).'
+        ))
 
     @discord_common.send_error_if(DailyAkariCogError)
     async def cog_command_error(self, ctx, error):

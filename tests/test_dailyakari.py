@@ -8,14 +8,16 @@ import pytest
 
 from tle.cogs.dailyakari import (
     DailyAkari,
+    _compute_dailyakari_top,
     _compute_dailyakari_streak,
     _compute_dailyakari_vs,
+    _parse_dailyakari_args,
     _parse_dailyakari_message,
 )
 from tle.util import codeforces_common as cf_common
 from tle.util.db.dailyakari_db import DailyAkariDbMixin
 from tle.util.db.user_db_conn import namedtuple_factory
-from tle.util.db.user_db_upgrades import upgrade_1_14_0
+from tle.util.db.user_db_upgrades import upgrade_1_14_0, upgrade_1_15_0
 
 
 class FakeDailyAkariDb(DailyAkariDbMixin):
@@ -30,6 +32,19 @@ class FakeDailyAkariDb(DailyAkariDbMixin):
         ''')
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS dailyakari_result (
+                message_id     TEXT PRIMARY KEY,
+                guild_id       TEXT NOT NULL,
+                channel_id     TEXT NOT NULL,
+                user_id        TEXT NOT NULL,
+                puzzle_number  INTEGER NOT NULL,
+                puzzle_date    TEXT NOT NULL,
+                accuracy       INTEGER NOT NULL,
+                time_seconds   INTEGER NOT NULL,
+                is_perfect     INTEGER NOT NULL DEFAULT 0
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS dailyakari_import_result (
                 message_id     TEXT PRIMARY KEY,
                 guild_id       TEXT NOT NULL,
                 channel_id     TEXT NOT NULL,
@@ -174,6 +189,23 @@ class TestComputation:
         ]
         assert _compute_dailyakari_streak(rows) == 1
 
+    def test_top_counts_shared_fastest_perfect_wins(self):
+        rows = [
+            _row(1, 10, '2026-03-26', True, 80, number=445),
+            _row(2, 20, '2026-03-26', True, 80, number=445),
+            _row(3, 30, '2026-03-26', True, 90, number=445),
+            _row(4, 10, '2026-03-27', True, 75, number=446),
+            _row(5, 20, '2026-03-27', False, 60, 99, 446),
+        ]
+        assert _compute_dailyakari_top(rows) == [('10', 2), ('20', 1)]
+
+
+class TestArgs:
+    def test_parse_dailyakari_date_filters(self):
+        dlo, dhi = _parse_dailyakari_args(('d>=26032026', 'd<28032026'))
+        assert dt.datetime.fromtimestamp(dlo).date() == dt.date(2026, 3, 26)
+        assert dt.datetime.fromtimestamp(dhi).date() == dt.date(2026, 3, 28)
+
 
 class TestDbMixin:
     def test_channel_crud(self, db):
@@ -204,10 +236,27 @@ class TestDbMixin:
         assert row is not None
         assert row.message_id == '1'
 
+    def test_imported_results_are_included_in_queries(self, db):
+        db.save_imported_dailyakari_result(10, 100, 200, 300, 445, '2026-03-26', 100, 89, True)
+        rows = db.get_dailyakari_results_for_user(100, 300)
+        assert len(rows) == 1
+        assert rows[0].message_id == '10'
+
+    def test_first_message_across_live_and_imported_wins(self, db):
+        db.save_dailyakari_result(20, 100, 200, 300, 445, '2026-03-26', 100, 60, True)
+        db.save_imported_dailyakari_result(10, 100, 200, 300, 445, '2026-03-26', 96, 50, False)
+        row = db.get_dailyakari_result_for_user_puzzle(100, 300, 445)
+        assert row is not None
+        assert row.message_id == '10'
+        rows = db.get_dailyakari_results_for_user(100, 300)
+        assert len(rows) == 1
+        assert rows[0].message_id == '10'
+
     def test_delete_result_for_user_puzzle(self, db):
         db.save_dailyakari_result(1, 100, 200, 300, 445, '2026-03-26', 100, 89, True)
+        db.save_imported_dailyakari_result(2, 100, 200, 300, 445, '2026-03-26', 100, 90, True)
         rc = db.delete_dailyakari_result_for_user_puzzle(100, 300, 445)
-        assert rc == 1
+        assert rc == 2
         assert db.get_dailyakari_result_for_user_puzzle(100, 300, 445) is None
 
 
@@ -299,4 +348,11 @@ class TestUpgrade:
         upgrade_1_14_0(conn)
         conn.execute('SELECT * FROM dailyakari_config').fetchall()
         conn.execute('SELECT * FROM dailyakari_result').fetchall()
+        conn.close()
+
+    def test_upgrade_1_15_0_creates_import_table(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_15_0(conn)
+        conn.execute('SELECT * FROM dailyakari_import_result').fetchall()
         conn.close()
