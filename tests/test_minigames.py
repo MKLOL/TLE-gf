@@ -215,6 +215,15 @@ class TestComputation:
         ]
         assert compute_top(rows) == [('10', 2), ('20', 1)]
 
+    def test_top_with_custom_is_eligible(self):
+        """compute_top with GuessGame-style eligibility: any green counts."""
+        rows = [
+            _row(1, 10, '2026-03-26', False, 7, accuracy=4, number=1412),  # has green
+            _row(2, 20, '2026-03-26', False, 7, accuracy=0, number=1412),  # no green
+        ]
+        result = compute_top(rows, is_eligible=lambda row: row.accuracy > 0)
+        assert result == [('10', 1)]
+
 
 class TestArgs:
     def test_parse_date_filters(self):
@@ -283,6 +292,27 @@ class TestDbMixin:
         rc = db.delete_minigame_result_for_user_puzzle(100, _GAME, 300, 445)
         assert rc == 2
         assert db.get_minigame_result_for_user_puzzle(100, _GAME, 300, 445) is None
+
+    def test_puzzle_number_filtering(self, db):
+        """plo/phi should filter results by puzzle_number at the DB level."""
+        db.save_minigame_result(1, 100, _GAME, 200, 300, 440, '2026-03-20', 100, 60, True, 'c')
+        db.save_minigame_result(2, 100, _GAME, 200, 300, 445, '2026-03-25', 100, 70, True, 'c')
+        db.save_minigame_result(3, 100, _GAME, 200, 300, 450, '2026-03-30', 100, 80, True, 'c')
+        rows = db.get_minigame_results_for_user(100, _GAME, 300, plo=445, phi=450)
+        assert len(rows) == 1
+        assert rows[0].puzzle_number == 445
+
+    def test_date_filtering(self, db):
+        """dlo/dhi should filter results by puzzle_date at the DB level."""
+        import time
+        db.save_minigame_result(1, 100, _GAME, 200, 300, 440, '2026-03-20', 100, 60, True, 'c')
+        db.save_minigame_result(2, 100, _GAME, 200, 300, 445, '2026-03-25', 100, 70, True, 'c')
+        db.save_minigame_result(3, 100, _GAME, 200, 300, 450, '2026-03-30', 100, 80, True, 'c')
+        dlo = time.mktime(dt.datetime(2026, 3, 24).timetuple())
+        dhi = time.mktime(dt.datetime(2026, 3, 26).timetuple())
+        rows = db.get_minigame_results_for_user(100, _GAME, 300, dlo=dlo, dhi=dhi)
+        assert len(rows) == 1
+        assert rows[0].puzzle_number == 445
 
     def test_raw_content_updated_on_replace(self, db):
         """INSERT OR REPLACE should update raw_content when re-saving same message_id."""
@@ -409,6 +439,74 @@ class TestCogIngest:
         asyncio.run(cog.on_message_edit(before, after))
         # Should not trigger any DB writes — no result to find or delete
         assert db.get_minigame_result(50) is None
+
+    def test_edit_removes_result_from_multi_result_message(self, db, monkeypatch):
+        """Editing a multi-result message to have fewer results should delete removed ones."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'guessgame', '1')
+        db.set_minigame_channel(1, 'guessgame', 10)
+
+        two_results = (
+            '<#123> #1407\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e9 \u2b1c \u2b1c\n'
+            'https://GuessThe.Game/p/1407\n\n'
+            '<#123> #1412\n'
+            '\U0001f3ae \U0001f7e9 \u2b1c \u2b1c \u2b1c \u2b1c \u2b1c\n'
+            'https://GuessThe.Game/p/1412'
+        )
+        one_result = (
+            '<#123> #1407\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e9 \u2b1c \u2b1c\n'
+            'https://GuessThe.Game/p/1407'
+        )
+
+        cog = Minigames(bot=None)
+        msg = _FakeMessage(500, 1, 10, 999, two_results)
+        asyncio.run(cog.on_message(msg))
+        assert len(db.get_minigame_results_for_user(1, 'guessgame', 999)) == 2
+
+        before = _FakeMessage(500, 1, 10, 999, two_results)
+        after = _FakeMessage(500, 1, 10, 999, one_result)
+        asyncio.run(cog.on_message_edit(before, after))
+        rows = db.get_minigame_results_for_user(1, 'guessgame', 999)
+        assert len(rows) == 1
+        assert rows[0].puzzle_number == 1407
+
+    def test_on_raw_message_delete_removes_results(self, db, monkeypatch):
+        """on_raw_message_delete should remove results from both tables."""
+        import types
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.save_minigame_result(500, 1, 'guessgame', 10, 999, 1407, '2026-03-26', 3, 7, 0, 'c')
+        db.save_imported_minigame_result(500, 1, 'guessgame', 10, 999, 1412, '2026-03-26', 6, 7, 1, 'c')
+
+        cog = Minigames(bot=None)
+        payload = types.SimpleNamespace(guild_id=1, message_id=500)
+        asyncio.run(cog.on_raw_message_delete(payload))
+
+        assert db.get_minigame_result(500) is None
+        rows = db.conn.execute(
+            'SELECT * FROM minigame_import_result WHERE message_id = ?', ('500',)
+        ).fetchall()
+        assert len(rows) == 0
+
+    def test_date_fallback_uses_message_created_at(self, db, monkeypatch):
+        """When parser returns puzzle_date=None, cog should use message.created_at."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'guessgame', '1')
+        db.set_minigame_channel(1, 'guessgame', 10)
+
+        content = (
+            '<#123> #1412\n'
+            '\U0001f3ae \U0001f7e9 \u2b1c \u2b1c \u2b1c \u2b1c \u2b1c\n'
+            'https://GuessThe.Game/p/1412'
+        )
+        cog = Minigames(bot=None)
+        msg = _FakeMessage(500, 1, 10, 999, content)
+        msg.created_at = dt.datetime(2025, 12, 25, tzinfo=dt.timezone.utc)
+        asyncio.run(cog.on_message(msg))
+
+        row = db.get_minigame_result(500)
+        assert row.puzzle_date == '2025-12-25'
 
 
 class TestCogSafety:
