@@ -15,9 +15,10 @@ from tle.cogs._minigame_common import (
     compute_streak,
     compute_top,
     parse_date_args,
+    resolve_scoring,
     strip_codeblock,
 )
-from tle.cogs._minigame_akari import parse_akari_message
+from tle.cogs._minigame_akari import AKARI_GAME, parse_akari_message
 from tle.cogs._minigame_guessgame import parse_guessgame_message, guessgame_score_matchup
 from tle.cogs.minigames import Minigames
 
@@ -285,6 +286,44 @@ class TestComputation:
         ]
         result = compute_top(rows, is_eligible=lambda row: row.accuracy > 0)
         assert result == [('10', 1)]
+
+    def test_resolve_scoring_uses_akari_raw_variant(self):
+        args, scoring_name, scoring = resolve_scoring(AKARI_GAME, ('week', 'raw'))
+        assert args == ('week',)
+        assert scoring_name == 'raw'
+        assert scoring.score_matchup is not None
+        assert scoring.is_eligible_winner is not None
+        assert scoring.best_result_sort_key is not None
+        assert scoring.winner_result_sort_key is not None
+
+    def test_akari_raw_vs_ignores_accuracy_and_uses_time(self):
+        _, _, scoring = resolve_scoring(AKARI_GAME, ('raw',))
+        stats = compute_vs(
+            [_row(1, 10, '2026-03-26', False, 60, 50, 445)],
+            [_row(2, 20, '2026-03-26', True, 90, 100, 445)],
+            score_fn=scoring.score_matchup,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+        )
+        assert stats['common_count'] == 1
+        assert stats['score1'] == 1.0
+        assert stats['score2'] == 0.0
+        assert stats['wins1'] == 1
+
+    def test_akari_raw_top_counts_fastest_time_even_if_not_perfect(self):
+        _, _, scoring = resolve_scoring(AKARI_GAME, ('raw',))
+        rows = [
+            _row(1, 10, '2026-03-26', False, 60, 50, 445),
+            _row(2, 20, '2026-03-26', True, 90, 100, 445),
+            _row(3, 10, '2026-03-27', False, 70, 80, 446),
+            _row(4, 20, '2026-03-27', True, 70, 100, 446),
+        ]
+        result = compute_top(
+            rows,
+            is_eligible=scoring.is_eligible_winner,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+            winner_result_sort_key_fn=scoring.winner_result_sort_key,
+        )
+        assert result == [('10', 2), ('20', 1)]
 
 
 class TestArgs:

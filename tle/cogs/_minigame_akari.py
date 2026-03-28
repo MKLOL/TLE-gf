@@ -3,7 +3,7 @@
 import datetime as dt
 import re
 
-from tle.cogs._minigame_common import ParsedResult, GameDef
+from tle.cogs._minigame_common import ParsedResult, GameDef, ScoringDef
 
 
 _HEADER_RE = re.compile(r'^Daily\s+Akari\b', re.IGNORECASE)
@@ -117,10 +117,42 @@ def parse_akari_message(content):
     )]
 
 
+def akari_raw_score_matchup(row1, row2):
+    """Raw-time scoring: faster result wins, accuracy ignored."""
+    if row1.time_seconds < row2.time_seconds:
+        return 1.0, 0.0
+    if row1.time_seconds > row2.time_seconds:
+        return 0.0, 1.0
+    return 0.5, 0.5
+
+
+def akari_raw_is_eligible_winner(_row):
+    return True
+
+
+def akari_raw_best_result_sort_key(row):
+    return (
+        -int(getattr(row, 'time_seconds', 0)),
+        -int(getattr(row, 'message_id', 0)),
+    )
+
+
+def akari_raw_winner_result_sort_key(row):
+    return (-int(getattr(row, 'time_seconds', 0)),)
+
+
 AKARI_GAME = GameDef(
     name='akari',
     display_name='Daily Akari',
     feature_flag='akari',
     parse=parse_akari_message,
     detect=_HEADER_RE,
+    scoring_variants={
+        'raw': ScoringDef(
+            score_matchup=akari_raw_score_matchup,
+            is_eligible_winner=akari_raw_is_eligible_winner,
+            best_result_sort_key=akari_raw_best_result_sort_key,
+            winner_result_sort_key=akari_raw_winner_result_sort_key,
+        ),
+    },
 )

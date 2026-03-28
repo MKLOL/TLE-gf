@@ -4,7 +4,7 @@ import datetime as dt
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from tle.util import codeforces_common as cf_common
 
@@ -38,6 +38,15 @@ class ParsedResult:
 
 
 @dataclass(frozen=True)
+class ScoringDef:
+    """Scoring/ranking behavior for a game command mode."""
+    score_matchup: Optional[Callable] = None
+    is_eligible_winner: Optional[Callable] = None
+    best_result_sort_key: Optional[Callable] = None
+    winner_result_sort_key: Optional[Callable] = None
+
+
+@dataclass(frozen=True)
 class GameDef:
     """Definition of a daily puzzle minigame.
 
@@ -54,7 +63,10 @@ class GameDef:
     # Optional per-game overrides (defaults = Akari-style scoring)
     score_matchup: Optional[Callable] = None
     is_eligible_winner: Optional[Callable] = None
+    best_result_sort_key: Optional[Callable] = None
+    winner_result_sort_key: Optional[Callable] = None
     missing_is_loss: bool = False  # if True, missing puzzle = automatic loss in VS
+    scoring_variants: Dict[str, ScoringDef] = field(default_factory=dict)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -78,12 +90,18 @@ def result_sort_key(row):
     )
 
 
-def pick_best_results(rows):
+def winner_result_sort_key(row):
+    return result_sort_key(row)[:3]
+
+
+def pick_best_results(rows, sort_key_fn=None):
+    if sort_key_fn is None:
+        sort_key_fn = result_sort_key
     best = {}
     for row in rows:
         key = result_key(row)
         prev = best.get(key)
-        if prev is None or result_sort_key(row) > result_sort_key(prev):
+        if prev is None or sort_key_fn(row) > sort_key_fn(prev):
             best[key] = row
     return best
 
@@ -118,11 +136,35 @@ def default_is_eligible_winner(row):
     return bool(row.is_perfect)
 
 
-def compute_vs(rows1, rows2, score_fn=None, missing_is_loss=False):
+def resolve_scoring(game, args):
+    """Split trailing scoring selector from ``args`` and resolve its config."""
+    variant = ScoringDef(
+        score_matchup=game.score_matchup,
+        is_eligible_winner=game.is_eligible_winner,
+        best_result_sort_key=game.best_result_sort_key,
+        winner_result_sort_key=game.winner_result_sort_key,
+    )
+    if args:
+        mode = args[-1].lower()
+        override = game.scoring_variants.get(mode)
+        if override is not None:
+            variant = ScoringDef(
+                score_matchup=override.score_matchup or variant.score_matchup,
+                is_eligible_winner=override.is_eligible_winner or variant.is_eligible_winner,
+                best_result_sort_key=override.best_result_sort_key or variant.best_result_sort_key,
+                winner_result_sort_key=override.winner_result_sort_key or variant.winner_result_sort_key,
+            )
+            return args[:-1], mode, variant
+    return args, None, variant
+
+
+def compute_vs(rows1, rows2, score_fn=None, missing_is_loss=False, best_result_sort_key_fn=None):
     if score_fn is None:
         score_fn = default_score_matchup
-    best1 = pick_best_results(rows1)
-    best2 = pick_best_results(rows2)
+    if best_result_sort_key_fn is None:
+        best_result_sort_key_fn = result_sort_key
+    best1 = pick_best_results(rows1, sort_key_fn=best_result_sort_key_fn)
+    best2 = pick_best_results(rows2, sort_key_fn=best_result_sort_key_fn)
 
     if missing_is_loss:
         puzzles = sorted(set(best1) | set(best2))
@@ -179,14 +221,18 @@ def compute_streak(rows):
     return streak
 
 
-def compute_top(rows, is_eligible=None):
+def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None, winner_result_sort_key_fn=None):
     if is_eligible is None:
         is_eligible = default_is_eligible_winner
+    if best_result_sort_key_fn is None:
+        best_result_sort_key_fn = result_sort_key
+    if winner_result_sort_key_fn is None:
+        winner_result_sort_key_fn = winner_result_sort_key
     best_by_user_puzzle = {}
     for row in rows:
         key = (str(row.user_id), result_key(row))
         prev = best_by_user_puzzle.get(key)
-        if prev is None or result_sort_key(row) > result_sort_key(prev):
+        if prev is None or best_result_sort_key_fn(row) > best_result_sort_key_fn(prev):
             best_by_user_puzzle[key] = row
 
     best_per_puzzle = {}
@@ -194,8 +240,7 @@ def compute_top(rows, is_eligible=None):
         if not is_eligible(row):
             continue
         entry = best_per_puzzle.get(puzzle_key)
-        # Compare without message_id tiebreaker so tied results both count as winners
-        row_key = result_sort_key(row)[:3]
+        row_key = winner_result_sort_key_fn(row)
         if entry is None or row_key > entry['sort_key']:
             best_per_puzzle[puzzle_key] = {'sort_key': row_key, 'rows': [row]}
         elif row_key == entry['sort_key']:
