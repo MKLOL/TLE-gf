@@ -627,8 +627,8 @@ class Handles(commands.Cog):
             rows.append(_GudgitterRow(str(user_id), handle, rating, score))
         return rows
 
-    @commands.command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def monthlygudgitters(self, ctx, *args):
+    @commands.command(brief="Show all gudgitters of the month", aliases=["monthlygitgudders_all", "monthlygga", "monthlygitbadders_all", "mgga"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def monthlygudgitters_all(self, ctx, *args):
         """Show the list of users of gitgud with their scores."""
         
         # Calculate time range of given month (d=) or current month
@@ -689,8 +689,8 @@ class Handles(commands.Cog):
         rankings = self._make_gudgitter_image_rankings(ctx, rows)
         await ctx.send(file=get_gudgitters_image(rankings))
 
-    @commands.command(brief="Show monthly gudgitters as an image", usage="[div1|div2|div3] [d=mmyyyy] [+all]")
-    async def mggimg(self, ctx, *args):
+    @commands.command(brief="Show gudgitters of the month", aliases=["monthlygitgudders","monthlygg","monthlygitbadders", "mgg"], usage="[div1|div2|div3] [d=mmyyyy] [+all]")
+    async def monthlygitgudders(self, ctx, *args):
         """Show the top monthly gitgudders as a color-coded image."""
         now = datetime.datetime.now()
         for arg in args:
