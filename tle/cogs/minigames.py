@@ -12,7 +12,7 @@ from tle.util import paginator
 
 from tle.cogs._minigame_common import (
     compute_vs, compute_streak, compute_top, pick_best_results,
-    format_duration, parse_date_args, strip_codeblock,
+    format_duration, parse_date_args, resolve_scoring, strip_codeblock,
 )
 from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
@@ -366,6 +366,7 @@ class Minigames(commands.Cog):
     async def _cmd_vs(self, ctx, game, member1, member2, *args):
         self._require_enabled(ctx.guild.id, game)
         try:
+            args, scoring_name, scoring = resolve_scoring(game, args)
             dlo, dhi, plo, phi = parse_date_args(args)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
@@ -374,11 +375,17 @@ class Minigames(commands.Cog):
             ctx.guild.id, game.name, member1.id, dlo, dhi, plo, phi)
         rows2 = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member2.id, dlo, dhi, plo, phi)
-        stats = compute_vs(rows1, rows2, game.score_matchup, game.missing_is_loss)
+        stats = compute_vs(
+            rows1, rows2,
+            score_fn=scoring.score_matchup,
+            missing_is_loss=game.missing_is_loss,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+        )
         if stats['common_count'] == 0:
             raise MinigameCogError(
                 f'These users have no {game.display_name} puzzles to compare.')
 
+        title_suffix = ' (Raw)' if scoring_name else ''
         description = '\n'.join([
             f'`{_safe_member_name(member1)}`: **{stats["score1"]:g}** points, **{stats["wins1"]}** wins',
             f'`{_safe_member_name(member2)}`: **{stats["score2"]:g}** points, **{stats["wins2"]}** wins',
@@ -386,7 +393,7 @@ class Minigames(commands.Cog):
             f'Puzzles: **{stats["common_count"]}**',
         ])
         embed = discord.Embed(
-            title=f'{game.display_name} Head to Head',
+            title=f'{game.display_name} Head to Head{title_suffix}',
             description=description,
             color=discord_common.random_cf_color(),
         )
@@ -431,17 +438,24 @@ class Minigames(commands.Cog):
     async def _cmd_top(self, ctx, game, *args):
         self._require_enabled(ctx.guild.id, game)
         try:
+            args, scoring_name, scoring = resolve_scoring(game, args)
             dlo, dhi, plo, phi = parse_date_args(args)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
 
         rows = cf_common.user_db.get_minigame_results_for_guild(
             ctx.guild.id, game.name, dlo, dhi, plo, phi)
-        winners = compute_top(rows, game.is_eligible_winner)
+        winners = compute_top(
+            rows,
+            is_eligible=scoring.is_eligible_winner,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+            winner_result_sort_key_fn=scoring.winner_result_sort_key,
+        )
         if not winners:
             raise MinigameCogError(
                 f'No {game.display_name} winners found for this range.')
 
+        title_suffix = ' (Raw)' if scoring_name else ''
         pages = []
         per_page = 10
         for page_idx, chunk in enumerate(paginator.chunkify(winners, per_page)):
@@ -451,7 +465,7 @@ class Minigames(commands.Cog):
                 name = _safe_user_name(ctx.guild, user_id)
                 lines.append(f'**#{rank}** `{name}` — **{wins}** wins')
             embed = discord.Embed(
-                title=f'{game.display_name} Winners',
+                title=f'{game.display_name} Winners{title_suffix}',
                 description='\n'.join(lines),
                 color=discord_common.random_cf_color(),
             )
@@ -644,7 +658,7 @@ class Minigames(commands.Cog):
         await self._cmd_show(ctx, AKARI_GAME)
 
     @akari.command(name='vs', brief='Head-to-head comparison',
-                   usage='@user1 @user2 [filters...]')
+                   usage='@user1 @user2 [filters...] [raw]')
     async def akari_vs(self, ctx, member1: discord.Member, member2: discord.Member, *args):
         await self._cmd_vs(ctx, AKARI_GAME, member1, member2, *args)
 
@@ -654,7 +668,7 @@ class Minigames(commands.Cog):
         await self._cmd_streak(ctx, AKARI_GAME, *args)
 
     @akari.command(name='top', brief='Show winners leaderboard',
-                   usage='[filters...]')
+                   usage='[filters...] [raw]')
     async def akari_top(self, ctx, *args):
         await self._cmd_top(ctx, AKARI_GAME, *args)
 
