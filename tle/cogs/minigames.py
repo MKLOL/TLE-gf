@@ -11,8 +11,9 @@ from tle.util import discord_common
 from tle.util import paginator
 
 from tle.cogs._minigame_common import (
-    compute_vs, compute_streak, compute_top, pick_best_results,
-    format_duration, parse_date_args, resolve_scoring, strip_codeblock,
+    compute_vs, compute_streak, compute_longest_streak, compute_top,
+    pick_best_results, format_duration, parse_date_args, resolve_scoring,
+    strip_codeblock,
 )
 from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
@@ -418,6 +419,7 @@ class Minigames(commands.Cog):
         rows = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member.id, dlo, dhi, plo, phi)
         streak = compute_streak(rows)
+        longest = compute_longest_streak(rows)
         if not rows:
             raise MinigameCogError(
                 f'No {game.display_name} results found for `{_safe_member_name(member)}`.')
@@ -429,6 +431,7 @@ class Minigames(commands.Cog):
             title=f'{game.display_name} Streak',
             description='\n'.join([
                 f'`{_safe_member_name(member)}`: **{streak}** consecutive perfect day(s)',
+                f'Longest streak: **{longest}** day(s)',
                 f'Latest result: **{latest_status}** in **{format_duration(latest_row.time_seconds)}**',
             ]),
             color=discord_common.random_cf_color(),

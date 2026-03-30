@@ -221,6 +221,34 @@ def compute_streak(rows):
     return streak
 
 
+def compute_longest_streak(rows):
+    """Return the longest run of consecutive perfect days across all data."""
+    best_by_day = {}
+    for row in rows:
+        puzzle_date = normalize_puzzle_date(row.puzzle_date)
+        prev = best_by_day.get(puzzle_date)
+        if prev is None or result_sort_key(row) > result_sort_key(prev):
+            best_by_day[puzzle_date] = row
+
+    if not best_by_day:
+        return 0
+
+    longest = 0
+    current = 0
+    prev_day = None
+    for day in sorted(best_by_day):
+        row = best_by_day[day]
+        if row.is_perfect and (prev_day is None or day == prev_day + dt.timedelta(days=1)):
+            current += 1
+        elif row.is_perfect:
+            current = 1
+        else:
+            current = 0
+        longest = max(longest, current)
+        prev_day = day
+    return longest
+
+
 def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None, winner_result_sort_key_fn=None):
     if is_eligible is None:
         is_eligible = default_is_eligible_winner

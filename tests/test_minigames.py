@@ -13,6 +13,7 @@ from tle.util.db.minigame_db import MinigameDbMixin
 from tle.cogs._minigame_common import (
     compute_vs,
     compute_streak,
+    compute_longest_streak,
     compute_top,
     parse_date_args,
     resolve_scoring,
@@ -267,6 +268,47 @@ class TestComputation:
             _row(3, 10, '2026-03-26', True, 80, number=445),
         ]
         assert compute_streak(rows) == 1
+
+    def test_longest_streak_spans_entire_history(self):
+        rows = [
+            _row(1, 10, '2026-03-20', True, 60, number=439),
+            _row(2, 10, '2026-03-21', True, 60, number=440),
+            _row(3, 10, '2026-03-22', True, 60, number=441),
+            _row(4, 10, '2026-03-23', False, 70, 96, 442),
+            _row(5, 10, '2026-03-24', True, 60, number=443),
+            _row(6, 10, '2026-03-25', True, 60, number=444),
+        ]
+        # Current streak is 2 (Mar 24-25), but longest is 3 (Mar 20-22)
+        assert compute_streak(rows) == 2
+        assert compute_longest_streak(rows) == 3
+
+    def test_longest_streak_gap_breaks_run(self):
+        rows = [
+            _row(1, 10, '2026-03-20', True, 60, number=439),
+            _row(2, 10, '2026-03-22', True, 60, number=441),
+            _row(3, 10, '2026-03-23', True, 60, number=442),
+        ]
+        # Gap on Mar 21 breaks it: longest is 2 (Mar 22-23)
+        assert compute_longest_streak(rows) == 2
+
+    def test_longest_streak_equals_current_when_all_perfect(self):
+        rows = [
+            _row(1, 10, '2026-03-24', True, 60, number=443),
+            _row(2, 10, '2026-03-25', True, 70, number=444),
+            _row(3, 10, '2026-03-26', True, 80, number=445),
+        ]
+        assert compute_longest_streak(rows) == 3
+        assert compute_streak(rows) == 3
+
+    def test_longest_streak_empty_rows(self):
+        assert compute_longest_streak([]) == 0
+
+    def test_longest_streak_no_perfects(self):
+        rows = [
+            _row(1, 10, '2026-03-24', False, 60, 90, 443),
+            _row(2, 10, '2026-03-25', False, 70, 85, 444),
+        ]
+        assert compute_longest_streak(rows) == 0
 
     def test_top_counts_shared_fastest_perfect_wins(self):
         rows = [
