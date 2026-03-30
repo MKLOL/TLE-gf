@@ -457,7 +457,8 @@ def upgrade_1_17_0(db):
             guild_id    TEXT NOT NULL,
             user_id     TEXT NOT NULL,
             text        TEXT NOT NULL,
-            created_at  REAL NOT NULL
+            created_at  REAL NOT NULL,
+            active      INTEGER NOT NULL DEFAULT 1
         )
     ''')
     db.execute('''
@@ -480,3 +481,14 @@ def upgrade_1_18_0(db):
     ''')
     db.commit()
     logger.info('1.18.0: greatday_signup table created')
+
+
+@registry.register('1.19.0', 'Add active column to complaint table for soft deletes')
+def upgrade_1_19_0(db):
+    logger.info('1.19.0: Adding active column to complaint table')
+    try:
+        db.execute('ALTER TABLE complaint ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
+    except Exception:
+        pass
+    db.commit()
+    logger.info('1.19.0: active column added to complaint table')

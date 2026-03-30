@@ -1689,53 +1689,55 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
         return cur.lastrowid
 
     def get_complaints(self, guild_id):
-        """Return all complaints for a guild, newest first."""
+        """Return all active complaints for a guild, newest first."""
         guild_id = str(guild_id)
         return self.conn.execute(
             'SELECT id, guild_id, user_id, text, created_at '
-            'FROM complaint WHERE guild_id = ? ORDER BY created_at DESC',
+            'FROM complaint WHERE guild_id = ? AND active = 1 ORDER BY created_at DESC',
             (guild_id,)
         ).fetchall()
 
     def get_complaint(self, complaint_id):
-        """Return a single complaint by id, or None."""
+        """Return a single active complaint by id, or None."""
         row = self.conn.execute(
             'SELECT id, guild_id, user_id, text, created_at '
-            'FROM complaint WHERE id = ?',
+            'FROM complaint WHERE id = ? AND active = 1',
             (complaint_id,)
         ).fetchone()
         return row
 
     def delete_complaint(self, complaint_id):
-        """Delete a complaint by id. Returns True if a row was deleted."""
+        """Soft-delete a complaint by id. Returns True if a row was deactivated."""
         cur = self.conn.execute(
-            'DELETE FROM complaint WHERE id = ?', (complaint_id,)
+            'UPDATE complaint SET active = 0 WHERE id = ? AND active = 1',
+            (complaint_id,)
         )
         self.conn.commit()
         return cur.rowcount > 0
 
     def delete_complaints(self, complaint_ids, guild_id):
-        """Delete multiple complaints by id, scoped to a guild.
+        """Soft-delete multiple complaints by id, scoped to a guild.
 
-        Returns the number of rows deleted.
+        Returns the number of rows deactivated.
         """
         if not complaint_ids:
             return 0
         guild_id = str(guild_id)
         placeholders = ','.join('?' for _ in complaint_ids)
         cur = self.conn.execute(
-            f'DELETE FROM complaint WHERE id IN ({placeholders}) AND guild_id = ?',
+            f'UPDATE complaint SET active = 0 '
+            f'WHERE id IN ({placeholders}) AND guild_id = ? AND active = 1',
             [*complaint_ids, guild_id]
         )
         self.conn.commit()
         return cur.rowcount
 
     def count_recent_complaints(self, guild_id, user_id, since):
-        """Count complaints by a user in a guild since a timestamp."""
+        """Count active complaints by a user in a guild since a timestamp."""
         guild_id, user_id = str(guild_id), str(user_id)
         row = self.conn.execute(
             'SELECT COUNT(*) AS cnt FROM complaint '
-            'WHERE guild_id = ? AND user_id = ? AND created_at >= ?',
+            'WHERE guild_id = ? AND user_id = ? AND created_at >= ? AND active = 1',
             (guild_id, user_id, since)
         ).fetchone()
         return row.cnt

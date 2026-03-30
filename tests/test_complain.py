@@ -19,7 +19,8 @@ class FakeComplainDb:
                 guild_id    TEXT NOT NULL,
                 user_id     TEXT NOT NULL,
                 text        TEXT NOT NULL,
-                created_at  REAL NOT NULL
+                created_at  REAL NOT NULL,
+                active      INTEGER NOT NULL DEFAULT 1
             )
         ''')
         self.conn.execute('''
@@ -99,10 +100,20 @@ class TestDeleteComplaint:
     def test_delete_existing(self, db):
         cid = db.add_complaint(GUILD, USER_A, 'to delete')
         assert db.delete_complaint(cid) is True
+        # Soft-deleted: not visible via get_complaint
         assert db.get_complaint(cid) is None
+        # But row still exists in the DB
+        row = db.conn.execute('SELECT active FROM complaint WHERE id = ?', (cid,)).fetchone()
+        assert row is not None
+        assert row[0] == 0
 
     def test_delete_nonexistent(self, db):
         assert db.delete_complaint(9999) is False
+
+    def test_delete_idempotent(self, db):
+        cid = db.add_complaint(GUILD, USER_A, 'once')
+        assert db.delete_complaint(cid) is True
+        assert db.delete_complaint(cid) is False
 
     def test_delete_preserves_others(self, db):
         id1 = db.add_complaint(GUILD, USER_A, 'keep')
@@ -157,6 +168,13 @@ class TestCountRecentComplaints:
         assert db.count_recent_complaints(GUILD, USER_A, since) == 2
         assert db.count_recent_complaints(GUILD, USER_B, since) == 1
 
+    def test_excludes_soft_deleted(self, db):
+        cid = db.add_complaint(GUILD, USER_A, 'will remove')
+        db.add_complaint(GUILD, USER_A, 'stays')
+        db.delete_complaint(cid)
+        since = time.time() - 10
+        assert db.count_recent_complaints(GUILD, USER_A, since) == 1
+
     def test_excludes_old(self, db):
         # Manually insert an old complaint
         old_time = time.time() - 99999
@@ -189,4 +207,50 @@ class TestUpgrade1170:
         from tle.util.db.user_db_upgrades import upgrade_1_17_0
         upgrade_1_17_0(conn)
         upgrade_1_17_0(conn)  # should not raise
+        conn.close()
+
+    def test_fresh_table_has_active_column(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import upgrade_1_17_0
+        upgrade_1_17_0(conn)
+        conn.execute(
+            "INSERT INTO complaint (guild_id, user_id, text, created_at) VALUES ('1','2','t',0)"
+        )
+        row = conn.execute('SELECT active FROM complaint').fetchone()
+        assert row[0] == 1
+        conn.close()
+
+
+class TestUpgrade1190:
+    def test_adds_active_column(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        # Create old schema without active column
+        conn.execute('''
+            CREATE TABLE complaint (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                text        TEXT NOT NULL,
+                created_at  REAL NOT NULL
+            )
+        ''')
+        conn.execute(
+            "INSERT INTO complaint (guild_id, user_id, text, created_at) VALUES ('1','2','t',0)"
+        )
+        conn.commit()
+        from tle.util.db.user_db_upgrades import upgrade_1_19_0
+        upgrade_1_19_0(conn)
+        row = conn.execute('SELECT active FROM complaint').fetchone()
+        assert row[0] == 1  # existing rows default to active
+        conn.close()
+
+    def test_idempotent(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import upgrade_1_17_0, upgrade_1_19_0
+        upgrade_1_17_0(conn)
+        upgrade_1_19_0(conn)  # already has active from fresh schema
+        upgrade_1_19_0(conn)  # should not raise
         conn.close()
