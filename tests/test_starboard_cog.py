@@ -218,6 +218,9 @@ class _FakeAttachment:
         self.filename = filename
         self.url = url
 
+    def is_spoiler(self):
+        return self.filename.startswith('SPOILER_')
+
     async def to_file(self):
         return f'File:{self.filename}'
 
@@ -295,6 +298,40 @@ class TestBuildStarboardMessage:
         content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
         main_embed = embeds[-1]
         assert main_embed.image_url == 'https://cdn.example.com/file'
+
+    def test_spoiler_image_not_embedded(self):
+        """Spoiler images must not be set_image'd — that strips the spoiler."""
+        att = _FakeAttachment('SPOILER_photo.png')
+        msg = _FakeMessage(attachments=[att])
+        content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        for embed in embeds:
+            assert embed.image_url is None
+
+    def test_spoiler_image_uploaded_as_file(self):
+        """Spoiler images are re-uploaded as file attachments to preserve the spoiler."""
+        att = _FakeAttachment('SPOILER_photo.png')
+        msg = _FakeMessage(attachments=[att])
+        content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        assert len(files) == 1
+        assert files[0] == 'File:SPOILER_photo.png'
+
+    def test_spoiler_image_author_in_content(self):
+        """Spoiler image messages put author in content like videos do."""
+        att = _FakeAttachment('SPOILER_photo.png')
+        msg = _FakeMessage(attachments=[att])
+        content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        assert 'TestUser' in content
+
+    def test_mixed_spoiler_and_normal_image(self):
+        """Normal images embed; spoiler images go to files."""
+        normal = _FakeAttachment('cat.jpg', url='https://cdn.example.com/cat.jpg')
+        spoiler = _FakeAttachment('SPOILER_secret.png', url='https://cdn.example.com/secret.png')
+        msg = _FakeMessage(attachments=[normal, spoiler])
+        content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        main_embed = embeds[-1]
+        assert main_embed.image_url == 'https://cdn.example.com/cat.jpg'
+        assert len(files) == 1
+        assert files[0] == 'File:SPOILER_secret.png'
 
     def test_video_as_file_attachment(self):
         """Videos are uploaded as file attachments for native playback."""

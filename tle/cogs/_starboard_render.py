@@ -103,11 +103,14 @@ async def build_starboard_message(message, emoji_str, count, color):
     image_url = None
     video_attachments = []
     audio_attachments = []
+    spoiler_image_attachments = []
     other_attachments = []
     for att in message.attachments:
         ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
         if ext in _IMAGE_EXTENSIONS:
-            if image_url is None:
+            if att.is_spoiler():
+                spoiler_image_attachments.append(att)
+            elif image_url is None:
                 image_url = att.url
         elif ext in _VIDEO_EXTENSIONS:
             video_attachments.append(att)
@@ -118,7 +121,8 @@ async def build_starboard_message(message, emoji_str, count, color):
 
     has_video = bool(video_attachments)
     has_audio = bool(audio_attachments)
-    has_media_files = has_video or has_audio
+    has_spoiler_image = bool(spoiler_image_attachments)
+    has_media_files = has_video or has_audio or has_spoiler_image
 
     # For video/audio messages, put author in the content header so it
     # appears above the player (file attachments render after content
@@ -129,7 +133,7 @@ async def build_starboard_message(message, emoji_str, count, color):
             f'{emoji_str} **{count}** \u00b7 **{safe_name}** '
             f'| {message.jump_url}'
         )
-        for att in video_attachments + audio_attachments:
+        for att in video_attachments + audio_attachments + spoiler_image_attachments:
             try:
                 files.append(await att.to_file())
             except Exception:
