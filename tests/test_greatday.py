@@ -263,6 +263,93 @@ class TestSendGreatDayIntegration:
         assert f'<@{USER_C}>' in msg
 
 
+class TestTargetDatetime:
+    """Test the _target_datetime helper."""
+
+    def test_returns_same_day_with_target_time(self):
+        from tle.cogs.greatday import _target_datetime
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 3, 30, 8, 30, 45, tzinfo=ZoneInfo('US/Eastern'))
+        target = _target_datetime(now, '10:00')
+        assert target.hour == 10
+        assert target.minute == 0
+        assert target.second == 0
+        assert target.day == 30
+
+    def test_seconds_until_positive_before_target(self):
+        from tle.cogs.greatday import _target_datetime
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 3, 30, 9, 55, 0, tzinfo=ZoneInfo('US/Eastern'))
+        target = _target_datetime(now, '10:00')
+        seconds = (target - now).total_seconds()
+        assert seconds == 300  # 5 minutes
+
+    def test_seconds_until_negative_after_target(self):
+        from tle.cogs.greatday import _target_datetime
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 3, 30, 10, 5, 0, tzinfo=ZoneInfo('US/Eastern'))
+        target = _target_datetime(now, '10:00')
+        seconds = (target - now).total_seconds()
+        assert seconds == -300  # 5 minutes past
+
+
+class TestPreciseSend:
+    """Test the precise timer logic."""
+
+    def test_precise_send_verifies_kvs_before_sending(self, db, monkeypatch):
+        """If ;greatday now was used while timer pending, precise send should skip."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        db.greatday_signup(GUILD, USER_A)
+        # Simulate ;greatday now already stamped today
+        db.kvs_set(f'greatday_last:{GUILD}', '2026-03-30')
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+
+        from tle.cogs.greatday import GreatDay
+        cog = GreatDay(bot=None)
+        # Run precise_send with 0 delay (fires immediately)
+        asyncio.run(cog._precise_send(guild, 0))
+        # Should not have sent — KVS says already done today
+        assert len(channel.sent) == 0
+
+    def test_precise_send_sends_when_not_yet_sent(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        db.greatday_signup(GUILD, USER_A)
+        # No KVS stamp — hasn't sent today
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+
+        from tle.cogs.greatday import GreatDay
+        cog = GreatDay(bot=None)
+        asyncio.run(cog._precise_send(guild, 0))
+        assert len(channel.sent) == 1
+        # Should have stamped KVS
+        today = db.kvs_get(f'greatday_last:{GUILD}')
+        assert today is not None
+
+    def test_precise_send_cleans_up_pending_timers(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        db.greatday_signup(GUILD, USER_A)
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+
+        from tle.cogs.greatday import GreatDay
+        cog = GreatDay(bot=None)
+        # Manually add to pending timers to verify cleanup
+        cog._pending_timers[guild.id] = 'placeholder'
+        asyncio.run(cog._precise_send(guild, 0))
+        assert guild.id not in cog._pending_timers
+
+
 class TestUpgrade:
     def test_upgrade_creates_table(self):
         conn = sqlite3.connect(':memory:')
