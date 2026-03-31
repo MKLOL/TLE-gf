@@ -599,6 +599,20 @@ class TestBuildStarboardMessage:
         assert len(embeds) == 2
         assert embeds[0].image_url == 'https://cdn.example.com/photo.png'
 
+    def test_reply_spoiler_image_not_embedded(self):
+        """Spoiler images in replied-to messages must not be set_image'd."""
+        ref_msg = _FakeMessage(
+            content='',
+            attachments=[_FakeAttachment('SPOILER_secret.png', url='https://cdn.example.com/secret.png')],
+        )
+        ref = _FakeReference(message_id=444, resolved=ref_msg)
+        msg = _FakeMessage(content='Replying', reference=ref)
+        content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        # Reply embed should exist (spoiler image is listed as an attachment field)
+        # but it must NOT have the image embedded
+        for embed in embeds:
+            assert embed.image_url is None
+
     def test_reply_embed_present_when_ref_has_only_video(self):
         """Reply embed should appear when ref_msg has only a video (shown as field)."""
         ref_msg = _FakeMessage(

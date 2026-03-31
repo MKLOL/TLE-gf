@@ -1129,8 +1129,11 @@ class Minigames(commands.Cog):
         return any(r.name == constants.TLE_ADMIN for r in interaction.user.roles)
 
     async def _slash_send_error(self, interaction, error):
-        await interaction.followup.send(
-            embed=discord_common.embed_alert(str(error)))
+        try:
+            await interaction.followup.send(
+                embed=discord_common.embed_alert(str(error)))
+        except Exception:
+            logger.warning('Failed to send slash error response', exc_info=True)
 
     @akari_slash.command(name='show', description='Show Daily Akari settings')
     async def slash_akari_show(self, interaction: discord.Interaction):
@@ -1139,6 +1142,9 @@ class Minigames(commands.Cog):
             await self._cmd_show(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='vs', description='Head-to-head comparison')
     @app_commands.describe(
@@ -1162,6 +1168,9 @@ class Minigames(commands.Cog):
                 _SlashCtx(interaction), AKARI_GAME, member1, member2, *args)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='streak', description='Show current perfect streak')
     @app_commands.describe(member='Player to check', timeframe='Time period filter')
@@ -1182,6 +1191,9 @@ class Minigames(commands.Cog):
             await self._cmd_streak(ctx, AKARI_GAME, *args)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='top', description='Show winners leaderboard')
     @app_commands.describe(timeframe='Time period filter', mode='Scoring mode')
@@ -1201,6 +1213,9 @@ class Minigames(commands.Cog):
             await self._cmd_top(_SlashCtx(interaction), AKARI_GAME, *args)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='stats', description='Show personal stats with graphs')
     @app_commands.describe(member='Player to check', timeframe='Time period filter')
@@ -1232,6 +1247,9 @@ class Minigames(commands.Cog):
             await self._cmd_here(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='clear', description='Clear the Daily Akari channel')
     async def slash_akari_clear(self, interaction: discord.Interaction):
@@ -1243,6 +1261,9 @@ class Minigames(commands.Cog):
             await self._cmd_clear(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='remove', description='Remove a user result')
     @app_commands.describe(member='Player', puzzle_id='Puzzle number')
@@ -1259,6 +1280,9 @@ class Minigames(commands.Cog):
                 _SlashCtx(interaction), AKARI_GAME, member, puzzle_id)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='reparse', description='Reparse all stored raw messages')
     async def slash_akari_reparse(self, interaction: discord.Interaction):
@@ -1270,6 +1294,9 @@ class Minigames(commands.Cog):
             await self._cmd_reparse(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='import-start', description='Rebuild imported history')
     @app_commands.describe(channel='Channel to import from')
@@ -1288,6 +1315,9 @@ class Minigames(commands.Cog):
             await self._cmd_import_start(ctx, AKARI_GAME, channel)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='import-status', description='Show import status')
     async def slash_akari_import_status(self, interaction: discord.Interaction):
@@ -1299,6 +1329,9 @@ class Minigames(commands.Cog):
             await self._cmd_import_status(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='import-cancel', description='Cancel a running import')
     async def slash_akari_import_cancel(self, interaction: discord.Interaction):
@@ -1310,6 +1343,9 @@ class Minigames(commands.Cog):
             await self._cmd_import_cancel(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @akari_slash.command(name='import-clear', description='Delete imported history')
     async def slash_akari_import_clear(self, interaction: discord.Interaction):
@@ -1321,6 +1357,9 @@ class Minigames(commands.Cog):
             await self._cmd_import_clear(_SlashCtx(interaction), AKARI_GAME)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     # ── Error handler ───────────────────────────────────────────────────
 

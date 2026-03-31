@@ -166,7 +166,9 @@ async def build_starboard_message(message, emoji_str, count, color):
             for att in ref_msg.attachments:
                 ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
                 if ext in _IMAGE_EXTENSIONS:
-                    if ref_image_url is None:
+                    if att.is_spoiler():
+                        ref_other_attachments.append(att)
+                    elif ref_image_url is None:
                         ref_image_url = att.url
                 elif ext in _VIDEO_EXTENSIONS:
                     ref_other_attachments.append(att)

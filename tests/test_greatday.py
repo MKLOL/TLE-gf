@@ -304,8 +304,12 @@ class TestPreciseSend:
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(GUILD, 'greatday_channel', '999')
         db.greatday_signup(GUILD, USER_A)
-        # Simulate ;greatday now already stamped today
-        db.kvs_set(f'greatday_last:{GUILD}', '2026-03-30')
+        # Simulate ;greatday now already stamped today (use real date
+        # since _precise_send computes today at runtime)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo('US/Eastern')).strftime('%Y-%m-%d')
+        db.kvs_set(f'greatday_last:{GUILD}', today)
 
         channel = _FakeChannel()
         guild = _FakeGuild(int(GUILD), channel)

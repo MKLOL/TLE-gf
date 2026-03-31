@@ -54,29 +54,36 @@ class GreatDay(commands.Cog):
         today = now.strftime('%Y-%m-%d')
 
         for guild in self.bot.guilds:
-            kvs_key = f'greatday_last:{guild.id}'
-            if cf_common.user_db.kvs_get(kvs_key) == today:
-                continue  # already sent today
+            try:
+                await self._check_guild(guild, now, today)
+            except Exception:
+                logger.warning('greatday check failed for guild=%s',
+                               guild.id, exc_info=True)
 
-            configured_time = cf_common.user_db.get_guild_config(
-                guild.id, 'greatday_time') or _DEFAULT_TIME
-            target = _target_datetime(now, configured_time)
-            seconds_until = (target - now).total_seconds()
+    async def _check_guild(self, guild, now, today):
+        kvs_key = f'greatday_last:{guild.id}'
+        if cf_common.user_db.kvs_get(kvs_key) == today:
+            return  # already sent today
 
-            if seconds_until <= 0:
-                # Past target time — send now (catches missed windows / restarts)
-                # but not if a precise timer is about to handle it
-                if guild.id in self._pending_timers and not self._pending_timers[guild.id].done():
-                    continue
-                if await self._send_greatday(guild):
-                    cf_common.user_db.kvs_set(kvs_key, today)
-            elif seconds_until <= _PRECISE_WINDOW:
-                # Within 5 minutes — schedule a precise async timer
-                if guild.id not in self._pending_timers or self._pending_timers[guild.id].done():
-                    logger.info('Scheduling precise greatday timer for guild=%s in %.0fs',
-                                guild.id, seconds_until)
-                    self._pending_timers[guild.id] = asyncio.create_task(
-                        self._precise_send(guild, seconds_until))
+        configured_time = cf_common.user_db.get_guild_config(
+            guild.id, 'greatday_time') or _DEFAULT_TIME
+        target = _target_datetime(now, configured_time)
+        seconds_until = (target - now).total_seconds()
+
+        if seconds_until <= 0:
+            # Past target time — send now (catches missed windows / restarts)
+            # but not if a precise timer is about to handle it
+            if guild.id in self._pending_timers and not self._pending_timers[guild.id].done():
+                return
+            if await self._send_greatday(guild):
+                cf_common.user_db.kvs_set(kvs_key, today)
+        elif seconds_until <= _PRECISE_WINDOW:
+            # Within 5 minutes — schedule a precise async timer
+            if guild.id not in self._pending_timers or self._pending_timers[guild.id].done():
+                logger.info('Scheduling precise greatday timer for guild=%s in %.0fs',
+                            guild.id, seconds_until)
+                self._pending_timers[guild.id] = asyncio.create_task(
+                    self._precise_send(guild, seconds_until))
 
     async def _precise_send(self, guild, delay):
         """Sleep for the exact remaining seconds, then verify and send."""
@@ -191,6 +198,8 @@ class GreatDay(commands.Cog):
             raise GreatDayCogError('No one has signed up yet.')
         sent = await self._send_greatday(ctx.guild)
         if sent:
+            today = datetime.now(ZoneInfo(_DEFAULT_TZ)).strftime('%Y-%m-%d')
+            cf_common.user_db.kvs_set(f'greatday_last:{ctx.guild.id}', today)
             await ctx.send(embed=discord_common.embed_success(
                 'Great day message sent!'))
         else:
