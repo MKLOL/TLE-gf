@@ -116,3 +116,6 @@ pip-wheel-metadata/
 
 # logs
 /logs
+
+# temp frames
+tmp_frames/
