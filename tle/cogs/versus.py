@@ -175,7 +175,7 @@ class Versus(commands.Cog):
                       usage='[+all] handle1 handle2 [handle3 ...]')
     async def versus(self, ctx, *args: str):
         """Show head-to-head contest win counts among the given users.
-        Use ! prefix for Discord users (e.g. !username), otherwise treated as CF handle.
+        Use ! prefix for Discord users (e.g. !username), -c to force CF handle (e.g. -ctourist).
         Use +all to only count contests where every listed user participated."""
         (strict,), handles = cf_common.filter_flags(args, ['+all'])
 

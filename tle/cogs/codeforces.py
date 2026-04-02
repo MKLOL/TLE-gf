@@ -203,6 +203,7 @@ class Codeforces(commands.Cog):
         All submission types are included by default (practice, contest, etc.)
         Use +rated to show only contests that were actually rated for the user
         (excludes edu rounds and other contests that were unrated for them).
+        Prefix -c to force a Codeforces handle (e.g. -ctourist).
         """
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
         filt = cf_common.SubFilter(False)
