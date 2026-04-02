@@ -296,7 +296,7 @@ class TestBuildResultsEmbed:
     def test_default_formula_label(self):
         options = [(0, 'A'), (1, 'B')]
         result = _build_results_embed('Q?', options, {0: 1500}, 1)
-        assert _FORMULA_LABELS['sum'] in result.description
+        assert _FORMULA_LABELS['exp'] in result.description
 
 
 class TestBuildPollEmbedFormula:
@@ -332,9 +332,9 @@ class TestBuildPollEmbedFormula:
         embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='sum')
         assert f'Scoring: {_FORMULA_LABELS["sum"]}' in embed.description
 
-    def test_default_formula_is_sum(self):
+    def test_default_formula_is_exp(self):
         embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0)
-        assert _FORMULA_LABELS['sum'] in embed.description
+        assert _FORMULA_LABELS['exp'] in embed.description
 
 
 class TestRpollConstants:

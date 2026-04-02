@@ -161,7 +161,7 @@ def _compute_totals_map(poll_id, formula):
 
 
 def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None,
-                      expires_at=None, closed=False, formula='sum', color=None):
+                      expires_at=None, closed=False, formula='exp', color=None):
     """Build the embed for a rating poll.
 
     Args:
@@ -225,7 +225,7 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
     return embed
 
 
-def _build_results_embed(question, options, totals_map, vote_count, formula='sum'):
+def _build_results_embed(question, options, totals_map, vote_count, formula='exp'):
     """Build a compact embed for the poll expiry reply."""
     grand_total = sum(totals_map.get(idx, 0) for idx, _ in options)
     parts = []
@@ -498,22 +498,17 @@ class Rpoll(commands.Cog):
     @commands.command(brief='Create a rating-weighted poll')
     async def rpoll(self, ctx, *, args: str):
         """Create a poll where votes are weighted by Codeforces rating.
+        Vote for multiple options, click again to un-vote. No CF handle = 0.
 
-        Usage: ;rpoll "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +anon "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +2h "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +exp "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +team "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +osu "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +gg "What's the best approach?" BFS,DFS,Dijkstra
-               ;rpoll +mgg "What's the best approach?" BFS,DFS,Dijkstra
+        Example: ;rpoll +anon +2h "Best approach?" BFS,DFS,Dijkstra
 
-        Each voter's CF rating is added to their chosen option(s).
-        Users without a linked CF handle count as 0.
-        You can vote for multiple options. Click again to un-vote.
-        Use +anon to hide who voted for what.
-        Duration: +Nm (minutes), +Nh (hours), +Nd (days). Default: 24h.
-        Scoring: +sum (default), +exp (`2^(rating/400) * 100`), +team (team Elo), +osu (0.67 decay), +gg, or +mgg.
+        Flags: +anon (hide voters), +Nm/+Nh/+Nd (duration, default 24h).
+        Scoring (default +exp):
+          +exp: exponential `2^(rating/400) * 100`
+          +sum: sum of ratings
+          +team: team Elo (solo rating with 50% win vs all)
+          +osu: top vote full, then 0.67x decay
+          +gg / +mgg: all-time / monthly gitgud score
         """
         args = args.strip()
         # Normalize smart/curly quotes (common on macOS) to straight quotes
@@ -521,7 +516,7 @@ class Rpoll(commands.Cog):
         args = args.replace('\u2018', "'").replace('\u2019', "'")
         anonymous = False
         duration = _DEFAULT_DURATION
-        formula = 'sum'
+        formula = 'exp'
 
         # Parse flags: +anon, +duration, +formula (in any order, before the question)
         while args.startswith('+'):
