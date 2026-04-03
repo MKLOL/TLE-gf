@@ -276,6 +276,96 @@ def _build_vc_rows(rating_history, dlo, dhi, get_vc_info):
     return rows
 
 
+def _estimate_perf_from_cache(contest_id, virtual_rank):
+    """Estimate performance by finding the closest-ranked official contestant in cache.
+
+    Returns estimated performance or None if no cached data.
+    """
+    changes = cf_common.cache2.rating_changes_cache.get_rating_changes_for_contest(contest_id)
+    if not changes:
+        return None
+    # Sort by rank (should already be, but be safe)
+    changes.sort(key=lambda c: c.rank)
+    # Binary search for closest rank
+    lo, hi = 0, len(changes) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if changes[mid].rank < virtual_rank:
+            lo = mid + 1
+        else:
+            hi = mid
+    # Check neighbors for closest
+    best = changes[lo]
+    if lo > 0 and abs(changes[lo - 1].rank - virtual_rank) < abs(best.rank - virtual_rank):
+        best = changes[lo - 1]
+    return best.oldRating + 4 * (best.newRating - best.oldRating)
+
+
+async def _build_cfvc_rows(handle):
+    """Build performance rows for CF virtual participations (not TLE VCs).
+
+    Returns (rows, missing_count) where missing_count is the number of contests
+    with no cached rating data.
+    """
+    submissions = await cf.user.status(handle=handle)
+    virtual_cids = set()
+    for sub in submissions:
+        if sub.author.participantType == 'VIRTUAL':
+            cid = sub.contestId
+            if cid is not None and cid < cf.GYM_ID_THRESHOLD:
+                virtual_cids.add(cid)
+
+    if not virtual_cids:
+        return [], 0
+
+    rows = []
+    missing = 0
+    for cid in sorted(virtual_cids):
+        try:
+            contest_, _problems, ranklist = await cf.contest.standings(
+                contest_id=cid, handles=[handle], show_unofficial=True)
+        except Exception:
+            missing += 1
+            continue
+
+        virtual_row = None
+        for row in ranklist:
+            if row.party.participantType == 'VIRTUAL':
+                virtual_row = row
+                break
+        if virtual_row is None:
+            missing += 1
+            continue
+
+        perf = _estimate_perf_from_cache(cid, virtual_row.rank)
+        if perf is None:
+            missing += 1
+            continue
+
+        rows.append({
+            'idx': len(rows) + 1,
+            'contest': _truncate_name(contest_.name),
+            'rank': virtual_row.rank,
+            'old': None,
+            'new': None,
+            'delta': None,
+            'perf': perf,
+        })
+
+    return rows, missing
+
+
+def _format_cfvc_table(rows):
+    """Format CF virtual contest rows (rank + perf only, no rating columns)."""
+    style = table.Style('{:>}  {:<}  {:>}  {:>}')
+    t = table.Table(style)
+    t += table.Header('#', 'Contest', 'Rank', 'Perf')
+    t += table.Line()
+    for row in rows:
+        t += table.Data(row['idx'], row['contest'], row['rank'], row['perf'])
+    return str(t)
+
+
 def _format_perftable(rows):
     """Format performance rows into a string table."""
     has_rank = any(r['rank'] is not None for r in rows)
@@ -1212,18 +1302,23 @@ class Graphs(commands.Cog):
 
     @plot.command(brief='Show performance table for rated contests',
                   aliases=['ptable'],
-                  usage='[+data] [+vc] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                  usage='[+data] [+vc] [+cfvc] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def perftable(self, ctx, *args: str):
         """Show a table of contest performances.
 
         By default shows rated contest performances from Codeforces.
-        Use +vc to show virtual contest performances instead (accepts @mentions).
+        Use +vc to show TLE virtual contest performances (accepts @mentions).
+        Use +cfvc to show Codeforces virtual participations (rank + estimated perf).
         Use +data for a plain-text dump (uploaded as file if too long).
         Prefix -c to force a Codeforces handle (e.g. -ctourist)."""
 
-        (data, vc), args = cf_common.filter_flags(args, ['+data', '+vc'])
+        (data, vc, cfvc), args = cf_common.filter_flags(args, ['+data', '+vc', '+cfvc'])
         filt = cf_common.SubFilter()
         args = filt.parse(args)
+
+        if cfvc:
+            await self._perftable_cfvc(ctx, args, data)
+            return
 
         if vc:
             rows = await self._perftable_vc(ctx, args, filt)
@@ -1248,6 +1343,44 @@ class Graphs(commands.Cog):
             for k, chunk in enumerate(paginator.chunkify(rows, _PER_PAGE)):
                 table_str = _format_perftable(chunk)
                 embed = discord_common.cf_color_embed(description=f'```\n{table_str}\n```')
+                pages.append((title, embed))
+            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
+                               set_pagenum_footers=True, author_id=ctx.author.id)
+
+    async def _perftable_cfvc(self, ctx, args, data):
+        """Fetch CF virtual participation performances."""
+        handles = args or ('!' + str(ctx.author.id),)
+        handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=1)
+        handle = handles[0]
+
+        await ctx.send(f'Fetching virtual participations for `{handle}`, this may take a moment...')
+        rows, missing = await _build_cfvc_rows(handle)
+
+        if not rows:
+            raise GraphCogError(f'No CF virtual participations found for `{handle}`.')
+
+        warning = '⚠ VC perf is estimated from closest-ranked official contestant.'
+        if missing:
+            warning += f' {missing} contest(s) skipped (no cached data).'
+
+        if data:
+            table_str = _format_cfvc_table(rows)
+            content = f'{warning}\n```\n{table_str}\n```'
+            if len(content) > 1900:
+                await ctx.send(warning)
+                await ctx.send(
+                    file=discord.File(io.StringIO(table_str), filename='vc_performance.txt')
+                )
+            else:
+                await ctx.send(content)
+        else:
+            title = 'CF Virtual Performance'
+            _PER_PAGE = 10
+            pages = []
+            for k, chunk in enumerate(paginator.chunkify(rows, _PER_PAGE)):
+                table_str = _format_cfvc_table(chunk)
+                desc = f'{warning}\n```\n{table_str}\n```'
+                embed = discord_common.cf_color_embed(description=desc)
                 pages.append((title, embed))
             paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
                                set_pagenum_footers=True, author_id=ctx.author.id)

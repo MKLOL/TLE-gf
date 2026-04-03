@@ -1,12 +1,15 @@
 """Tests for the perftable pure functions: _build_rated_rows, _build_vc_rows,
-_format_perftable, and _truncate_name."""
+_format_perftable, _format_cfvc_table, _estimate_perf_from_cache, and _truncate_name."""
 import pytest
 from collections import namedtuple
+from unittest.mock import patch, MagicMock
 
 from tle.cogs.graphs import (
     _build_rated_rows,
     _build_vc_rows,
     _format_perftable,
+    _format_cfvc_table,
+    _estimate_perf_from_cache,
     _truncate_name,
     _CONTEST_NAME_MAX,
 )
@@ -300,3 +303,133 @@ class TestFormatPerftable:
         result = _format_perftable(rows)
         lines = result.strip().split('\n')
         assert len(lines) == 52  # header + separator + 50 data rows
+
+
+# =====================================================================
+# _estimate_perf_from_cache
+# =====================================================================
+
+class TestEstimatePerfFromCache:
+    def _make_changes(self, entries):
+        """entries: list of (rank, oldRating, newRating)"""
+        return [RatingChange(1, 'C', f'user{i}', rank, 1000, old, new)
+                for i, (rank, old, new) in enumerate(entries)]
+
+    def test_exact_rank_match(self):
+        changes = self._make_changes([
+            (10, 1500, 1550),
+            (20, 1600, 1580),
+            (30, 1700, 1720),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            perf = _estimate_perf_from_cache(1, 20)
+        # rank 20: old=1600, new=1580, perf = 1600 + 4*(-20) = 1520
+        assert perf == 1520
+
+    def test_closest_rank_lower(self):
+        changes = self._make_changes([
+            (10, 1500, 1550),
+            (30, 1700, 1720),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            # rank 15 is closer to 10 than 30
+            perf = _estimate_perf_from_cache(1, 15)
+        # rank 10: old=1500, new=1550, perf = 1500 + 4*50 = 1700
+        assert perf == 1700
+
+    def test_closest_rank_higher(self):
+        changes = self._make_changes([
+            (10, 1500, 1550),
+            (30, 1700, 1720),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            # rank 25 is closer to 30 than 10
+            perf = _estimate_perf_from_cache(1, 25)
+        # rank 30: old=1700, new=1720, perf = 1700 + 4*20 = 1780
+        assert perf == 1780
+
+    def test_empty_cache_returns_none(self):
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = []
+            perf = _estimate_perf_from_cache(1, 100)
+        assert perf is None
+
+    def test_single_contestant(self):
+        changes = self._make_changes([(50, 1800, 1850)])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            perf = _estimate_perf_from_cache(1, 999)
+        # Only one option: old=1800, new=1850, perf = 1800 + 4*50 = 2000
+        assert perf == 2000
+
+    def test_rank_before_first(self):
+        changes = self._make_changes([
+            (10, 1500, 1600),
+            (20, 1400, 1380),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            perf = _estimate_perf_from_cache(1, 1)
+        # rank 1, closest is rank 10: perf = 1500 + 4*100 = 1900
+        assert perf == 1900
+
+    def test_rank_after_last(self):
+        changes = self._make_changes([
+            (10, 1500, 1600),
+            (20, 1400, 1380),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            perf = _estimate_perf_from_cache(1, 500)
+        # rank 500, closest is rank 20: perf = 1400 + 4*(-20) = 1320
+        assert perf == 1320
+
+    def test_unsorted_cache_still_works(self):
+        """Cache entries may not be sorted by rank — function should handle it."""
+        changes = self._make_changes([
+            (30, 1700, 1720),
+            (10, 1500, 1550),
+            (20, 1600, 1580),
+        ])
+        with patch('tle.cogs.graphs.cf_common') as mock_cf:
+            mock_cf.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = changes
+            perf = _estimate_perf_from_cache(1, 20)
+        # rank 20: old=1600, new=1580, perf = 1600 + 4*(-20) = 1520
+        assert perf == 1520
+
+
+# =====================================================================
+# _format_cfvc_table
+# =====================================================================
+
+class TestFormatCfvcTable:
+    def test_basic_output(self):
+        rows = [
+            {'idx': 1, 'contest': 'Round 1', 'rank': 100, 'perf': 1700},
+            {'idx': 2, 'contest': 'Round 2', 'rank': 50, 'perf': 1900},
+        ]
+        result = _format_cfvc_table(rows)
+        assert '#' in result
+        assert 'Contest' in result
+        assert 'Rank' in result
+        assert 'Perf' in result
+        # No Old/New/Δ columns
+        assert 'Old' not in result
+        assert 'New' not in result
+        lines = result.strip().split('\n')
+        assert len(lines) == 4  # header + sep + 2 data
+
+    def test_single_row(self):
+        rows = [{'idx': 1, 'contest': 'CF Beta 67', 'rank': 448, 'perf': 1523}]
+        result = _format_cfvc_table(rows)
+        assert '448' in result
+        assert '1523' in result
+
+    def test_empty_rows(self):
+        result = _format_cfvc_table([])
+        assert '#' in result
+        lines = result.strip().split('\n')
+        assert len(lines) == 2  # header + sep only
