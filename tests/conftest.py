@@ -17,6 +17,7 @@ _STUB_MODULES = [
     'discord', 'discord.ext', 'discord.ext.commands',
     'seaborn', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.ticker',
     'matplotlib.dates', 'matplotlib.font_manager',
+    'matplotlib.patches', 'matplotlib.lines',
     'numpy', 'pandas', 'pandas.plotting',
     'lxml', 'lxml.html',
     'PIL', 'PIL.Image', 'PIL.ImageFont', 'PIL.ImageDraw',
@@ -508,6 +509,12 @@ _gc.rating_color_cycler = None  # stub — not used in pure-function tests
 _gc.get_current_figure_as_file = lambda: None
 
 _load_module('tle.cogs.versus', os.path.join(_cogs_path, 'versus.py'))
+
+# table.py — pure module, no heavy deps
+_load_module('tle.util.table', os.path.join(_util_path, 'table.py'))
+
+# graphs.py — load for perftable pure-function tests
+_load_module('tle.cogs.graphs', os.path.join(_cogs_path, 'graphs.py'))
 
 # minigame cog modules
 _load_module('tle.cogs._minigame_common', os.path.join(_cogs_path, '_minigame_common.py'))

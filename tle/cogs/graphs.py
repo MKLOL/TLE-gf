@@ -1,6 +1,7 @@
 import bisect
 import collections
 import datetime as dt
+import io
 import time
 import itertools
 import math
@@ -24,6 +25,8 @@ from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import graph_common as gc
+from tle.util import paginator
+from tle.util import table
 
 pd.plotting.register_matplotlib_converters()
 
@@ -216,6 +219,87 @@ def _plot_average(practice, bin_size, label: str = ''):
                  markerfacecolor='white',
                  markeredgewidth=0.5,
                  label=label)
+
+
+_CONTEST_NAME_MAX = 30
+
+
+def _truncate_name(name):
+    if len(name) > _CONTEST_NAME_MAX:
+        return name[:_CONTEST_NAME_MAX - 3] + '...'
+    return name
+
+
+def _build_rated_rows(rating_changes, corrected):
+    """Build performance rows from original and corrected rating changes."""
+    rows = []
+    for i, (orig, corr) in enumerate(zip(rating_changes, corrected)):
+        delta = orig.newRating - orig.oldRating
+        rows.append({
+            'idx': i + 1,
+            'contest': _truncate_name(orig.contestName),
+            'rank': orig.rank,
+            'old': orig.oldRating,
+            'new': orig.newRating,
+            'delta': delta,
+            'perf': corr.newRating,
+        })
+    return rows
+
+
+def _build_vc_rows(rating_history, dlo, dhi, get_vc_info):
+    """Build performance rows from VC rating history.
+
+    get_vc_info(vc_id) -> (finish_time, contest_name)
+    """
+    rows = []
+    ratingbefore = 1500
+    idx = 0
+    for vc_id, rating in rating_history:
+        finish_time, contest_name = get_vc_info(vc_id)
+        if not (dlo <= finish_time < dhi):
+            ratingbefore = rating
+            continue
+        idx += 1
+        delta = rating - ratingbefore
+        perf = ratingbefore + (rating - ratingbefore) * 4
+        rows.append({
+            'idx': idx,
+            'contest': _truncate_name(contest_name),
+            'rank': None,
+            'old': ratingbefore,
+            'new': rating,
+            'delta': delta,
+            'perf': perf,
+        })
+        ratingbefore = rating
+    return rows
+
+
+def _format_perftable(rows):
+    """Format performance rows into a string table."""
+    has_rank = any(r['rank'] is not None for r in rows)
+    if has_rank:
+        style = table.Style('{:>}  {:<}  {:>}  {:>}  {:>}  {:>}  {:>}')
+    else:
+        style = table.Style('{:>}  {:<}  {:>}  {:>}  {:>}  {:>}')
+
+    t = table.Table(style)
+    if has_rank:
+        t += table.Header('#', 'Contest', 'Rank', 'Old', 'New', 'Δ', 'Perf')
+    else:
+        t += table.Header('#', 'Contest', 'Old', 'New', 'Δ', 'Perf')
+    t += table.Line()
+    for row in rows:
+        delta_str = f'+{row["delta"]}' if row['delta'] >= 0 else str(row['delta'])
+        if has_rank:
+            rank_str = str(row['rank']) if row['rank'] is not None else '-'
+            t += table.Data(row['idx'], row['contest'], rank_str,
+                            row['old'], row['new'], delta_str, row['perf'])
+        else:
+            t += table.Data(row['idx'], row['contest'],
+                            row['old'], row['new'], delta_str, row['perf'])
+    return str(t)
 
 
 class Graphs(commands.Cog):
@@ -1125,6 +1209,90 @@ class Graphs(commands.Cog):
         discord_common.set_author_footer(embed, ctx.author)
 
         await ctx.send(embed=embed, file=discord_file)
+
+    @plot.command(brief='Show performance table for rated contests',
+                  aliases=['ptable'],
+                  usage='[+data] [+vc] [handles...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+    async def perftable(self, ctx, *args: str):
+        """Show a table of contest performances.
+
+        By default shows rated contest performances from Codeforces.
+        Use +vc to show virtual contest performances instead (accepts @mentions).
+        Use +data for a plain-text dump (uploaded as file if too long).
+        Prefix -c to force a Codeforces handle (e.g. -ctourist)."""
+
+        (data, vc), args = cf_common.filter_flags(args, ['+data', '+vc'])
+        filt = cf_common.SubFilter()
+        args = filt.parse(args)
+
+        if vc:
+            rows = await self._perftable_vc(ctx, args, filt)
+        else:
+            rows = await self._perftable_rated(ctx, args, filt)
+
+        if not rows:
+            raise GraphCogError('No contest data found.')
+
+        if data:
+            table_str = _format_perftable(rows)
+            if len(table_str) + 8 > 1900:
+                await ctx.send(
+                    file=discord.File(io.StringIO(table_str), filename='performance.txt')
+                )
+            else:
+                await ctx.send(f'```\n{table_str}\n```')
+        else:
+            title = 'VC Performance' if vc else 'Contest Performance'
+            _PER_PAGE = 10
+            pages = []
+            for k, chunk in enumerate(paginator.chunkify(rows, _PER_PAGE)):
+                table_str = _format_perftable(chunk)
+                embed = discord_common.cf_color_embed(description=f'```\n{table_str}\n```')
+                pages.append((title, embed))
+            paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
+                               set_pagenum_footers=True, author_id=ctx.author.id)
+
+    async def _perftable_rated(self, ctx, args, filt):
+        """Fetch rated contest performances from CF API."""
+        handles = args or ('!' + str(ctx.author.id),)
+        handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=1)
+        handle = handles[0]
+
+        rating_changes = await cf.user.rating(handle=handle)
+        if not rating_changes:
+            raise GraphCogError(f'User `{handle}` is not rated.')
+
+        corrected = cf.user.correct_rating_changes(resp=[list(rating_changes)])
+        corrected = corrected[0]
+        corrected = filt.filter_rating_changes(corrected)
+        rating_changes = filt.filter_rating_changes(rating_changes)
+
+        if not corrected:
+            raise GraphCogError(f'No contests found for `{handle}` in the given range.')
+
+        return _build_rated_rows(rating_changes, corrected)
+
+    async def _perftable_vc(self, ctx, args, filt):
+        """Fetch virtual contest performances from the DB."""
+        if args:
+            member = await self.converter.convert(ctx, args[0])
+        else:
+            member = ctx.author
+
+        rating_history = cf_common.user_db.get_vc_rating_history(member.id)
+        if not rating_history:
+            raise GraphCogError(f'{member.mention} has no vc history.')
+
+        def get_vc_info(vc_id):
+            vc = cf_common.user_db.get_rated_vc(vc_id)
+            try:
+                contest = cf_common.cache2.contest_cache.get_contest(vc.contest_id)
+                name = contest.name
+            except Exception:
+                name = f'Contest {vc.contest_id}'
+            return vc.finish_time, name
+
+        return _build_vc_rows(rating_history, filt.dlo, filt.dhi, get_vc_info)
 
     @discord_common.send_error_if(GraphCogError, cf_common.ResolveHandleError,
                                   cf_common.FilterError)
