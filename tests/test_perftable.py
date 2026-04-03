@@ -666,3 +666,59 @@ class TestBuildCfvcRows:
             rows, missing = self._run(_build_cfvc_rows('user'))
 
         assert len(rows[0]['contest']) == _CONTEST_NAME_MAX
+
+    def test_date_filter_lower_bound(self):
+        """Contests before dlo are excluded."""
+        subs = [
+            _make_submission(100, 'user', 'VIRTUAL'),
+            _make_submission(200, 'user', 'VIRTUAL'),
+        ]
+        contest100 = _make_contest(100, 'Old Round')._replace(startTimeSeconds=1000)
+        contest200 = _make_contest(200, 'New Round')._replace(startTimeSeconds=5000)
+        ranklist200 = [_make_ranklist_row('user', 30)]
+        cache = [_make_rc(200, 'New Round', 'x', 30, 5000, 1600, 1650)]
+
+        async def mock_standings(*, contest_id, handles, show_unofficial):
+            if contest_id == 100:
+                return (contest100, [], [_make_ranklist_row('user', 50)])
+            return (contest200, [], ranklist200)
+
+        with patch('tle.cogs.graphs.cf') as mock_cf, \
+             patch('tle.cogs.graphs.cf_common') as mock_common:
+            mock_cf.user.status = AsyncMock(return_value=subs)
+            mock_cf.contest.standings = AsyncMock(side_effect=mock_standings)
+            mock_cf.GYM_ID_THRESHOLD = 100000
+            mock_common.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = cache
+
+            rows, missing = self._run(_build_cfvc_rows('user', dlo=3000))
+
+        assert len(rows) == 1
+        assert rows[0]['contest'] == 'New Round'
+
+    def test_date_filter_upper_bound(self):
+        """Contests at or after dhi are excluded."""
+        subs = [
+            _make_submission(100, 'user', 'VIRTUAL'),
+            _make_submission(200, 'user', 'VIRTUAL'),
+        ]
+        contest100 = _make_contest(100, 'Old Round')._replace(startTimeSeconds=1000)
+        contest200 = _make_contest(200, 'New Round')._replace(startTimeSeconds=5000)
+        ranklist100 = [_make_ranklist_row('user', 50)]
+        cache = [_make_rc(100, 'Old Round', 'x', 50, 1000, 1500, 1550)]
+
+        async def mock_standings(*, contest_id, handles, show_unofficial):
+            if contest_id == 100:
+                return (contest100, [], ranklist100)
+            return (contest200, [], [_make_ranklist_row('user', 30)])
+
+        with patch('tle.cogs.graphs.cf') as mock_cf, \
+             patch('tle.cogs.graphs.cf_common') as mock_common:
+            mock_cf.user.status = AsyncMock(return_value=subs)
+            mock_cf.contest.standings = AsyncMock(side_effect=mock_standings)
+            mock_cf.GYM_ID_THRESHOLD = 100000
+            mock_common.cache2.rating_changes_cache.get_rating_changes_for_contest.return_value = cache
+
+            rows, missing = self._run(_build_cfvc_rows('user', dhi=3000))
+
+        assert len(rows) == 1
+        assert rows[0]['contest'] == 'Old Round'

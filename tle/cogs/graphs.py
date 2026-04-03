@@ -301,7 +301,7 @@ def _estimate_perf_from_cache(contest_id, virtual_rank):
     return best.oldRating + 4 * (best.newRating - best.oldRating)
 
 
-async def _build_cfvc_rows(handle):
+async def _build_cfvc_rows(handle, dlo=0, dhi=10**10):
     """Build performance rows for CF virtual participations (not TLE VCs).
 
     Returns (rows, missing_count) where missing_count is the number of contests
@@ -327,6 +327,11 @@ async def _build_cfvc_rows(handle):
         except Exception:
             missing += 1
             continue
+
+        # Filter by contest start time
+        if contest_.startTimeSeconds is not None:
+            if not (dlo <= contest_.startTimeSeconds < dhi):
+                continue
 
         virtual_row = None
         for row in ranklist:
@@ -1317,7 +1322,7 @@ class Graphs(commands.Cog):
         args = filt.parse(args)
 
         if cfvc:
-            await self._perftable_cfvc(ctx, args, data)
+            await self._perftable_cfvc(ctx, args, data, filt)
             return
 
         if vc:
@@ -1347,14 +1352,14 @@ class Graphs(commands.Cog):
             paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
                                set_pagenum_footers=True, author_id=ctx.author.id)
 
-    async def _perftable_cfvc(self, ctx, args, data):
+    async def _perftable_cfvc(self, ctx, args, data, filt):
         """Fetch CF virtual participation performances."""
         handles = args or ('!' + str(ctx.author.id),)
         handles = await cf_common.resolve_handles(ctx, self.converter, handles, maxcnt=1)
         handle = handles[0]
 
         await ctx.send(f'Fetching virtual participations for `{handle}`, this may take a moment...')
-        rows, missing = await _build_cfvc_rows(handle)
+        rows, missing = await _build_cfvc_rows(handle, filt.dlo, filt.dhi)
 
         if not rows:
             raise GraphCogError(f'No CF virtual participations found for `{handle}`.')
