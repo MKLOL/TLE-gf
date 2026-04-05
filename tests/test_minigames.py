@@ -894,6 +894,23 @@ class TestGuessGameParsing:
         assert results[1].accuracy == 6  # 7-1
         assert results[1].is_perfect is True
 
+    def test_parse_channel_mention_dump_without_guessgame_text(self):
+        content = (
+            '<#1435360903137853652> #1427\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e9 \u2b1c \u2b1c \u2b1c \u2b1c\n\n'
+            '#ScreenshotSleuth\n\n'
+            '<#1435360903137853652> #1432\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e8 \U0001f7e9 \u2b1c \u2b1c\n\n'
+            '#ScreenshotSleuth'
+        )
+        results = parse_guessgame_message(content)
+        assert len(results) == 2
+        assert results[0].puzzle_number == 1427
+        assert results[0].accuracy == 5
+        assert results[1].puzzle_number == 1432
+        assert results[1].accuracy == 3
+        assert results[1].time_seconds == 3
+
     def test_parse_no_url_hashtag_only(self):
         """Messages with #GuessTheGame (no dot, no URL) should still parse."""
         results = parse_guessgame_message(
@@ -1052,6 +1069,60 @@ class TestGuessGameScoring:
         assert len(rows) == 2
         puzzles = {r.puzzle_number for r in rows}
         assert puzzles == {1407, 1412}
+
+    def test_channel_mention_dump_ingestion(self, db, monkeypatch):
+        """Controller-only GuessThe.Game dumps should ingest from the configured channel."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(1, 'guessgame', '1')
+        db.set_minigame_channel(1, 'guessgame', 10)
+
+        content = (
+            '<#1435360903137853652> #1427\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e9 \u2b1c \u2b1c \u2b1c \u2b1c\n\n'
+            '#ScreenshotSleuth\n\n'
+            '<#1435360903137853652> #1428\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e9\n\n'
+            '#ScreenshotSleuth'
+        )
+        cog = Minigames(bot=None)
+        msg = _FakeMessage(500, 1, 10, 999, content)
+        asyncio.run(cog.on_message(msg))
+
+        rows = db.get_minigame_results_for_user(1, 'guessgame', 999)
+        assert len(rows) == 2
+        assert {r.puzzle_number for r in rows} == {1427, 1428}
+
+    def test_reparse_picks_up_channel_mention_dump(self, db, monkeypatch):
+        """Reparse should recover old raw GuessThe.Game dumps without site text or URLs."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+
+        content = (
+            '<#1435360903137853652> #1429\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e9 \u2b1c\n\n'
+            '#ScreenshotSleuth\n\n'
+            '<#1435360903137853652> #1430\n\n'
+            '\U0001f3ae \U0001f7e5 \U0001f7e5 \U0001f7e5 \U0001f7e9 \u2b1c \u2b1c\n\n'
+            '#ScreenshotSleuth'
+        )
+        db.save_raw_message(700, 1, 10, 999, '2026-04-05T12:00:00', content)
+
+        sent = {}
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent['content'] = content
+            sent['embed'] = embed
+            sent['payload'] = embed if embed is not None else content
+
+        ctx = SimpleNamespace(
+            guild=_FakeGuild(1),
+            send=send,
+        )
+        cog = Minigames(bot=None)
+        asyncio.run(cog._cmd_reparse(ctx, GUESSGAME_GAME))
+
+        rows = db.get_minigame_results_for_user(1, 'guessgame', 999)
+        assert len(rows) == 2
+        assert {r.puzzle_number for r in rows} == {1429, 1430}
 
 
 class TestGuessGameVsCommand:

@@ -9,12 +9,17 @@ _YELLOW = '\U0001f7e8'  # 🟨
 _RED = '\U0001f7e5'     # 🟥
 _WHITE = '\u2b1c'       # ⬜
 _BLACK = '\u2b1b'       # ⬛
+_NUM_TILES = 6
+_SQUARE_CHAR_CLASS = re.escape(_GREEN + _YELLOW + _RED + _WHITE + _BLACK)
 
-_DETECT_RE = re.compile(r'GuessThe\.?Game', re.IGNORECASE)
+_DETECT_RE = re.compile(
+    rf'GuessThe\.?Game|(?:\U0001f3ae\s*(?:[{_SQUARE_CHAR_CLASS}]\s*){{{_NUM_TILES}}})',
+    re.IGNORECASE,
+)
 _NUMBER_RE = re.compile(r'(?<!<)#(\d+)')
 _SQUARES_RE = re.compile(
-    r'\U0001f3ae\s*'  # 🎮
-    r'((?:[\U0001f7e9\U0001f7e8\U0001f7e5\u2b1c\u2b1b]\s*)+)'
+    rf'\U0001f3ae\s*'  # 🎮
+    rf'((?:[{_SQUARE_CHAR_CLASS}]\s*)+)'
 )
 
 
@@ -64,7 +69,7 @@ def parse_guessgame_message(content):
             continue
 
         squares = _parse_squares(squares_match.group(1))
-        if not squares:
+        if len(squares) != _NUM_TILES:
             continue
 
         green_pos = _find_position(squares, _GREEN)
