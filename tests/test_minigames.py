@@ -1039,6 +1039,39 @@ class TestGuessGameScoring:
         assert stats['wins1'] == 2
         assert stats['wins2'] == 0
 
+    def test_missing_with_missing_result_scores_as_all_red(self):
+        """When missing_result is provided, missing player is scored as all-red, not auto-loss."""
+        from tle.cogs._minigame_guessgame import _ALL_RED
+        Row = namedtuple('Row', 'message_id user_id puzzle_date puzzle_number is_perfect time_seconds accuracy')
+        # Player 1 has all-red (accuracy=0, time=7), player 2 is missing
+        rows1 = [Row('1', '10', '2026-03-26', 1412, 0, 7, 0)]
+        rows2 = []
+        stats = compute_vs(
+            rows1, rows2, guessgame_score_matchup,
+            missing_is_loss=True, missing_result=_ALL_RED,
+        )
+        assert stats['common_count'] == 1
+        # All-red vs all-red (missing) should tie, not give 1 point to player 1
+        assert stats['ties'] == 1
+        assert stats['wins1'] == 0
+        assert stats['wins2'] == 0
+        assert stats['score1'] == 0.5
+        assert stats['score2'] == 0.5
+
+    def test_missing_with_missing_result_green_still_wins(self):
+        """Green result vs missing (treated as all-red) should win."""
+        from tle.cogs._minigame_guessgame import _ALL_RED
+        Row = namedtuple('Row', 'message_id user_id puzzle_date puzzle_number is_perfect time_seconds accuracy')
+        rows1 = [Row('1', '10', '2026-03-26', 1412, 0, 7, 3)]  # green pos 4
+        rows2 = []
+        stats = compute_vs(
+            rows1, rows2, guessgame_score_matchup,
+            missing_is_loss=True, missing_result=_ALL_RED,
+        )
+        assert stats['common_count'] == 1
+        assert stats['wins1'] == 1
+        assert stats['wins2'] == 0
+
     def test_compute_vs_with_guessgame_scoring(self):
         Row = namedtuple('Row', 'message_id user_id puzzle_date puzzle_number is_perfect time_seconds accuracy')
         rows1 = [Row('1', '10', '2026-03-26', 1412, 1, 7, 6)]   # perfect (green pos 1)

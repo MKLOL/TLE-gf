@@ -68,6 +68,7 @@ class GameDef:
     winner_result_sort_key: Optional[Callable] = None
     result_group_key: Optional[Callable] = None
     missing_is_loss: bool = False  # if True, missing puzzle = automatic loss in VS
+    missing_result: object = None  # synthetic result for missing puzzles (used with score_fn)
     scoring_variants: Dict[str, ScoringDef] = field(default_factory=dict)
 
 
@@ -165,7 +166,8 @@ def resolve_scoring(game, args):
 
 
 def compute_vs_matchups(rows1, rows2, score_fn=None, missing_is_loss=False,
-                        best_result_sort_key_fn=None, group_key_fn=None):
+                        best_result_sort_key_fn=None, group_key_fn=None,
+                        missing_result=None):
     if score_fn is None:
         score_fn = default_score_matchup
     best1 = pick_best_results(
@@ -183,10 +185,18 @@ def compute_vs_matchups(rows1, rows2, score_fn=None, missing_is_loss=False,
     for key in puzzles:
         r1 = best1.get(key)
         r2 = best2.get(key)
+        if r1 is None and r2 is None:
+            continue
         if r1 is None:
-            pts1, pts2 = 0.0, 1.0
+            if missing_result is not None:
+                pts1, pts2 = score_fn(missing_result, r2)
+            else:
+                pts1, pts2 = 0.0, 1.0
         elif r2 is None:
-            pts1, pts2 = 1.0, 0.0
+            if missing_result is not None:
+                pts1, pts2 = score_fn(r1, missing_result)
+            else:
+                pts1, pts2 = 1.0, 0.0
         else:
             pts1, pts2 = score_fn(r1, r2)
         matchups.append({
@@ -201,13 +211,15 @@ def compute_vs_matchups(rows1, rows2, score_fn=None, missing_is_loss=False,
 
 
 def compute_vs(rows1, rows2, score_fn=None, missing_is_loss=False,
-               best_result_sort_key_fn=None, group_key_fn=None):
+               best_result_sort_key_fn=None, group_key_fn=None,
+               missing_result=None):
     matchups = compute_vs_matchups(
         rows1, rows2,
         score_fn=score_fn,
         missing_is_loss=missing_is_loss,
         best_result_sort_key_fn=best_result_sort_key_fn,
         group_key_fn=group_key_fn,
+        missing_result=missing_result,
     )
 
     score1, score2 = 0.0, 0.0

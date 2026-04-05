@@ -532,6 +532,7 @@ class Minigames(commands.Cog):
             missing_is_loss=game.missing_is_loss,
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
+            missing_result=game.missing_result,
         )
         if stats['common_count'] == 0:
             raise MinigameCogError(
@@ -570,6 +571,7 @@ class Minigames(commands.Cog):
             missing_is_loss=game.missing_is_loss,
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
+            missing_result=game.missing_result,
         )
         if stats['common_count'] == 0:
             raise MinigameCogError(
@@ -581,6 +583,7 @@ class Minigames(commands.Cog):
             missing_is_loss=game.missing_is_loss,
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
+            missing_result=game.missing_result,
         )
         self._make_guessgame_vs_pages(
             ctx, game, member1, member2, stats, matchups, scoring_name)

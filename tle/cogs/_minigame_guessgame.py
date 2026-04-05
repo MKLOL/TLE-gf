@@ -137,6 +137,10 @@ def guessgame_result_group_key(row):
     return int(row.puzzle_number)
 
 
+# Synthetic all-red result used when a player didn't post a puzzle.
+_ALL_RED = ParsedResult(puzzle_number=0, accuracy=0, time_seconds=7, is_perfect=False)
+
+
 GUESSGAME_GAME = GameDef(
     name='guessgame',
     display_name='GuessThe.Game',
@@ -147,4 +151,5 @@ GUESSGAME_GAME = GameDef(
     is_eligible_winner=guessgame_is_eligible_winner,
     result_group_key=guessgame_result_group_key,
     missing_is_loss=True,
+    missing_result=_ALL_RED,
 )
