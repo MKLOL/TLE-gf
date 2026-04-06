@@ -91,6 +91,35 @@ class TestLeaderboards:
         assert fire_lb[0].total_stars == 10
 
 
+class TestTopMessagesByUser:
+    def _seed(self, db):
+        db.add_starboard_emoji(GUILD, STAR, 3, 0xffaa10)
+        db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
+        db.update_starboard_star_count('msg1', STAR, 10)
+        db.add_starboard_message_v1('msg2', 'sb2', GUILD, STAR, author_id='user1')
+        db.update_starboard_star_count('msg2', STAR, 5)
+        db.add_starboard_message_v1('msg3', 'sb3', GUILD, STAR, author_id='user2')
+        db.update_starboard_star_count('msg3', STAR, 20)
+
+    def test_filter_by_author(self, db):
+        self._seed(db)
+        rows = db.get_top_starboard_messages(GUILD, STAR, author_id='user1')
+        assert len(rows) == 2
+        assert all(r.author_id == 'user1' for r in rows)
+        assert rows[0].star_count == 10
+        assert rows[1].star_count == 5
+
+    def test_no_filter_returns_all(self, db):
+        self._seed(db)
+        rows = db.get_top_starboard_messages(GUILD, STAR)
+        assert len(rows) == 3
+
+    def test_filter_nonexistent_user(self, db):
+        self._seed(db)
+        rows = db.get_top_starboard_messages(GUILD, STAR, author_id='nobody')
+        assert rows == []
+
+
 class TestStarGiversWithAliases:
     def test_alias_reactors_counted_in_star_givers(self, db):
         """Star givers leaderboard should include users who reacted with aliases."""

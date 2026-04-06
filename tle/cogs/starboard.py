@@ -647,12 +647,24 @@ class Starboard(BackfillMixin, commands.Cog):
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @starboard.command(brief='Show top starred messages',
-                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[@user] [emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def top(self, ctx, *args):
         """Show top starboarded messages sorted by star count for an emoji.
+        Mention a user to see only their top messages.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(args)
+        # Extract user mentions from args before parsing the rest.
+        target_member = None
+        remaining = []
+        for arg in args:
+            if target_member is None and (match := discord.utils.parse_raw_mentions(arg)):
+                m = ctx.guild.get_member(match[0])
+                if m is not None:
+                    target_member = m
+                    continue
+            remaining.append(arg)
+
+        emoji, dlo, dhi = _parse_starboard_args(remaining)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -660,12 +672,23 @@ class Starboard(BackfillMixin, commands.Cog):
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
 
-        rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji, dlo, dhi)
+        author_id = target_member.id if target_member else None
+        rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji, dlo, dhi,
+                                                            author_id=author_id)
         if not rows:
+            if target_member:
+                raise StarboardCogError(
+                    f'No starred messages found for {target_member.mention} with {emoji}.')
             raise StarboardCogError(f'No starred messages found for {emoji}.')
 
+        if target_member:
+            title = f'{emoji} Top Starred Messages — {target_member.display_name}'
+        else:
+            title = f'{emoji} Top Starred Messages'
+
         logger.info(f'CMD starboard top: guild={ctx.guild.id} emoji={emoji} '
-                    f'dlo={dlo} dhi={dhi} {len(rows)} messages by user={ctx.author.id}')
+                    f'dlo={dlo} dhi={dhi} author_filter={author_id} '
+                    f'{len(rows)} messages by user={ctx.author.id}')
 
         per_page = 10
         chunks = paginator.chunkify(rows, per_page)
@@ -679,7 +702,7 @@ class Starboard(BackfillMixin, commands.Cog):
                 name = member.mention if member else f'<@{row.author_id}>'
                 lines.append(f'**#{rank}** {name} — **{row.star_count}** {emoji} — {jump_url}')
             embed = discord.Embed(
-                title=f'{emoji} Top Starred Messages',
+                title=title,
                 description='\n'.join(lines),
                 color=discord_common.random_cf_color()
             )
