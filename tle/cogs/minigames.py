@@ -11,6 +11,7 @@ from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
+from tle.util import table
 
 from tle.cogs._minigame_common import (
     compute_vs, compute_vs_matchups, compute_streak, compute_longest_streak, compute_top,
@@ -90,6 +91,7 @@ _TIMEFRAME_CHOICES = [
 
 _MODE_CHOICES = [
     app_commands.Choice(name='Raw (time only)', value='raw'),
+    app_commands.Choice(name='All puzzles', value='all'),
 ]
 
 
@@ -143,6 +145,50 @@ def _safe_user_name(guild, user_id):
 
 def _format_score(score):
     return f'{score:.3f}'.rstrip('0').rstrip('.')
+
+
+def _maybe_parse_puzzle_selector(arg):
+    if not arg:
+        return None
+    try:
+        day_start = int(cf_common.parse_date(arg))
+    except cf_common.ParamParseError:
+        if arg.isdigit():
+            return ('puzzle', int(arg))
+        return None
+    day = dt.datetime.fromtimestamp(day_start).date()
+    return ('day', day)
+
+
+def _format_akari_result_status(row):
+    if row.is_perfect:
+        return 'perfect'
+    return f'{int(row.accuracy)}%'
+
+
+def _format_akari_puzzle_table(guild, rows):
+    style = table.Style('{:>}  {:<}  {:<}  {:>}')
+    t = table.Table(style)
+    t += table.Header('#', 'Name', 'Result', 'Time')
+    t += table.Line()
+
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            -int(bool(row.is_perfect)),
+            -int(getattr(row, 'accuracy', 0)),
+            int(getattr(row, 'time_seconds', 0)),
+            int(getattr(row, 'message_id', 0)),
+        ),
+    )
+    for index, row in enumerate(ordered_rows, start=1):
+        t += table.Data(
+            index,
+            _safe_user_name(guild, row.user_id),
+            _format_akari_result_status(row),
+            format_duration(row.time_seconds),
+        )
+    return str(t)
 
 
 class Minigames(commands.Cog):
@@ -529,10 +575,18 @@ class Minigames(commands.Cog):
         stats = compute_vs(
             rows1, rows2,
             score_fn=scoring.score_matchup,
-            missing_is_loss=game.missing_is_loss,
+            missing_is_loss=(
+                scoring.missing_is_loss
+                if scoring.missing_is_loss is not None
+                else game.missing_is_loss
+            ),
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
-            missing_result=game.missing_result,
+            missing_result=(
+                scoring.missing_result
+                if scoring.missing_result is not None
+                else game.missing_result
+            ),
         )
         if stats['common_count'] == 0:
             raise MinigameCogError(
@@ -568,10 +622,18 @@ class Minigames(commands.Cog):
         stats = compute_vs(
             rows1, rows2,
             score_fn=scoring.score_matchup,
-            missing_is_loss=game.missing_is_loss,
+            missing_is_loss=(
+                scoring.missing_is_loss
+                if scoring.missing_is_loss is not None
+                else game.missing_is_loss
+            ),
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
-            missing_result=game.missing_result,
+            missing_result=(
+                scoring.missing_result
+                if scoring.missing_result is not None
+                else game.missing_result
+            ),
         )
         if stats['common_count'] == 0:
             raise MinigameCogError(
@@ -580,10 +642,18 @@ class Minigames(commands.Cog):
         matchups = compute_vs_matchups(
             rows1, rows2,
             score_fn=scoring.score_matchup,
-            missing_is_loss=game.missing_is_loss,
+            missing_is_loss=(
+                scoring.missing_is_loss
+                if scoring.missing_is_loss is not None
+                else game.missing_is_loss
+            ),
             best_result_sort_key_fn=scoring.best_result_sort_key,
             group_key_fn=scoring.result_group_key,
-            missing_result=game.missing_result,
+            missing_result=(
+                scoring.missing_result
+                if scoring.missing_result is not None
+                else game.missing_result
+            ),
         )
         self._make_guessgame_vs_pages(
             ctx, game, member1, member2, stats, matchups, scoring_name)
@@ -685,6 +755,32 @@ class Minigames(commands.Cog):
 
     async def _cmd_stats(self, ctx, game, *args):
         self._require_enabled(ctx.guild.id, game)
+        if game.name == 'akari' and len(args) == 1:
+            selector = _maybe_parse_puzzle_selector(args[0])
+            if selector is not None:
+                selector_type, selector_value = selector
+                if selector_type == 'puzzle':
+                    rows = cf_common.user_db.get_minigame_results_for_guild(
+                        ctx.guild.id, game.name, plo=selector_value, phi=selector_value + 1)
+                    title = f'{game.display_name} #{selector_value} Results'
+                else:
+                    day_start = dt.datetime.combine(selector_value, dt.time.min).timestamp()
+                    day_end = day_start + 24 * 60 * 60
+                    rows = cf_common.user_db.get_minigame_results_for_guild(
+                        ctx.guild.id, game.name, dlo=day_start, dhi=day_end)
+                    title = f'{game.display_name} {selector_value.isoformat()} Results'
+
+                if not rows:
+                    raise MinigameCogError(f'No {game.display_name} results found for `{args[0]}`.')
+
+                table_str = _format_akari_puzzle_table(ctx.guild, rows)
+                embed = discord_common.cf_color_embed(
+                    title=title,
+                    description=f'```\n{table_str}\n```',
+                )
+                await ctx.send(embed=embed)
+                return
+
         filter_args = list(args)
         member = ctx.author
         if filter_args:
@@ -884,7 +980,7 @@ class Minigames(commands.Cog):
         await self._cmd_show(ctx, AKARI_GAME)
 
     @akari.command(name='vs', brief='Head-to-head comparison',
-                   usage='@user1 @user2 [filters...] [raw]')
+                   usage='@user1 @user2 [filters...] [raw|all]')
     async def akari_vs(self, ctx, member1: CaseInsensitiveMember, member2: CaseInsensitiveMember, *args):
         await self._cmd_vs(ctx, AKARI_GAME, member1, member2, *args)
 
@@ -894,12 +990,12 @@ class Minigames(commands.Cog):
         await self._cmd_streak(ctx, AKARI_GAME, *args)
 
     @akari.command(name='top', brief='Show winners leaderboard',
-                   usage='[filters...] [raw]')
+                   usage='[filters...] [raw|all]')
     async def akari_top(self, ctx, *args):
         await self._cmd_top(ctx, AKARI_GAME, *args)
 
     @akari.command(name='stats', brief='Show personal stats with graphs',
-                   usage='[@user] [filters...]')
+                   usage='[@user] [filters...] | [day|puzzle_id]')
     async def akari_stats(self, ctx, *args):
         await self._cmd_stats(ctx, AKARI_GAME, *args)
 

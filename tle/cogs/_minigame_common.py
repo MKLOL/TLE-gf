@@ -45,6 +45,8 @@ class ScoringDef:
     best_result_sort_key: Optional[Callable] = None
     winner_result_sort_key: Optional[Callable] = None
     result_group_key: Optional[Callable] = None
+    missing_is_loss: Optional[bool] = None
+    missing_result: object = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,16 @@ def resolve_scoring(game, args):
                 best_result_sort_key=override.best_result_sort_key or variant.best_result_sort_key,
                 winner_result_sort_key=override.winner_result_sort_key or variant.winner_result_sort_key,
                 result_group_key=override.result_group_key or variant.result_group_key,
+                missing_is_loss=(
+                    override.missing_is_loss
+                    if override.missing_is_loss is not None
+                    else variant.missing_is_loss
+                ),
+                missing_result=(
+                    override.missing_result
+                    if override.missing_result is not None
+                    else variant.missing_result
+                ),
             )
             return args[:-1], mode, variant
     return args, None, variant

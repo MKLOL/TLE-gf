@@ -2,8 +2,11 @@
 
 import datetime as dt
 import re
+from types import SimpleNamespace
 
-from tle.cogs._minigame_common import ParsedResult, GameDef, ScoringDef
+from tle.cogs._minigame_common import (
+    ParsedResult, GameDef, ScoringDef, default_score_matchup,
+)
 
 
 _HEADER_RE = re.compile(r'^Daily\s+Akari\b', re.IGNORECASE)
@@ -141,6 +144,19 @@ def akari_raw_winner_result_sort_key(row):
     return (-int(getattr(row, 'time_seconds', 0)),)
 
 
+_AKARI_MISSING_RESULT = SimpleNamespace(is_missing=True)
+
+
+def akari_all_score_matchup(row1, row2):
+    if getattr(row1, 'is_missing', False):
+        if getattr(row2, 'is_missing', False):
+            return 0.5, 0.5
+        return 0.0, 1.0
+    if getattr(row2, 'is_missing', False):
+        return 1.0, 0.0
+    return default_score_matchup(row1, row2)
+
+
 AKARI_GAME = GameDef(
     name='akari',
     display_name='Daily Akari',
@@ -153,6 +169,12 @@ AKARI_GAME = GameDef(
             is_eligible_winner=akari_raw_is_eligible_winner,
             best_result_sort_key=akari_raw_best_result_sort_key,
             winner_result_sort_key=akari_raw_winner_result_sort_key,
+        ),
+        'all': ScoringDef(
+            score_matchup=akari_all_score_matchup,
+            is_eligible_winner=lambda _row: True,
+            missing_is_loss=True,
+            missing_result=_AKARI_MISSING_RESULT,
         ),
     },
 )

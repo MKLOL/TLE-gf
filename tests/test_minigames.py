@@ -27,6 +27,7 @@ from tle.cogs._minigame_guessgame import (
     guessgame_score_matchup,
 )
 from tle.cogs.minigames import Minigames
+from tle.cogs.minigames import _format_akari_puzzle_table, _maybe_parse_puzzle_selector
 
 
 _GAME = 'akari'
@@ -372,6 +373,49 @@ class TestComputation:
         )
         assert result == [('10', 2), ('20', 1)]
 
+    def test_resolve_scoring_uses_akari_all_variant(self):
+        args, scoring_name, scoring = resolve_scoring(AKARI_GAME, ('week', 'all'))
+        assert args == ('week',)
+        assert scoring_name == 'all'
+        assert scoring.score_matchup is not None
+        assert scoring.is_eligible_winner is not None
+        assert scoring.missing_is_loss is True
+        assert scoring.missing_result is not None
+
+    def test_akari_all_vs_counts_unshared_puzzles(self):
+        _, _, scoring = resolve_scoring(AKARI_GAME, ('all',))
+        stats = compute_vs(
+            [
+                _row(1, 10, '2026-03-26', True, 60, 100, 445),
+                _row(2, 10, '2026-03-27', False, 75, 95, 446),
+            ],
+            [
+                _row(3, 20, '2026-03-26', False, 80, 96, 445),
+            ],
+            score_fn=scoring.score_matchup,
+            missing_is_loss=scoring.missing_is_loss,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+            missing_result=scoring.missing_result,
+        )
+        assert stats['common_count'] == 2
+        assert stats['score1'] == 2.0
+        assert stats['score2'] == 0.0
+        assert stats['wins1'] == 2
+
+    def test_akari_all_top_counts_single_partial_completion(self):
+        _, _, scoring = resolve_scoring(AKARI_GAME, ('all',))
+        rows = [
+            _row(1, 10, '2026-03-26', False, 60, 70, 445),
+            _row(2, 20, '2026-03-27', True, 80, 100, 446),
+        ]
+        result = compute_top(
+            rows,
+            is_eligible=scoring.is_eligible_winner,
+            best_result_sort_key_fn=scoring.best_result_sort_key,
+            winner_result_sort_key_fn=scoring.winner_result_sort_key,
+        )
+        assert result == [('10', 1), ('20', 1)]
+
 
 class TestArgs:
     def test_parse_date_filters(self):
@@ -385,6 +429,16 @@ class TestArgs:
         dlo, dhi, plo, phi = parse_date_args(('p>=1300', 'p<1500'))
         assert plo == 1300
         assert phi == 1500
+
+    def test_parse_exact_puzzle_selector_number(self):
+        assert _maybe_parse_puzzle_selector('445') == ('puzzle', 445)
+
+    def test_parse_exact_puzzle_selector_day(self):
+        assert _maybe_parse_puzzle_selector('26032026') == ('day', dt.date(2026, 3, 26))
+
+    def test_parse_exact_puzzle_selector_rejects_filters(self):
+        assert _maybe_parse_puzzle_selector('week') is None
+        assert _maybe_parse_puzzle_selector('p>=445') is None
 
 
 class TestDbMixin:
@@ -714,6 +768,25 @@ class TestCogIngest:
 
         row = db.get_minigame_result(500)
         assert row.puzzle_date == '2025-12-25'
+
+
+class TestFormatting:
+    def test_format_akari_puzzle_table_orders_best_results_first(self):
+        guild = _FakeGuild(1, members=[
+            _FakeDiscordMember(10, 'alice', 'Alice'),
+            _FakeDiscordMember(20, 'bob', 'Bob'),
+            _FakeDiscordMember(30, 'cara', 'Cara'),
+        ])
+        table_str = _format_akari_puzzle_table(guild, [
+            _row(3, 30, '2026-03-26', False, 50, 97, 445),
+            _row(2, 20, '2026-03-26', True, 80, 100, 445),
+            _row(1, 10, '2026-03-26', True, 60, 100, 445),
+        ])
+
+        assert '#  Name' in table_str
+        assert '1  Alice  perfect  1:00' in table_str
+        assert '2  Bob    perfect  1:20' in table_str
+        assert '3  Cara   97%      0:50' in table_str
 
 
 class TestCogSafety:
