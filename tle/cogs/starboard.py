@@ -704,6 +704,7 @@ class Starboard(BackfillMixin, commands.Cog):
                 if member is not None:
                     target_member = member
                     continue
+                raise StarboardCogError(f'User `{arg}` not found in this server.')
 
         # Build args for _parse_starboard_args (emoji + timeline filters)
         parse_args = []
