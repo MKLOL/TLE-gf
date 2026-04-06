@@ -648,7 +648,7 @@ class Starboard(BackfillMixin, commands.Cog):
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
     @starboard.command(brief='Show top starred messages',
-                       usage='[@user] [emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [user] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def top(self, ctx, *args):
         """Show top starboarded messages sorted by star count for an emoji.
         Mention a user to see only their top messages.
@@ -658,24 +658,26 @@ class Starboard(BackfillMixin, commands.Cog):
         target_member = None
         remaining = []
         for arg in args:
-            if target_member is None and (m := re.match(r'<@!?(\d+)>$', arg)):
+            if target_member is not None:
+                remaining.append(arg)
+                continue
+            # Check @mention
+            if m := re.match(r'<@!?(\d+)>$', arg):
                 member = ctx.guild.get_member(int(m.group(1)))
                 if member is not None:
                     target_member = member
                     continue
+            # Check plain username/display name
+            lower = arg.lower()
+            if lower not in _TIMELINE_KEYWORDS and not lower.startswith('d>=') and not lower.startswith('d<'):
+                member = discord.utils.find(
+                    lambda m, a=lower: m.name.lower() == a
+                    or m.display_name.lower() == a,
+                    ctx.guild.members)
+                if member is not None:
+                    target_member = member
+                    continue
             remaining.append(arg)
-
-        emoji, dlo, dhi = _parse_starboard_args(remaining)
-        # If no mention was given, check if what was parsed as the emoji
-        # is actually a guild member name (username or display name).
-        if target_member is None and emoji != constants._DEFAULT_STAR:
-            member = discord.utils.find(
-                lambda m: m.name.lower() == emoji.lower()
-                or m.display_name.lower() == emoji.lower(),
-                ctx.guild.members)
-            if member is not None:
-                target_member = member
-                emoji = constants._DEFAULT_STAR
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
