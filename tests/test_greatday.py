@@ -7,13 +7,20 @@ from tle.util.db.user_db_conn import UserDbConn, namedtuple_factory
 
 
 class FakeGreatDayDb:
-    """Minimal in-memory DB with greatday_signup and kvs tables."""
+    """Minimal in-memory DB with greatday_signup, greatday_ban, and kvs tables."""
 
     def __init__(self):
         self.conn = sqlite3.connect(':memory:')
         self.conn.row_factory = namedtuple_factory
         self.conn.execute('''
             CREATE TABLE greatday_signup (
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE greatday_ban (
                 guild_id    TEXT NOT NULL,
                 user_id     TEXT NOT NULL,
                 PRIMARY KEY (guild_id, user_id)
@@ -38,6 +45,9 @@ class FakeGreatDayDb:
     greatday_signup = UserDbConn.greatday_signup
     greatday_remove = UserDbConn.greatday_remove
     greatday_get_signups = UserDbConn.greatday_get_signups
+    greatday_ban = UserDbConn.greatday_ban
+    greatday_unban = UserDbConn.greatday_unban
+    greatday_is_banned = UserDbConn.greatday_is_banned
     kvs_set = UserDbConn.kvs_set
     kvs_get = UserDbConn.kvs_get
     kvs_delete = UserDbConn.kvs_delete
@@ -354,8 +364,84 @@ class TestPreciseSend:
         assert guild.id not in cog._pending_timers
 
 
+class TestBan:
+    def test_ban_returns_true(self, db):
+        assert db.greatday_ban(GUILD, USER_A) is True
+
+    def test_duplicate_ban_returns_false(self, db):
+        db.greatday_ban(GUILD, USER_A)
+        assert db.greatday_ban(GUILD, USER_A) is False
+
+    def test_ban_removes_signup(self, db):
+        db.greatday_signup(GUILD, USER_A)
+        db.greatday_ban(GUILD, USER_A)
+        rows = db.greatday_get_signups(GUILD)
+        assert len(rows) == 0
+
+    def test_is_banned(self, db):
+        db.greatday_ban(GUILD, USER_A)
+        assert db.greatday_is_banned(GUILD, USER_A) is True
+
+    def test_not_banned(self, db):
+        assert db.greatday_is_banned(GUILD, USER_A) is False
+
+    def test_unban_returns_true(self, db):
+        db.greatday_ban(GUILD, USER_A)
+        assert db.greatday_unban(GUILD, USER_A) is True
+
+    def test_unban_nonexistent_returns_false(self, db):
+        assert db.greatday_unban(GUILD, USER_A) is False
+
+    def test_unban_allows_signup(self, db):
+        db.greatday_ban(GUILD, USER_A)
+        db.greatday_unban(GUILD, USER_A)
+        assert db.greatday_is_banned(GUILD, USER_A) is False
+        assert db.greatday_signup(GUILD, USER_A) is True
+
+    def test_ban_guild_isolation(self, db):
+        db.greatday_ban('1', USER_A)
+        assert db.greatday_is_banned('1', USER_A) is True
+        assert db.greatday_is_banned('2', USER_A) is False
+
+    def test_ban_does_not_affect_other_signups(self, db):
+        db.greatday_signup(GUILD, USER_A)
+        db.greatday_signup(GUILD, USER_B)
+        db.greatday_ban(GUILD, USER_A)
+        rows = db.greatday_get_signups(GUILD)
+        assert len(rows) == 1
+        assert rows[0].user_id == USER_B
+
+
+class TestBanIntegration:
+    """Test that banned users cannot sign up via the cog."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _make_cog(self, db):
+        from tle.cogs.greatday import GreatDay
+        return GreatDay(bot=None)
+
+    def test_banned_user_excluded_from_send(self, db, monkeypatch):
+        """Banned users should not appear in the daily pick."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        db.greatday_signup(GUILD, USER_A)
+        db.greatday_signup(GUILD, USER_B)
+        # Ban removes signup, so USER_A won't be in the pool
+        db.greatday_ban(GUILD, USER_A)
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+        cog = self._make_cog(db)
+        self._run(cog._send_greatday(guild))
+        msg = channel.sent[0]
+        assert f'<@{USER_A}>' not in msg
+        assert f'<@{USER_B}>' in msg
+
+
 class TestUpgrade:
-    def test_upgrade_creates_table(self):
+    def test_upgrade_creates_signup_table(self):
         conn = sqlite3.connect(':memory:')
         conn.row_factory = namedtuple_factory
         from tle.util.db.user_db_upgrades import upgrade_1_18_0
@@ -365,5 +451,17 @@ class TestUpgrade:
             'INSERT INTO greatday_signup (guild_id, user_id) VALUES (?, ?)',
             ('1', '10'))
         rows = conn.execute('SELECT * FROM greatday_signup').fetchall()
+        assert len(rows) == 1
+        conn.close()
+
+    def test_upgrade_creates_ban_table(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import upgrade_1_21_0
+        upgrade_1_21_0(conn)
+        conn.execute(
+            'INSERT INTO greatday_ban (guild_id, user_id) VALUES (?, ?)',
+            ('1', '10'))
+        rows = conn.execute('SELECT * FROM greatday_ban').fetchall()
         assert len(rows) == 1
         conn.close()

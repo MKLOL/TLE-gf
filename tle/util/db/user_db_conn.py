@@ -1777,6 +1777,32 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             'SELECT user_id FROM greatday_signup WHERE guild_id = ?',
             (str(guild_id),)).fetchall()
 
+    def greatday_ban(self, guild_id, user_id):
+        """Ban a user from great day. Also removes their signup. Returns True if newly banned."""
+        rc = self.conn.execute(
+            'INSERT OR IGNORE INTO greatday_ban (guild_id, user_id) VALUES (?, ?)',
+            (str(guild_id), str(user_id))).rowcount
+        self.conn.execute(
+            'DELETE FROM greatday_signup WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id)))
+        self.conn.commit()
+        return rc > 0
+
+    def greatday_unban(self, guild_id, user_id):
+        """Unban a user from great day. Returns True if was banned."""
+        rc = self.conn.execute(
+            'DELETE FROM greatday_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))).rowcount
+        self.conn.commit()
+        return rc > 0
+
+    def greatday_is_banned(self, guild_id, user_id):
+        """Check if a user is banned from great day."""
+        row = self.conn.execute(
+            'SELECT 1 FROM greatday_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))).fetchone()
+        return row is not None
+
     def kvs_set(self, key, value):
         """Set a key-value pair. Overwrites if key exists."""
         with self.conn:

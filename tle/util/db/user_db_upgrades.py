@@ -507,3 +507,17 @@ def upgrade_1_20_0(db):
     ''')
     db.commit()
     logger.info('1.20.0: cfvc_cache table created')
+
+
+@registry.register('1.21.0', 'Great Day ban table')
+def upgrade_1_21_0(db):
+    logger.info('1.21.0: Creating greatday_ban table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS greatday_ban (
+            guild_id    TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.21.0: greatday_ban table created')

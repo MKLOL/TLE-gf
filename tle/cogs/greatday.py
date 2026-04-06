@@ -133,6 +133,8 @@ class GreatDay(commands.Cog):
 
     @greatday.command(name='signup', brief='Sign up for daily great day pings')
     async def signup(self, ctx):
+        if cf_common.user_db.greatday_is_banned(ctx.guild.id, ctx.author.id):
+            raise GreatDayCogError('You are banned from great day.')
         added = cf_common.user_db.greatday_signup(ctx.guild.id, ctx.author.id)
         if added:
             await ctx.send(embed=discord_common.embed_success(
@@ -155,6 +157,10 @@ class GreatDay(commands.Cog):
                       usage='@user')
     @commands.has_role(constants.TLE_ADMIN)
     async def add_user(self, ctx, member: discord.Member):
+        if cf_common.user_db.greatday_is_banned(ctx.guild.id, member.id):
+            name = discord.utils.escape_mentions(member.display_name)
+            raise GreatDayCogError(
+                f'`{name}` is banned from great day. Unban them first.')
         added = cf_common.user_db.greatday_signup(ctx.guild.id, member.id)
         name = discord.utils.escape_mentions(member.display_name)
         if added:
@@ -176,6 +182,32 @@ class GreatDay(commands.Cog):
         else:
             await ctx.send(embed=discord_common.embed_alert(
                 f'`{name}` is not signed up.'))
+
+    @greatday.command(name='ban', brief='Ban a user from great day (admin)',
+                      usage='@user')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def ban_user(self, ctx, member: discord.Member):
+        banned = cf_common.user_db.greatday_ban(ctx.guild.id, member.id)
+        name = discord.utils.escape_mentions(member.display_name)
+        if banned:
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{name}` has been banned from great day.'))
+        else:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'`{name}` is already banned.'))
+
+    @greatday.command(name='unban', brief='Unban a user from great day (admin)',
+                      usage='@user')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def unban_user(self, ctx, member: discord.Member):
+        unbanned = cf_common.user_db.greatday_unban(ctx.guild.id, member.id)
+        name = discord.utils.escape_mentions(member.display_name)
+        if unbanned:
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{name}` has been unbanned from great day.'))
+        else:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'`{name}` is not banned.'))
 
     @greatday.command(name='here', brief='Set the great day channel')
     @commands.has_role(constants.TLE_ADMIN)
