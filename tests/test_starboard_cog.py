@@ -736,6 +736,16 @@ class TestDefaultEmojiParameter:
         sig = inspect.signature(method)
         assert 'args' in sig.parameters, f'{method_name} should accept *args'
 
+    @pytest.mark.parametrize('method_name', _COMMANDS_WITH_ARGS)
+    def test_args_commands_call_parse_starboard_args(self, method_name):
+        """Every *args command must call _parse_starboard_args to extract emoji/dlo/dhi."""
+        method = _unwrap(getattr(Starboard, method_name))
+        source = inspect.getsource(method)
+        assert '_parse_starboard_args(' in source, (
+            f'{method_name} does not call _parse_starboard_args — '
+            f'emoji/dlo/dhi will be undefined'
+        )
+
     def test_edit_threshold_required_arg_before_emoji(self):
         """threshold should come before the optional emoji."""
         sig = inspect.signature(_unwrap(Starboard.edit_threshold))
