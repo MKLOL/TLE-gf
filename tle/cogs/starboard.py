@@ -25,6 +25,22 @@ from tle.cogs._starboard_render import (
 
 logger = logging.getLogger(__name__)
 
+# Matches custom Discord emojis: <:name:id> or <a:name:id>
+_CUSTOM_EMOJI_RE = re.compile(r'<a?:\w+:\d+>$')
+
+
+def _looks_like_emoji(s):
+    """Return True if *s* looks like a Discord emoji rather than a username.
+
+    Covers two cases:
+    - Custom server emojis: ``<:name:123>`` / ``<a:name:123>``
+    - Unicode emojis: any short string containing non-ASCII characters
+      (Discord usernames are ASCII-only since the 2023 migration).
+    """
+    if _CUSTOM_EMOJI_RE.match(s):
+        return True
+    return any(ord(c) > 127 for c in s)
+
 # When True, every starboard update fully re-renders the embed from the
 # original message instead of just patching the count in the content line.
 FULL_RE_RENDER = True
@@ -654,22 +670,33 @@ class Starboard(BackfillMixin, commands.Cog):
         Mention a user to see only their top messages.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        # Extract user mentions or names from args before parsing the rest.
+        # Parse args with emoji always first: [emoji] [user] [timeline...]
         target_member = None
-        remaining = []
+        emoji_arg = None
+        timeline_args = []
+
         for arg in args:
-            if target_member is not None:
-                remaining.append(arg)
-                continue
-            # Check @mention
-            if m := re.match(r'<@!?(\d+)>$', arg):
-                member = ctx.guild.get_member(int(m.group(1)))
-                if member is not None:
-                    target_member = member
-                    continue
-            # Check plain username/display name
+            # @mention → member
+            if target_member is None:
+                if m := re.match(r'<@!?(\d+)>$', arg):
+                    member = ctx.guild.get_member(int(m.group(1)))
+                    if member is not None:
+                        target_member = member
+                        continue
+
             lower = arg.lower()
-            if lower not in _TIMELINE_KEYWORDS and not lower.startswith('d>=') and not lower.startswith('d<'):
+            # Timeline keyword or date range → pass through
+            if lower in _TIMELINE_KEYWORDS or lower.startswith('d>=') or lower.startswith('d<'):
+                timeline_args.append(arg)
+                continue
+
+            # Emoji: first arg that looks like a Unicode or custom emoji
+            if emoji_arg is None and _looks_like_emoji(arg):
+                emoji_arg = arg
+                continue
+
+            # Plain text: try as username/display name
+            if target_member is None:
                 member = discord.utils.find(
                     lambda m, a=lower: m.name.lower() == a
                     or m.display_name.lower() == a,
@@ -677,8 +704,13 @@ class Starboard(BackfillMixin, commands.Cog):
                 if member is not None:
                     target_member = member
                     continue
-            remaining.append(arg)
-        emoji, dlo, dhi = _parse_starboard_args(remaining)
+
+        # Build args for _parse_starboard_args (emoji + timeline filters)
+        parse_args = []
+        if emoji_arg is not None:
+            parse_args.append(emoji_arg)
+        parse_args.extend(timeline_args)
+        emoji, dlo, dhi = _parse_starboard_args(parse_args)
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')

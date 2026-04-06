@@ -13,6 +13,7 @@ from tests.test_starboard_db import FakeUserDb
 from tle.cogs._starboard_helpers import _parse_jump_url
 from tle.cogs.starboard import (
     Starboard,
+    _looks_like_emoji,
     _starboard_content,
     _parse_starboard_args,
     _NO_TIME_BOUND,
@@ -1274,3 +1275,34 @@ class TestStarboardShow:
         db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
         entries = db.get_starboard_emojis_for_guild(GUILD_A)
         assert entries[0].channel_id is None
+
+
+class TestLooksLikeEmoji:
+    """Tests for the _looks_like_emoji helper used by ;starboard top."""
+
+    def test_unicode_star(self):
+        assert _looks_like_emoji(STAR) is True
+
+    def test_unicode_fire(self):
+        assert _looks_like_emoji(FIRE) is True
+
+    def test_unicode_pill(self):
+        assert _looks_like_emoji('\N{PILL}') is True
+
+    def test_custom_emoji(self):
+        assert _looks_like_emoji('<:custom:123456789>') is True
+
+    def test_animated_custom_emoji(self):
+        assert _looks_like_emoji('<a:dance:987654321>') is True
+
+    def test_plain_username(self):
+        assert _looks_like_emoji('nifeshe') is False
+
+    def test_plain_username_with_numbers(self):
+        assert _looks_like_emoji('user123') is False
+
+    def test_timeline_keyword(self):
+        assert _looks_like_emoji('week') is False
+
+    def test_date_arg(self):
+        assert _looks_like_emoji('d>=2024') is False
