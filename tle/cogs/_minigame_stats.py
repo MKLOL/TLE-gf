@@ -123,7 +123,9 @@ def plot_akari_stats(rows, display_name):
         ax.scatter(dates, times, color='#90CAF9', s=12, alpha=0.5, zorder=2, label='Individual')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        fig.autofmt_xdate()
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+            label.set_ha('right')
         ax.set_ylabel('Seconds')
         ax.legend(fontsize=9)
     else:
@@ -223,7 +225,9 @@ def plot_guessgame_stats(rows, display_name):
         ax.axhline(y=green_rate, color='#888', linestyle='--', linewidth=1, label='Overall avg')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        fig.autofmt_xdate()
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+            label.set_ha('right')
         ax.set_ylabel('Win %')
         ax.set_ylim(-5, 105)
         ax.legend(fontsize=9)
@@ -247,7 +251,9 @@ def plot_guessgame_stats(rows, display_name):
         ax.axhline(y=avg_pos, color='#888', linestyle='--', linewidth=1, label='Overall avg')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        fig.autofmt_xdate()
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+            label.set_ha('right')
         ax.set_ylabel('Avg Guess Position')
         ax.set_ylim(0.5, 6.5)
         ax.invert_yaxis()
