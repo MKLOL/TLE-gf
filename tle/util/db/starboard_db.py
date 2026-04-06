@@ -436,7 +436,7 @@ class StarboardDbMixin:
         guild_id = str(guild_id)
         time_clauses, time_params = self._snowflake_time_filter('original_msg_id', dlo, dhi)
         extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
-        params = [guild_id, emoji]
+        params = [guild_id, emoji] + list(time_params)
         if author_id is not None:
             extra += ' AND author_id = ?'
             params.append(str(author_id))
@@ -449,7 +449,7 @@ class StarboardDbMixin:
                 {extra}
             ORDER BY star_count DESC, original_msg_id DESC
         '''
-        return self.conn.execute(query, tuple(params) + tuple(time_params)).fetchall()
+        return self.conn.execute(query, tuple(params)).fetchall()
 
     def get_all_starboard_messages_for_guild(self, guild_id):
         """Get all starboard messages for a guild (used by backfill)."""

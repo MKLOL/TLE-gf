@@ -1066,6 +1066,33 @@ class TestSnowflakeTimeFiltering:
         assert rows[0].star_count == 10
         assert rows[1].star_count == 3
 
+    def test_top_messages_author_with_dlo(self, db):
+        """Combining author_id + dlo must not swap SQL parameters."""
+        self._setup_messages(db)
+        dlo = self._ts(2024, 1, 1)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dlo=dlo, author_id='user2')
+        assert len(rows) == 2
+        assert all(r.author_id == 'user2' for r in rows)
+
+    def test_top_messages_author_with_range(self, db):
+        """Combining author_id + dlo + dhi must not swap SQL parameters."""
+        self._setup_messages(db)
+        dlo = self._ts(2024, 1, 1)
+        dhi = self._ts(2025, 1, 1)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, dlo=dlo, dhi=dhi,
+                                             author_id='user2')
+        # Only Dec 2024 message by user2 falls in range
+        assert len(rows) == 1
+        assert rows[0].author_id == 'user2'
+        assert rows[0].star_count == 10
+
+    def test_top_messages_author_no_time_filter(self, db):
+        """author_id alone (no time filter) still works."""
+        self._setup_messages(db)
+        rows = db.get_top_starboard_messages(GUILD_A, STAR, author_id='user1')
+        assert len(rows) == 2
+        assert all(r.author_id == 'user1' for r in rows)
+
     # --- get_star_givers_leaderboard ---
 
     def test_star_givers_no_filter(self, db):
