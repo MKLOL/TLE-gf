@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import discord
 from discord.ext import commands
@@ -657,10 +658,10 @@ class Starboard(BackfillMixin, commands.Cog):
         target_member = None
         remaining = []
         for arg in args:
-            if target_member is None and (match := discord.utils.parse_raw_mentions(arg)):
-                m = ctx.guild.get_member(match[0])
-                if m is not None:
-                    target_member = m
+            if target_member is None and (m := re.match(r'<@!?(\d+)>$', arg)):
+                member = ctx.guild.get_member(int(m.group(1)))
+                if member is not None:
+                    target_member = member
                     continue
             remaining.append(arg)
 
