@@ -654,7 +654,7 @@ class Starboard(BackfillMixin, commands.Cog):
         Mention a user to see only their top messages.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        # Extract user mentions from args before parsing the rest.
+        # Extract user mentions or names from args before parsing the rest.
         target_member = None
         remaining = []
         for arg in args:
@@ -666,6 +666,16 @@ class Starboard(BackfillMixin, commands.Cog):
             remaining.append(arg)
 
         emoji, dlo, dhi = _parse_starboard_args(remaining)
+        # If no mention was given, check if what was parsed as the emoji
+        # is actually a guild member name (username or display name).
+        if target_member is None and emoji != constants._DEFAULT_STAR:
+            member = discord.utils.find(
+                lambda m: m.name.lower() == emoji.lower()
+                or m.display_name.lower() == emoji.lower(),
+                ctx.guild.members)
+            if member is not None:
+                target_member = member
+                emoji = constants._DEFAULT_STAR
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
