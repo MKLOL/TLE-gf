@@ -1,6 +1,11 @@
 export BOT_TOKEN="XXXXXXXXXXXXXXXXXXXXXXXX.XXXXXX.XXXXXXXXXXXXXXXXXXXXXXXXXXX"
 export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 
+# Codeforces API credentials. Generate a key pair at https://codeforces.com/settings/api.
+# Required because most CF API methods now reject unauthenticated requests with HTTP 400.
+export CF_API_KEY=""
+export CF_API_SECRET=""
+
 # Set to enable automatic venv usage.
 export VENV_DIR=""
 

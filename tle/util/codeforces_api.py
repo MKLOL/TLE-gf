@@ -1,8 +1,12 @@
 import asyncio
 from collections import defaultdict, deque, namedtuple
 import functools
+import hashlib
 import itertools
 import logging
+import os
+import random
+import string
 import time
 from typing import Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 import aiohttp
@@ -320,17 +324,51 @@ class RatingChangesUnavailableError(TrueApiError):
 
 _session: aiohttp.ClientSession = None
 
+_CF_API_KEY = os.environ.get('CF_API_KEY')
+_CF_API_SECRET = os.environ.get('CF_API_SECRET')
+_SIG_RAND_CHARS = string.ascii_lowercase + string.digits
+
 
 async def initialize() -> None:
     """Initialization for the Codeforces API module."""
     global _session
     _session = aiohttp.ClientSession()
+    if _CF_API_KEY and _CF_API_SECRET:
+        logger.info('CF API credentials loaded; requests will be signed.')
+    else:
+        logger.warning('CF_API_KEY/CF_API_SECRET not set; requests will be unsigned '
+                       'and may be rejected by Codeforces.')
 
 
 def _bool_to_str(value: bool) -> str:
     if isinstance(value, bool):
         return 'true' if value else 'false'
     raise TypeError(f'Expected bool, got {value} of type {type(value)}')
+
+
+def _scrub_for_log(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not params:
+        return params
+    return {k: ('***' if k in ('apiKey', 'apiSig') else v) for k, v in params.items()}
+
+
+def _sign_params(method: str, params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Adds apiKey/time/apiSig per https://codeforces.com/apiHelp.
+
+    Signing string: <rand>/<method>?k1=v1&k2=v2...&kN=vN#<secret>
+    where pairs are sorted lexicographically by (name, value). apiSig is
+    <rand> concatenated with the SHA-512 hex digest of that string.
+    """
+    if not (_CF_API_KEY and _CF_API_SECRET):
+        return params
+    signed = {str(k): str(v) for k, v in (params or {}).items()}
+    signed['apiKey'] = _CF_API_KEY
+    signed['time'] = str(int(time.time()))
+    rand = ''.join(random.choices(_SIG_RAND_CHARS, k=6))
+    query = '&'.join(f'{k}={v}' for k, v in sorted(signed.items()))
+    digest = hashlib.sha512(f'{rand}/{method}?{query}#{_CF_API_SECRET}'.encode()).hexdigest()
+    signed['apiSig'] = rand + digest
+    return signed
 
 
 def cf_ratelimit(f):
@@ -370,11 +408,12 @@ def cf_ratelimit(f):
 @cf_ratelimit
 async def _query_api(path: str, data: Any=None):
     url = API_BASE_URL + path
+    signed_data = _sign_params(path, data)
     try:
-        logger.info(f'Querying CF API at {url} with {data}')
+        logger.info(f'Querying CF API at {url} with {_scrub_for_log(signed_data)}')
         # Explicitly state encoding (though aiohttp accepts gzip by default)
         headers = {'Accept-Encoding': 'gzip'}
-        async with _session.post(url, data=data, headers=headers) as resp:
+        async with _session.post(url, data=signed_data, headers=headers) as resp:
             try:
                 respjson = await resp.json()
             except aiohttp.ContentTypeError:
