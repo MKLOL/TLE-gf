@@ -301,7 +301,7 @@ def _estimate_perf_from_cache(contest_id, virtual_rank):
     return best.oldRating + 4 * (best.newRating - best.oldRating)
 
 
-async def _build_cfvc_rows(handle, dlo=0, dhi=10**10):
+async def _build_cfvc_rows(handle, dlo=0, dhi=10**10, source=cf.RANKLIST_SOURCE_STANDINGS):
     """Build performance rows for CF virtual participations (not TLE VCs).
 
     Caching strategy:
@@ -339,7 +339,7 @@ async def _build_cfvc_rows(handle, dlo=0, dhi=10**10):
     for cid in uncached_cids:
         try:
             _contest, _problems, ranklist = await cf.contest.standings(
-                contest_id=cid, handles=[handle], show_unofficial=True)
+                contest_id=cid, handles=[handle], show_unofficial=True, source=source)
         except Exception:
             missing += 1
             continue
@@ -1395,7 +1395,8 @@ class Graphs(commands.Cog):
         handle = handles[0]
 
         await ctx.send(f'Fetching virtual participations for `{handle}`, this may take a moment...')
-        rows, missing = await _build_cfvc_rows(handle, filt.dlo, filt.dhi)
+        source = cf_common.get_cf_ranklist_source(ctx.guild.id)
+        rows, missing = await _build_cfvc_rows(handle, filt.dlo, filt.dhi, source=source)
 
         if not rows:
             raise GraphCogError(f'No CF virtual participations found for `{handle}`.')

@@ -616,7 +616,7 @@ class TestBuildCfvcRows:
         cache100 = [_make_rc(100, 'R100', 'x', 50, 1000, 1500, 1550)]
         cache300 = [_make_rc(300, 'R300', 'x', 10, 1000, 1800, 1850)]
 
-        async def mock_standings(*, contest_id, handles, show_unofficial):
+        async def mock_standings(*, contest_id, handles, show_unofficial, source=None):
             if contest_id == 100:
                 return (contest100, [], ranklist100)
             elif contest_id == 200:
@@ -703,7 +703,7 @@ class TestBuildCfvcRows:
         cache100 = [_make_rc(100, 'Old Round', 'x', 50, 1000, 1500, 1550)]
         cache200 = [_make_rc(200, 'New Round', 'x', 30, 5000, 1600, 1650)]
 
-        async def mock_standings(*, contest_id, handles, show_unofficial):
+        async def mock_standings(*, contest_id, handles, show_unofficial, source=None):
             if contest_id == 100:
                 return (contest100, [], [_make_ranklist_row('user', 50)])
             return (contest200, [], [_make_ranklist_row('user', 30)])
@@ -739,7 +739,7 @@ class TestBuildCfvcRows:
         cache100 = [_make_rc(100, 'Old Round', 'x', 50, 1000, 1500, 1550)]
         cache200 = [_make_rc(200, 'New Round', 'x', 30, 5000, 1600, 1650)]
 
-        async def mock_standings(*, contest_id, handles, show_unofficial):
+        async def mock_standings(*, contest_id, handles, show_unofficial, source=None):
             if contest_id == 100:
                 return (contest100, [], [_make_ranklist_row('user', 50)])
             return (contest200, [], [_make_ranklist_row('user', 30)])

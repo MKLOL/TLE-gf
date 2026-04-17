@@ -6,13 +6,11 @@ export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 export CF_API_KEY=""
 export CF_API_SECRET=""
 
-# Ranklist data source:
-#   standings (default)  - use contest.standings; only works if the CF key has
-#                          admin/manager access on the round.
-#   rating_changes       - synthesize standings from contest.ratingChanges. Works
-#                          with a normal key but only for rated contests AFTER
-#                          ratings are applied, and with no per-problem data.
-export CF_RANKLIST_SOURCE="standings"
+# Ranklist data source is now configured per-guild via:
+#   ;meta config enable cf_ranklist_source_rating_changes
+# This routes contest.standings through contest.ratingChanges (public) for
+# guilds where the bot key lacks admin access. Degraded: rated contests only,
+# no per-problem results. Leave disabled (default) to use contest.standings.
 
 # Set to enable automatic venv usage.
 export VENV_DIR=""

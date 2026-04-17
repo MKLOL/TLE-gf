@@ -328,12 +328,14 @@ _CF_API_KEY = os.environ.get('CF_API_KEY')
 _CF_API_SECRET = os.environ.get('CF_API_SECRET')
 _SIG_RAND_CHARS = string.ascii_lowercase + string.digits
 
-# Ranklist data source. CF restricts contest.standings to admin users for
-# regular rounds as of April 2026, which breaks ;ranklist/;probrat/VC. Set
-# CF_RANKLIST_SOURCE=rating_changes to synthesize standings from the public
-# contest.ratingChanges endpoint instead. Degraded: no per-problem results,
-# only works after ratings are applied, unrated contests return empty.
-_RANKLIST_SOURCE = os.environ.get('CF_RANKLIST_SOURCE', '').lower() or 'standings'
+# Ranklist data sources. CF restricts contest.standings to admin users for
+# regular rounds as of April 2026, which breaks ;ranklist/;probrat/VC when
+# the bot key lacks admin access. Callers can pass source='rating_changes'
+# to synthesize standings from the public contest.ratingChanges endpoint.
+# Degraded: no per-problem results, only works after ratings are applied,
+# unrated contests return empty.
+RANKLIST_SOURCE_STANDINGS = 'standings'
+RANKLIST_SOURCE_RATING_CHANGES = 'rating_changes'
 
 
 async def initialize() -> None:
@@ -345,7 +347,6 @@ async def initialize() -> None:
     else:
         logger.warning('CF_API_KEY/CF_API_SECRET not set; requests will be unsigned '
                        'and may be rejected by Codeforces.')
-    logger.info(f'Ranklist source: {_RANKLIST_SOURCE}')
 
 
 def _bool_to_str(value: bool) -> str:
@@ -472,8 +473,9 @@ class contest:
         handles: Optional[List[str]] = None,
         room: Optional[Any] = None,
         show_unofficial: Optional[bool] = None,
+        source: str = RANKLIST_SOURCE_STANDINGS,
     ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
-        if _RANKLIST_SOURCE == 'rating_changes':
+        if source == RANKLIST_SOURCE_RATING_CHANGES:
             return await contest._standings_from_rating_changes(
                 contest_id=contest_id, from_=from_, count=count, handles=handles)
         params = {'contestId': contest_id}

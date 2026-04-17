@@ -477,6 +477,7 @@ class Contests(commands.Cog):
         handles = await cf_common.resolve_handles(ctx, self.member_converter, handles, maxcnt=None,
                                                   default_to_all_server=True)
         contest = cf_common.cache2.contest_cache.get_contest(contest_id)
+        source = cf_common.get_cf_ranklist_source(ctx.guild.id)
         wait_msg = await ctx.channel.send('Generating ranklist, please wait...')
         ranklist = None
         try:
@@ -485,7 +486,8 @@ class Contests(commands.Cog):
             if contest.phase == 'BEFORE':
                 raise ContestCogError(f'Contest `{contest.id} | {contest.name}` has not started')
             ranklist = await cf_common.cache2.ranklist_cache.generate_ranklist(contest.id, fetch_changes=True,
-                                                                               show_unofficial=not show_official)
+                                                                               show_unofficial=not show_official,
+                                                                               source=source)
 
         await wait_msg.delete()
         await ctx.channel.send(embed=self._make_contest_embed_for_ranklist(ranklist))
@@ -624,7 +626,9 @@ class Contests(commands.Cog):
         handles = [cf_common.user_db.get_handle(member_id, channel.guild.id) for member_id in member_ids]
         handle_to_member_id = {handle : member_id for handle, member_id in zip(handles, member_ids)}
         now = time.time()
-        ranklist = await cf_common.cache2.ranklist_cache.generate_vc_ranklist(vc.contest_id, handle_to_member_id)
+        source = cf_common.get_cf_ranklist_source(vc.guild_id)
+        ranklist = await cf_common.cache2.ranklist_cache.generate_vc_ranklist(vc.contest_id, handle_to_member_id,
+                                                                              source=source)
 
         async def has_running_subs(handle):
             return [sub for sub in await cf.user.status(handle=handle)
@@ -842,6 +846,10 @@ class Contests(commands.Cog):
     async def problemratings(self, ctx, contest_id: int):
         """Estimation of contest problem ratings
         """
+        if cf_common.get_cf_ranklist_source(ctx.guild.id) == cf.RANKLIST_SOURCE_RATING_CHANGES:
+            raise ContestCogError(
+                'Mike guards cf.contest.standings api to be admin only. '
+                'We can no longer do probrat.')
         await ctx.send('This will take a while')
         contests = await cf.contest.list()
         reqcontest = [contest for contest in contests if contest.id == contest_id]

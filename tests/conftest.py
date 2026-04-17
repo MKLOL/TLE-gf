@@ -311,6 +311,8 @@ _cf_api.RatingChange = _nt('RatingChange',
                             'contestId contestName handle rank '
                             'ratingUpdateTimeSeconds oldRating newRating')
 _cf_api.GYM_ID_THRESHOLD = 100000
+_cf_api.RANKLIST_SOURCE_STANDINGS = 'standings'
+_cf_api.RANKLIST_SOURCE_RATING_CHANGES = 'rating_changes'
 
 class _Contest(_NamedTuple):
     id: int

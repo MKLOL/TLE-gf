@@ -111,6 +111,21 @@ def is_contest_writer(contest_id, handle):
     return writers and handle.lower() in writers
 
 
+CF_RANKLIST_SOURCE_KEY = 'cf_ranklist_source_rating_changes'
+
+
+def get_cf_ranklist_source(guild_id):
+    """Return 'rating_changes' if the guild has opted into the fallback,
+    else 'standings'. Configured via ;meta config enable/disable with the
+    feature key cf_ranklist_source_rating_changes.
+    """
+    if guild_id is None or user_db is None:
+        return 'standings'
+    if user_db.get_guild_config(guild_id, CF_RANKLIST_SOURCE_KEY) == '1':
+        return 'rating_changes'
+    return 'standings'
+
+
 _NONSTANDARD_CONTEST_INDICATORS = [
     'wild', 'fools', 'unrated', 'surprise', 'unknown', 'friday', 'q#', 'testing',
     'marathon', 'kotlin', 'onsite', 'experimental', 'abbyy', 'icpc']
