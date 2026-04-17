@@ -328,6 +328,13 @@ _CF_API_KEY = os.environ.get('CF_API_KEY')
 _CF_API_SECRET = os.environ.get('CF_API_SECRET')
 _SIG_RAND_CHARS = string.ascii_lowercase + string.digits
 
+# Ranklist data source. CF restricts contest.standings to admin users for
+# regular rounds as of April 2026, which breaks ;ranklist/;probrat/VC. Set
+# CF_RANKLIST_SOURCE=rating_changes to synthesize standings from the public
+# contest.ratingChanges endpoint instead. Degraded: no per-problem results,
+# only works after ratings are applied, unrated contests return empty.
+_RANKLIST_SOURCE = os.environ.get('CF_RANKLIST_SOURCE', '').lower() or 'standings'
+
 
 async def initialize() -> None:
     """Initialization for the Codeforces API module."""
@@ -338,6 +345,7 @@ async def initialize() -> None:
     else:
         logger.warning('CF_API_KEY/CF_API_SECRET not set; requests will be unsigned '
                        'and may be rejected by Codeforces.')
+    logger.info(f'Ranklist source: {_RANKLIST_SOURCE}')
 
 
 def _bool_to_str(value: bool) -> str:
@@ -465,6 +473,9 @@ class contest:
         room: Optional[Any] = None,
         show_unofficial: Optional[bool] = None,
     ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
+        if _RANKLIST_SOURCE == 'rating_changes':
+            return await contest._standings_from_rating_changes(
+                contest_id=contest_id, from_=from_, count=count, handles=handles)
         params = {'contestId': contest_id}
         if from_ is not None:
             params['from'] = from_
@@ -492,6 +503,70 @@ class contest:
                                      for problem_result in row['problemResults']]
         ranklist = [make_from_dict(RanklistRow, row_dict) for row_dict in resp['rows']]
         return contest_, problems, ranklist
+
+    @staticmethod
+    async def _standings_from_rating_changes(
+        *,
+        contest_id: Any,
+        from_: Optional[int] = None,
+        count: Optional[int] = None,
+        handles: Optional[List[str]] = None,
+    ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
+        """Fallback for when contest.standings is gated behind admin access.
+
+        Synthesizes the (Contest, problems, ranklist) triple from three
+        still-public endpoints: contest.list, problemset.problems, and
+        contest.ratingChanges. RanklistRows have empty problemResults,
+        points=0, penalty=0 — only rank and handle are real. Participant
+        type is stamped CONTESTANT for all. Empty if ratings not yet
+        applied or the contest was unrated.
+        """
+        contests = await contest.list()
+        contest_obj = next((c for c in contests if c.id == contest_id), None)
+        if contest_obj is None:
+            raise ContestNotFoundError(
+                f'contestId: Contest with id {contest_id} not found', contest_id)
+
+        all_problems, _ = await problemset.problems()
+        problems = sorted(
+            (p for p in all_problems if p.contestId == contest_id),
+            key=lambda p: p.index,
+        )
+
+        try:
+            changes = await contest.ratingChanges(contest_id=contest_id)
+        except RatingChangesUnavailableError:
+            changes = []
+
+        rows: List[RanklistRow] = []
+        for ch in changes:
+            party = Party(
+                contestId=contest_id,
+                members=[Member(handle=ch.handle)],
+                participantType='CONTESTANT',
+                teamId=None,
+                teamName=None,
+                ghost=False,
+                room=None,
+                startTimeSeconds=contest_obj.startTimeSeconds,
+            )
+            rows.append(RanklistRow(
+                party=party,
+                rank=ch.rank,
+                points=0.0,
+                penalty=0,
+                problemResults=[],
+            ))
+
+        if handles:
+            wanted = set(handles)
+            rows = [r for r in rows if r.party.members[0].handle in wanted]
+        if from_ is not None:
+            rows = rows[max(from_ - 1, 0):]
+        if count is not None:
+            rows = rows[:count]
+
+        return contest_obj, problems, rows
 
 
 class problemset:

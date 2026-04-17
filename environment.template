@@ -6,6 +6,14 @@ export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 export CF_API_KEY=""
 export CF_API_SECRET=""
 
+# Ranklist data source:
+#   standings (default)  - use contest.standings; only works if the CF key has
+#                          admin/manager access on the round.
+#   rating_changes       - synthesize standings from contest.ratingChanges. Works
+#                          with a normal key but only for rated contests AFTER
+#                          ratings are applied, and with no per-problem data.
+export CF_RANKLIST_SOURCE="standings"
+
 # Set to enable automatic venv usage.
 export VENV_DIR=""
 
