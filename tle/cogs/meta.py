@@ -142,14 +142,21 @@ class Meta(commands.Cog):
     @meta.group(brief='Feature configuration', invoke_without_command=True)
     @commands.has_role(constants.TLE_ADMIN)
     async def config(self, ctx):
-        """List or toggle feature flags for this guild.
-        Known features: starboard_leaderboard, akari, guessgame, migration_ops,
-        cf_ranklist_source_rating_changes"""
+        """List every known feature flag and its current state for this guild."""
         configs = cf_common.user_db.get_all_guild_configs(ctx.guild.id)
-        if not configs:
-            await ctx.send(embed=discord_common.embed_neutral('No features enabled.'))
-            return
-        lines = [f'`{c.key}` = `{c.value}`' for c in configs]
+        values = {c.key: c.value for c in configs}
+        lines = []
+        for feature in _KNOWN_FEATURES:
+            if feature in values:
+                lines.append(f'`{feature}` = `{values[feature]}`')
+            else:
+                lines.append(f'`{feature}` = _(not set)_')
+        extras = [k for k in values if k not in _KNOWN_FEATURES]
+        if extras:
+            lines.append('')
+            lines.append('_Other configured keys (set outside ;meta config):_')
+            for k in extras:
+                lines.append(f'`{k}` = `{values[k]}`')
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
 
     @config.command(brief='Enable a feature')
