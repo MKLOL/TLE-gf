@@ -518,8 +518,9 @@ class contest:
 
         Synthesizes the (Contest, problems, ranklist) triple from three
         still-public endpoints: contest.list, problemset.problems, and
-        contest.ratingChanges. RanklistRows have empty problemResults,
-        points=0, penalty=0 — only rank and handle are real. Participant
+        contest.ratingChanges. RanklistRows carry real rank + handle;
+        problemResults is padded to len(problems) with zero-value
+        placeholders so the standings table can still render. Participant
         type is stamped CONTESTANT for all. Empty if ratings not yet
         applied or the contest was unrated.
         """
@@ -540,6 +541,15 @@ class contest:
         except RatingChangesUnavailableError:
             changes = []
 
+        # Placeholder results for rendering — real per-problem data isn't
+        # available via ratingChanges. Matches problems count so the table
+        # column layout stays consistent.
+        placeholder_results = [
+            ProblemResult(points=0.0, penalty=0, rejectedAttemptCount=0,
+                          type='PRELIMINARY', bestSubmissionTimeSeconds=None)
+            for _ in problems
+        ]
+
         rows: List[RanklistRow] = []
         for ch in changes:
             party = Party(
@@ -557,7 +567,7 @@ class contest:
                 rank=ch.rank,
                 points=0.0,
                 penalty=0,
-                problemResults=[],
+                problemResults=list(placeholder_results),
             ))
 
         if handles:

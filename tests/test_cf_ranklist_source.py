@@ -7,6 +7,8 @@ Covers:
   source='rating_changes'.
 - _sign_params matches the Codeforces signing spec.
 - ;probrat raises the Mike error under rating_changes mode.
+- _standings_from_rating_changes pads problemResults so the ;ranklist
+  table can render without IndexError.
 """
 import asyncio
 import hashlib
@@ -339,3 +341,116 @@ class TestProbratMikeError:
                 assert 'stop-here' in str(excinfo.value)
 
         _run_async(_run())
+
+
+# ── fallback row shape + table-render regression ───────────────────────
+# Regression for the ;ranklist IndexError: _standings_from_rating_changes
+# used to return rows with problemResults=[], but the standings table's
+# column count is driven by len(problems), so Table.__repr__ at table.py:82
+# would IndexError when computing max_colsize. Rows must pad problemResults
+# to len(problems) so the table can render.
+
+class TestFallbackRowShape:
+    def _run(self, coro):
+        return _run_async(coro)
+
+    def _build_fallback(self, num_problems=3, handles=('alice', 'bob')):
+        """Call _standings_from_rating_changes with mocked upstream endpoints."""
+        cf = _load_real_cf_api(api_key='K', api_secret='S')
+
+        contest_id = 2200
+        contest_obj = cf.Contest(
+            id=contest_id, name='R', startTimeSeconds=1000,
+            durationSeconds=7200, type='CF', phase='FINISHED',
+            preparedBy=None,
+        )
+
+        problems = [
+            cf.Problem(contestId=contest_id, problemsetName=None, index=chr(ord('A') + i),
+                       name=f'P{i}', type='PROGRAMMING', points=None, rating=1500,
+                       tags=[])
+            for i in range(num_problems)
+        ]
+        changes = [
+            cf.RatingChange(contestId=contest_id, contestName='R', handle=h, rank=idx + 1,
+                            ratingUpdateTimeSeconds=1000, oldRating=1500, newRating=1550)
+            for idx, h in enumerate(handles)
+        ]
+
+        async def fake_contest_list(*, gym=None):
+            return [contest_obj]
+
+        async def fake_problemset_problems(*, tags=None, problemset_name=None):
+            return problems, []
+
+        async def fake_rating_changes(*, contest_id):
+            return changes
+
+        with patch.object(cf.contest, 'list', fake_contest_list), \
+             patch.object(cf.problemset, 'problems', fake_problemset_problems), \
+             patch.object(cf.contest, 'ratingChanges', fake_rating_changes):
+            return self._run(cf.contest._standings_from_rating_changes(contest_id=contest_id))
+
+    def test_problem_results_padded_to_match_problems(self):
+        contest, problems, rows = self._build_fallback(num_problems=5,
+                                                       handles=('alice', 'bob', 'carol'))
+        assert len(problems) == 5
+        assert len(rows) == 3
+        # The bug: rows had problemResults=[] while problems had 5 entries,
+        # so the standings table column count mismatched and crashed render.
+        for row in rows:
+            assert len(row.problemResults) == len(problems), (
+                'problemResults must match len(problems) so the ;ranklist '
+                'table does not IndexError on render')
+
+    def test_empty_problems_yields_empty_problem_results(self):
+        _, problems, rows = self._build_fallback(num_problems=0, handles=('alice',))
+        assert problems == []
+        assert len(rows) == 1
+        assert rows[0].problemResults == []
+
+    def test_placeholder_results_render_blank_scores(self):
+        """Blank cells: points=0 → score='' in CF rendering."""
+        _, _, rows = self._build_fallback(num_problems=3, handles=('alice',))
+        for pr in rows[0].problemResults:
+            assert pr.points == 0 or pr.points == 0.0
+            assert pr.rejectedAttemptCount == 0
+
+    def test_ranklist_table_renders_without_indexerror(self):
+        """Build the exact table shape ;ranklist uses and render it.
+
+        This is the direct regression for the IndexError seen at
+        table.py:82 — rebuild header/body the same way the cog does and
+        verify str(Table) doesn't raise.
+        """
+        from tle.util import table as tbl
+        contest, problems, rows = self._build_fallback(num_problems=4,
+                                                       handles=('alice', 'bob'))
+        problem_indices = [p.index for p in problems]
+        # Replicate _get_cf_or_ioi_standings_table's format strings and body.
+        header_style = '{:>} {:<}    {:^}  ' + '  '.join(['{:^}'] * len(problem_indices))
+        body_style = '{:>} {:<}    {:>}  ' + '  '.join(['{:>}'] * len(problem_indices))
+        header = ['#', 'Handle', '='] + problem_indices
+        body = []
+        for row in rows:
+            handle = row.party.members[0].handle
+            tokens = [row.rank, handle, int(row.points)]
+            for pr in row.problemResults:
+                tokens.append('' if not pr.points else str(int(pr.points)))
+            body.append(tokens)
+
+        t = tbl.Table(tbl.Style(header=header_style, body=body_style))
+        t += tbl.Header(*header)
+        t += tbl.Line('-')
+        for row_tokens in body:
+            t += tbl.Data(*row_tokens)
+        t += tbl.Line('-')
+        # This is what crashed before the fix: __repr__ computes max
+        # column sizes across all Content rows, which requires every row
+        # to have `ncols` entries.
+        rendered = str(t)
+        assert 'alice' in rendered
+        assert 'bob' in rendered
+        # Problem indices appear in the header row.
+        for idx in problem_indices:
+            assert idx in rendered
