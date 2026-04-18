@@ -1684,6 +1684,21 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             params=(poll_id,), row_factory=namedtuple_factory
         )
 
+    def get_rpoll_voter_ids(self, poll_id):
+        """Get distinct user_ids who have voted on a poll."""
+        return self._fetchall(
+            'SELECT DISTINCT user_id FROM rpoll_vote WHERE poll_id = ?',
+            params=(poll_id,), row_factory=namedtuple_factory
+        )
+
+    def update_rpoll_voter_rating(self, poll_id, user_id, rating):
+        """Update the stored rating for all of a user's votes in a poll."""
+        with self.conn:
+            self.conn.execute(
+                'UPDATE rpoll_vote SET rating = ? WHERE poll_id = ? AND user_id = ?',
+                (rating, poll_id, str(user_id))
+            )
+
     # ── Complaints ──────────────────────────────────────────────────────
 
     def add_complaint(self, guild_id, user_id, text):

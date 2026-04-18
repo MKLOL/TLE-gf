@@ -122,6 +122,8 @@ class FakeRpollDb:
     close_rpoll = _UC.close_rpoll
     get_expired_unclosed_rpolls = _UC.get_expired_unclosed_rpolls
     get_rpoll_vote_ratings = _UC.get_rpoll_vote_ratings
+    get_rpoll_voter_ids = _UC.get_rpoll_voter_ids
+    update_rpoll_voter_rating = _UC.update_rpoll_voter_rating
     get_gudgitter_score = _UC.get_gudgitter_score
     get_gudgitters_timerange_for_user = _UC.get_gudgitters_timerange_for_user
     get_handle = _UC.get_handle

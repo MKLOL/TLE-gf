@@ -408,6 +408,56 @@ class TestFormulaDb:
         assert active[0].formula == 'exp'
 
 
+class TestGetRpollVoterIds:
+    def test_no_voters(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        assert db.get_rpoll_voter_ids(pid) == []
+
+    def test_distinct_users(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(pid, 'u1', 1, 1500)
+        db.toggle_rpoll_vote(pid, 'u2', 0, 1800)
+        ids = sorted(row.user_id for row in db.get_rpoll_voter_ids(pid))
+        assert ids == ['u1', 'u2']
+
+
+class TestUpdateRpollVoterRating:
+    def test_updates_all_votes_for_user(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(pid, 'u1', 1, 1500)
+        db.update_rpoll_voter_rating(pid, 'u1', 2100)
+        ratings = db.get_rpoll_vote_ratings(pid)
+        assert sorted(row.rating for row in ratings) == [2100, 2100]
+
+    def test_does_not_touch_other_users(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(pid, 'u2', 0, 1800)
+        db.update_rpoll_voter_rating(pid, 'u1', 2100)
+        ratings = {row.rating for row in db.get_rpoll_vote_ratings(pid)}
+        assert ratings == {2100, 1800}
+
+    def test_no_op_when_user_has_no_votes(self, db):
+        pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)
+        db.toggle_rpoll_vote(pid, 'u1', 0, 1500)
+        db.update_rpoll_voter_rating(pid, 'ghost', 9999)
+        ratings = [row.rating for row in db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [1500]
+
+    def test_scoped_to_poll(self, db):
+        p1 = db.create_rpoll(GUILD, CHANNEL, 'Q1', ['A', 'B'], 'u', 1.0)
+        p2 = db.create_rpoll(GUILD, CHANNEL, 'Q2', ['A', 'B'], 'u', 2.0)
+        db.toggle_rpoll_vote(p1, 'u1', 0, 1500)
+        db.toggle_rpoll_vote(p2, 'u1', 0, 1500)
+        db.update_rpoll_voter_rating(p1, 'u1', 2100)
+        p1_ratings = [row.rating for row in db.get_rpoll_vote_ratings(p1)]
+        p2_ratings = [row.rating for row in db.get_rpoll_vote_ratings(p2)]
+        assert p1_ratings == [2100]
+        assert p2_ratings == [1500]
+
+
 class TestGetRpollVoteRatings:
     def test_no_votes(self, db):
         pid = db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0)

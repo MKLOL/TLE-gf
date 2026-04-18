@@ -145,6 +145,20 @@ def _get_vote_weight(poll, user_id, guild_id):
     return cf_common.user_db.get_rpoll_user_rating(user_id, guild_id)
 
 
+def _refresh_poll_ratings(poll, guild_id):
+    """Recompute every existing voter's weight and persist it.
+
+    Handles can be relinked and CF/gitgud scores change over time; without a
+    refresh the stored rating drifts from the current truth and totals go
+    stale. Called on every vote toggle so the embed always reflects current
+    ratings.
+    """
+    for row in cf_common.user_db.get_rpoll_voter_ids(poll.poll_id):
+        user_id = int(row.user_id)
+        fresh_rating = _get_vote_weight(poll, user_id, guild_id)
+        cf_common.user_db.update_rpoll_voter_rating(poll.poll_id, user_id, fresh_rating)
+
+
 def _compute_totals_map(poll_id, formula):
     """Compute per-option totals using the given scoring formula."""
     if formula in {'exp', 'team', 'osu', 'fffff'}:
@@ -238,8 +252,19 @@ def _build_results_embed(question, options, totals_map, vote_count, formula='exp
             parts.append(f'**{label}** 0')
     votes_str = f'{vote_count} vote{"s" if vote_count != 1 else ""}'
     formula_label = _FORMULA_LABELS.get(formula, formula)
+
+    lines = [f'**{question}**']
+    if grand_total > 0:
+        max_total = max(totals_map.get(idx, 0) for idx, _ in options)
+        winners = [label for idx, label in options if totals_map.get(idx, 0) == max_total]
+        if len(winners) == 1:
+            lines.append(f'Winner: **{winners[0]}**')
+        else:
+            lines.append(f'Tied: {", ".join(f"**{w}**" for w in winners)}')
+    lines.append(f'{" / ".join(parts)} ({votes_str})')
+    lines.append(f'Scoring: {formula_label}')
     return discord.Embed(
-        description=f'**{question}**\n{" / ".join(parts)} ({votes_str})\nScoring: {formula_label}',
+        description='\n'.join(lines),
         color=discord_common.random_cf_color(),
     )
 
@@ -302,6 +327,8 @@ class RpollButton(discord.ui.Button):
         added = cf_common.user_db.toggle_rpoll_vote(
             self.poll_id, user_id, self.option_index, rating
         )
+
+        _refresh_poll_ratings(poll, guild_id)
 
         options = cf_common.user_db.get_rpoll_options(self.poll_id)
         totals_map = _compute_totals_map(self.poll_id, poll.formula)

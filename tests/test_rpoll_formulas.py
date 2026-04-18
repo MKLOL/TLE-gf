@@ -5,9 +5,10 @@ from collections import namedtuple
 import pytest
 
 from tle.cogs.rpoll import (_apply_formula, _calculate_gitgud_score_for_delta,
-                            _get_monthly_gitgud_score, _get_vote_weight)
+                            _get_monthly_gitgud_score, _get_vote_weight,
+                            _refresh_poll_ratings)
 from tle.util import codeforces_common as cf_common
-from tests.rpoll_test_utils import FakeRpollDb
+from tests.rpoll_test_utils import CHANNEL, GUILD, FakeRpollDb
 
 
 class TestApplyFormula:
@@ -152,3 +153,99 @@ class TestGitgudFormulaHelpers:
         Poll = namedtuple('Poll', 'formula created_at')
         poll = Poll(formula='mgg', created_at=created_at)
         assert _get_vote_weight(poll, 'user1', 123) == 8
+
+
+class TestRefreshPollRatings:
+    @pytest.fixture
+    def fake_db(self):
+        database = FakeRpollDb()
+        original = cf_common.user_db
+        cf_common.user_db = database
+        try:
+            yield database
+        finally:
+            cf_common.user_db = original
+            database.close()
+
+    def test_picks_up_rating_change(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1500)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 1500)
+
+        fake_db._seed_cf_user(111, GUILD, 'alice', 2400)
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        ratings = [row.rating for row in fake_db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [2400]
+
+    def test_picks_up_handle_relink(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1500)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 1500)
+
+        fake_db._seed_cf_user(111, GUILD, 'bob', 2100)
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        ratings = [row.rating for row in fake_db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [2100]
+
+    def test_unlinked_user_becomes_zero(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1500)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 1500)
+
+        fake_db.conn.execute('DELETE FROM user_handle WHERE user_id = ?', ('111',))
+        fake_db.conn.commit()
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        ratings = [row.rating for row in fake_db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [0]
+
+    def test_multiple_voters_each_refreshed(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1500)
+        fake_db._seed_cf_user(222, GUILD, 'bob', 1800)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 1500)
+        fake_db.toggle_rpoll_vote(pid, 222, 1, 1800)
+
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1700)
+        fake_db._seed_cf_user(222, GUILD, 'bob', 2000)
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        rows = {row.option_index: row.rating for row in fake_db.get_rpoll_vote_ratings(pid)}
+        assert rows == {0: 1700, 1: 2000}
+
+    def test_refreshes_all_options_for_same_user(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        fake_db._seed_cf_user(111, GUILD, 'alice', 1500)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 1500)
+        fake_db.toggle_rpoll_vote(pid, 111, 1, 1500)
+
+        fake_db._seed_cf_user(111, GUILD, 'alice', 2200)
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        ratings = [row.rating for row in fake_db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [2200, 2200]
+
+    def test_no_voters_is_no_op(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='sum')
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+        assert fake_db.get_rpoll_vote_ratings(pid) == []
+
+    def test_gg_formula_uses_current_gitgud_score(self, fake_db):
+        pid = fake_db.create_rpoll(GUILD, CHANNEL, 'Q?', ['A', 'B'], 'u', 1.0, formula='gg')
+        fake_db._seed_gudgitter_score(111, 10)
+        fake_db.toggle_rpoll_vote(pid, 111, 0, 10)
+
+        fake_db._seed_gudgitter_score(111, 75)
+        poll = fake_db.get_rpoll(pid)
+        _refresh_poll_ratings(poll, GUILD)
+
+        ratings = [row.rating for row in fake_db.get_rpoll_vote_ratings(pid)]
+        assert ratings == [75]

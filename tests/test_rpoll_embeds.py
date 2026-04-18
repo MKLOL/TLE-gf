@@ -299,6 +299,46 @@ class TestBuildResultsEmbed:
         assert _FORMULA_LABELS['exp'] in result.description
 
 
+class TestBuildResultsEmbedWinner:
+    def test_single_winner_shown(self):
+        options = [(0, 'BFS'), (1, 'DFS')]
+        result = _build_results_embed('Q?', options, {0: 3400, 1: 1600}, 5)
+        assert 'Winner: **BFS**' in result.description
+
+    def test_near_fifty_fifty_still_names_winner(self):
+        options = [(0, 'Yes'), (1, 'No')]
+        result = _build_results_embed('Q?', options, {0: 499, 1: 501}, 2)
+        assert 'Winner: **No**' in result.description
+        assert '50%' in result.description
+
+    def test_tie_two_options(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_embed('Q?', options, {0: 1500, 1: 1500}, 2)
+        assert 'Tied:' in result.description
+        assert '**A**' in result.description
+        assert '**B**' in result.description
+        assert 'Winner:' not in result.description
+
+    def test_tie_three_options(self):
+        options = [(0, 'A'), (1, 'B'), (2, 'C')]
+        result = _build_results_embed('Q?', options, {0: 1000, 1: 1000, 2: 1000}, 3)
+        assert 'Tied:' in result.description
+        assert 'Winner:' not in result.description
+
+    def test_no_winner_when_zero_votes(self):
+        options = [(0, 'A'), (1, 'B')]
+        result = _build_results_embed('Q?', options, {}, 0)
+        assert 'Winner:' not in result.description
+        assert 'Tied:' not in result.description
+
+    def test_winner_ignores_non_leaders(self):
+        options = [(0, 'A'), (1, 'B'), (2, 'C')]
+        result = _build_results_embed('Q?', options, {0: 100, 1: 3000, 2: 500}, 3)
+        assert 'Winner: **B**' in result.description
+        assert 'Winner: **A**' not in result.description
+        assert 'Winner: **C**' not in result.description
+
+
 class TestBuildPollEmbedFormula:
     def test_sum_formula_label_shown(self):
         embed = _build_poll_embed('Q?', [(0, 'A'), (1, 'B')], {}, 0, formula='sum')
