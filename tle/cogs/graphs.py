@@ -36,6 +36,26 @@ CONTEST_ACTIVE_TIME_CUTOFF = 90 * 24 * 60 * 60 # 90 days
 class GraphCogError(commands.CommandError):
     pass
 
+
+def _rating_at_percentile(ratings, percentile):
+    """Return the rating at the given percentile of a sorted-or-unsorted list.
+
+    Percentile is 0–100 inclusive. The convention matches `;plot centile`:
+    a user with rating r sits at percentile 100 * (count below r) / n, so
+    percentile p maps to the rating at sorted index floor(p/100 * n),
+    clamped into range. Returns None if ratings is empty.
+    """
+    if not (0 <= percentile <= 100):
+        raise ValueError('percentile must be between 0 and 100')
+    n = len(ratings)
+    if n == 0:
+        return None
+    sorted_ratings = sorted(ratings)
+    idx = int(percentile / 100 * n)
+    if idx >= n:
+        idx = n - 1
+    return sorted_ratings[idx]
+
 def nice_sub_type(types):
     nice_map = {'CONTESTANT':'Contest: {}',
                 'OUT_OF_COMPETITION':'Unofficial: {}',
@@ -1468,6 +1488,32 @@ class Graphs(commands.Cog):
             return vc.finish_time, name
 
         return _build_vc_rows(rating_history, filt.dlo, filt.dhi, get_vc_info)
+
+    @commands.command(brief='Show rating at a given percentile',
+                      aliases=['ratingat', 'ratat'],
+                      usage='<percentile>')
+    async def ratingfor(self, ctx, percentile: float):
+        """Look up the Codeforces rating at the given percentile (0–100).
+
+        Example: ;ratingfor 99.5 — what rating puts you in the top 0.5%?
+        """
+        if not (0 <= percentile <= 100):
+            raise GraphCogError('Percentile must be between 0 and 100.')
+
+        ratings = cf_common.cache2.rating_changes_cache.get_all_ratings()
+        rating = _rating_at_percentile(ratings, percentile)
+        if rating is None:
+            raise GraphCogError('No rating data available.')
+
+        rank = cf.rating2rank(rating)
+        color = rank.color_embed if rank.color_embed is not None else 0xffaa10
+        embed = discord.Embed(
+            title=f'Rating at {percentile:g} percentile',
+            description=f'**{rating}** ({rank.title}) — computed over {len(ratings)} rated users.',
+            color=color,
+        )
+        discord_common.set_author_footer(embed, ctx.author)
+        await ctx.send(embed=embed)
 
     @discord_common.send_error_if(GraphCogError, cf_common.ResolveHandleError,
                                   cf_common.FilterError)

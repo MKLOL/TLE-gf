@@ -354,11 +354,12 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
         # Complaints
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS complaint (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                guild_id    TEXT NOT NULL,
-                user_id     TEXT NOT NULL,
-                text        TEXT NOT NULL,
-                created_at  REAL NOT NULL
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                text         TEXT NOT NULL,
+                created_at   REAL NOT NULL,
+                message_link TEXT
             )
         ''')
         self.conn.execute('''
@@ -1701,13 +1702,14 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
 
     # ── Complaints ──────────────────────────────────────────────────────
 
-    def add_complaint(self, guild_id, user_id, text):
+    def add_complaint(self, guild_id, user_id, text, message_link=None):
         """Insert a complaint and return its id."""
         import time
         guild_id, user_id = str(guild_id), str(user_id)
         cur = self.conn.execute(
-            'INSERT INTO complaint (guild_id, user_id, text, created_at) VALUES (?, ?, ?, ?)',
-            (guild_id, user_id, text, time.time())
+            'INSERT INTO complaint (guild_id, user_id, text, created_at, message_link) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (guild_id, user_id, text, time.time(), message_link)
         )
         self.conn.commit()
         return cur.lastrowid
@@ -1716,7 +1718,7 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
         """Return all active complaints for a guild, newest first."""
         guild_id = str(guild_id)
         return self.conn.execute(
-            'SELECT id, guild_id, user_id, text, created_at '
+            'SELECT id, guild_id, user_id, text, created_at, message_link '
             'FROM complaint WHERE guild_id = ? AND active = 1 ORDER BY created_at DESC',
             (guild_id,)
         ).fetchall()
@@ -1724,7 +1726,7 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def get_complaint(self, complaint_id):
         """Return a single active complaint by id, or None."""
         row = self.conn.execute(
-            'SELECT id, guild_id, user_id, text, created_at '
+            'SELECT id, guild_id, user_id, text, created_at, message_link '
             'FROM complaint WHERE id = ? AND active = 1',
             (complaint_id,)
         ).fetchone()

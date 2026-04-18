@@ -521,3 +521,14 @@ def upgrade_1_21_0(db):
     ''')
     db.commit()
     logger.info('1.21.0: greatday_ban table created')
+
+
+@registry.register('1.22.0', 'Add message_link column to complaint table')
+def upgrade_1_22_0(db):
+    logger.info('1.22.0: Adding message_link column to complaint table')
+    try:
+        db.execute('ALTER TABLE complaint ADD COLUMN message_link TEXT')
+    except Exception:
+        pass
+    db.commit()
+    logger.info('1.22.0: message_link column added to complaint table')

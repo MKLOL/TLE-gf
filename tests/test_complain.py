@@ -15,12 +15,13 @@ class FakeComplainDb:
         self.conn.row_factory = namedtuple_factory
         self.conn.execute('''
             CREATE TABLE complaint (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                guild_id    TEXT NOT NULL,
-                user_id     TEXT NOT NULL,
-                text        TEXT NOT NULL,
-                created_at  REAL NOT NULL,
-                active      INTEGER NOT NULL DEFAULT 1
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                text         TEXT NOT NULL,
+                created_at   REAL NOT NULL,
+                active       INTEGER NOT NULL DEFAULT 1,
+                message_link TEXT
             )
         ''')
         self.conn.execute('''
@@ -219,6 +220,81 @@ class TestUpgrade1170:
         )
         row = conn.execute('SELECT active FROM complaint').fetchone()
         assert row[0] == 1
+        conn.close()
+
+
+class TestMessageLink:
+    def test_defaults_to_none(self, db):
+        cid = db.add_complaint(GUILD, USER_A, 'no link')
+        row = db.get_complaint(cid)
+        assert row.message_link is None
+
+    def test_stores_link(self, db):
+        link = 'https://discord.com/channels/1/2/3'
+        cid = db.add_complaint(GUILD, USER_A, 'with link', link)
+        row = db.get_complaint(cid)
+        assert row.message_link == link
+
+    def test_list_returns_link(self, db):
+        link = 'https://discord.com/channels/1/2/3'
+        db.add_complaint(GUILD, USER_A, 'with link', link)
+        db.add_complaint(GUILD, USER_A, 'without')
+        rows = db.get_complaints(GUILD)
+        links = {r.text: r.message_link for r in rows}
+        assert links['with link'] == link
+        assert links['without'] is None
+
+
+class TestUpgrade1220:
+    def test_adds_message_link_column(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        # Create schema prior to 1.22.0 (no message_link)
+        conn.execute('''
+            CREATE TABLE complaint (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                text        TEXT NOT NULL,
+                created_at  REAL NOT NULL,
+                active      INTEGER NOT NULL DEFAULT 1
+            )
+        ''')
+        conn.execute(
+            "INSERT INTO complaint (guild_id, user_id, text, created_at) VALUES ('1','2','t',0)"
+        )
+        conn.commit()
+        from tle.util.db.user_db_upgrades import upgrade_1_22_0
+        upgrade_1_22_0(conn)
+        row = conn.execute('SELECT message_link FROM complaint').fetchone()
+        assert row[0] is None  # existing rows get NULL link
+        conn.close()
+
+    def test_idempotent(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import upgrade_1_17_0, upgrade_1_22_0
+        upgrade_1_17_0(conn)
+        upgrade_1_22_0(conn)
+        upgrade_1_22_0(conn)  # should not raise
+        conn.close()
+
+    def test_fresh_schema_after_upgrade_chain(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import (
+            upgrade_1_17_0, upgrade_1_19_0, upgrade_1_22_0,
+        )
+        upgrade_1_17_0(conn)
+        upgrade_1_19_0(conn)
+        upgrade_1_22_0(conn)
+        conn.execute(
+            "INSERT INTO complaint (guild_id, user_id, text, created_at, message_link) "
+            "VALUES ('1','2','t',0,'https://x/y/z')"
+        )
+        row = conn.execute('SELECT active, message_link FROM complaint').fetchone()
+        assert row[0] == 1
+        assert row[1] == 'https://x/y/z'
         conn.close()
 
 

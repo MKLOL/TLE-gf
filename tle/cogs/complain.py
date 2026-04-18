@@ -57,8 +57,9 @@ class Complain(commands.Cog):
             ))
             return
 
+        message_link = getattr(ctx.message, 'jump_url', None)
         complaint_id = cf_common.user_db.add_complaint(
-            ctx.guild.id, author.id, text
+            ctx.guild.id, author.id, text, message_link
         )
         logger.info(f'Complaint #{complaint_id} added by {author.id} in guild {ctx.guild.id}')
         await ctx.send(embed=discord_common.embed_success(
@@ -76,7 +77,11 @@ class Complain(commands.Cog):
         lines = []
         for c in complaints:
             ts = datetime.datetime.fromtimestamp(c.created_at).strftime('%Y-%m-%d %H:%M')
-            lines.append(f'**#{c.id}** by <@{c.user_id}> ({ts})\n{c.text}')
+            link = getattr(c, 'message_link', None)
+            header = f'**#{c.id}** by <@{c.user_id}> ({ts})'
+            if link:
+                header += f' — [context]({link})'
+            lines.append(f'{header}\n{c.text}')
 
         # Paginate in chunks to stay under 4096 embed limit
         pages = []
