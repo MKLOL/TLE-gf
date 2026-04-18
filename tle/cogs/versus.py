@@ -10,6 +10,7 @@ from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import graph_common as gc
+from tle.util import paginator
 
 # How long before we re-fetch a handle's rating history from the API.
 # 14 days normally, 2 days in Dec/Jan (CF rename season).
@@ -69,6 +70,32 @@ def _compute_versus_stats(handles, all_changes, strict=False):
         # Tie = no one gets a win
 
     return wins, placements, len(shared_contests)
+
+
+def _list_shared_contests(handles, all_changes, strict=False):
+    """Return shared contests among handles with each handle's rank.
+
+    Each entry is {'contest_id', 'name', 'time', 'ranks'} where ranks is
+    {handle: rank} for the handles that participated. Sorted newest first.
+    Participation rule matches _compute_versus_stats: 2+ handles by default,
+    or every handle when strict=True.
+    """
+    contest_ranks = collections.defaultdict(dict)
+    contest_meta = {}
+    for handle in handles:
+        for rc in all_changes.get(handle, []):
+            contest_ranks[rc.contestId][handle] = rc.rank
+            contest_meta[rc.contestId] = (rc.contestName, rc.ratingUpdateTimeSeconds)
+
+    min_participants = len(handles) if strict else 2
+    rows = []
+    for cid, ranks in contest_ranks.items():
+        if len(ranks) < min_participants:
+            continue
+        name, t = contest_meta[cid]
+        rows.append({'contest_id': cid, 'name': name, 'time': t, 'ranks': dict(ranks)})
+    rows.sort(key=lambda r: r['time'], reverse=True)
+    return rows
 
 
 def _is_stale(resolved_at):
@@ -171,8 +198,9 @@ class Versus(commands.Cog):
         self.bot = bot
         self.converter = commands.MemberConverter()
 
-    @commands.command(brief='Compare contest results between users',
-                      usage='[+all] handle1 handle2 [handle3 ...]')
+    @commands.group(brief='Compare contest results between users',
+                    usage='[+all] handle1 handle2 [handle3 ...]',
+                    invoke_without_command=True)
     async def versus(self, ctx, *args: str):
         """Show head-to-head contest win counts among the given users.
         Use ! prefix for Discord users (e.g. !username), -c to force CF handle (e.g. -ctourist).
@@ -210,6 +238,60 @@ class Versus(commands.Cog):
         embed = discord_common.cf_color_embed(title='Versus — Head to Head', description=desc)
         discord_common.set_author_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+    @versus.command(brief='List shared contests between users',
+                    usage='[+all] handle1 handle2 [handle3 ...]')
+    async def contests(self, ctx, *args: str):
+        """List contests where 2+ of the given users participated, with each
+        user's rank. Use +all to only list contests where every listed user
+        participated. Sorted newest first."""
+        (strict,), handles = cf_common.filter_flags(args, ['+all'])
+
+        if len(handles) < 2:
+            raise VersusCogError('Please provide at least 2 handles.')
+
+        handles = await cf_common.resolve_handles(ctx, self.converter, handles,
+                                                  mincnt=2, maxcnt=5)
+
+        cache = cf_common.cache2.rating_changes_cache
+        all_changes = await _get_all_changes(handles, cache)
+
+        rows = _list_shared_contests(handles, all_changes, strict=strict)
+
+        if not rows:
+            msg = 'No contests found where all users participated.' if strict else \
+                  'No shared contests found among the given users.'
+            raise VersusCogError(msg)
+
+        mode = 'all-participated' if strict else 'shared'
+        total = len(rows)
+        footer = f'{total} {mode} contest{"s" if total != 1 else ""}'
+
+        per_page = 10
+        pages = []
+        for chunk in paginator.chunkify(rows, per_page):
+            lines = []
+            for row in chunk:
+                date = datetime.datetime.fromtimestamp(row['time']).strftime('%Y-%m-%d')
+                rank_strs = ' · '.join(
+                    f'{h} #{row["ranks"][h]}'
+                    for h in handles if h in row['ranks']
+                )
+                lines.append(f'`{date}` **{row["name"]}** — {rank_strs}')
+            desc = '\n'.join(lines)
+            embed = discord_common.cf_color_embed(
+                title='Versus — Shared Contests',
+                description=desc,
+            )
+            embed.set_footer(text=footer)
+            pages.append((None, embed))
+
+        if len(pages) == 1:
+            discord_common.set_author_footer(pages[0][1], ctx.author)
+            await ctx.send(embed=pages[0][1])
+        else:
+            paginator.paginate(self.bot, ctx.channel, pages, wait_time=300,
+                               set_pagenum_footers=True, author_id=ctx.author.id)
 
     @commands.command(brief='Plot placement distribution between users',
                       aliases=['plotvs'],

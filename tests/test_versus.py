@@ -24,7 +24,12 @@ def _make_rc(contest_id, handle, rank):
 
 
 # Import the pure functions under test
-from tle.cogs.versus import _compute_versus_stats, _is_stale, _get_rating_changes
+from tle.cogs.versus import (
+    _compute_versus_stats,
+    _is_stale,
+    _get_rating_changes,
+    _list_shared_contests,
+)
 import asyncio
 import time
 
@@ -147,6 +152,97 @@ class TestComputeVersusStats:
         assert wins['y'] == 0
         assert placements['x'][1] == 5
         assert placements['y'][2] == 5
+
+
+class TestListSharedContests:
+    def test_basic_two_users(self):
+        handles = ['alice', 'bob']
+        all_changes = {
+            'alice': [_make_rc(1, 'alice', 10), _make_rc(2, 'alice', 5)],
+            'bob':   [_make_rc(1, 'bob', 20),   _make_rc(2, 'bob', 3)],
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        assert len(rows) == 2
+        by_id = {r['contest_id']: r for r in rows}
+        assert by_id[1]['ranks'] == {'alice': 10, 'bob': 20}
+        assert by_id[2]['ranks'] == {'alice': 5, 'bob': 3}
+        assert by_id[1]['name'] == 'Contest 1'
+
+    def test_sorted_newest_first(self):
+        handles = ['alice', 'bob']
+        all_changes = {
+            'alice': [_make_rc(1, 'alice', 10), _make_rc(3, 'alice', 5), _make_rc(2, 'alice', 7)],
+            'bob':   [_make_rc(1, 'bob', 20),   _make_rc(3, 'bob', 3),   _make_rc(2, 'bob', 9)],
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        # Time field is 1000000 + contest_id, so newest=3, then 2, then 1
+        assert [r['contest_id'] for r in rows] == [3, 2, 1]
+
+    def test_no_shared_contests(self):
+        handles = ['alice', 'bob']
+        all_changes = {
+            'alice': [_make_rc(1, 'alice', 10)],
+            'bob':   [_make_rc(2, 'bob', 20)],
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        assert rows == []
+
+    def test_empty_inputs(self):
+        assert _list_shared_contests(['a', 'b'], {}) == []
+        assert _list_shared_contests(['a', 'b'], {'a': [], 'b': []}) == []
+
+    def test_partial_overlap_only_shared_included(self):
+        handles = ['a', 'b', 'c']
+        all_changes = {
+            'a': [_make_rc(1, 'a', 5), _make_rc(2, 'a', 10)],
+            'b': [_make_rc(1, 'b', 10)],            # contest 1 shared with a
+            'c': [_make_rc(3, 'c', 1)],             # contest 3 only c — excluded
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        assert {r['contest_id'] for r in rows} == {1}
+        assert rows[0]['ranks'] == {'a': 5, 'b': 10}
+
+    def test_strict_requires_all_handles(self):
+        handles = ['a', 'b', 'c']
+        all_changes = {
+            'a': [_make_rc(1, 'a', 5), _make_rc(2, 'a', 10)],
+            'b': [_make_rc(1, 'b', 10), _make_rc(2, 'b', 5)],
+            'c': [_make_rc(2, 'c', 20)],
+        }
+        non_strict = _list_shared_contests(handles, all_changes, strict=False)
+        assert {r['contest_id'] for r in non_strict} == {1, 2}
+
+        strict = _list_shared_contests(handles, all_changes, strict=True)
+        assert [r['contest_id'] for r in strict] == [2]
+        assert strict[0]['ranks'] == {'a': 10, 'b': 5, 'c': 20}
+
+    def test_missing_handle_in_changes_ok(self):
+        handles = ['a', 'b']
+        all_changes = {'a': [_make_rc(1, 'a', 5)]}  # 'b' missing entirely
+        assert _list_shared_contests(handles, all_changes) == []
+
+    def test_contest_name_preserved(self):
+        handles = ['a', 'b']
+        all_changes = {
+            'a': [_make_rc(42, 'a', 1)],
+            'b': [_make_rc(42, 'b', 2)],
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        assert rows[0]['name'] == 'Contest 42'
+        assert rows[0]['time'] == 1000000 + 42
+
+    def test_ranks_isolated_per_contest(self):
+        """Make sure the ranks dict isn't shared between rows."""
+        handles = ['a', 'b']
+        all_changes = {
+            'a': [_make_rc(1, 'a', 5), _make_rc(2, 'a', 7)],
+            'b': [_make_rc(1, 'b', 10), _make_rc(2, 'b', 12)],
+        }
+        rows = _list_shared_contests(handles, all_changes)
+        by_id = {r['contest_id']: r for r in rows}
+        # Mutating one shouldn't affect the other
+        by_id[1]['ranks']['mutated'] = 99
+        assert 'mutated' not in by_id[2]['ranks']
 
 
 class TestStrictMode:
