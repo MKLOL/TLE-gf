@@ -1500,10 +1500,19 @@ class Graphs(commands.Cog):
         if not (0 <= percentile <= 100):
             raise GraphCogError('Percentile must be between 0 and 100.')
 
+        if not getattr(cf_common, '_initialize_done', False):
+            raise GraphCogError(
+                'Bot is still warming up after restart — rating cache is not '
+                'loaded yet. Try again in a few seconds.'
+            )
+
         ratings = cf_common.cache2.rating_changes_cache.get_all_ratings()
         rating = _rating_at_percentile(ratings, percentile)
         if rating is None:
-            raise GraphCogError('No rating data available.')
+            raise GraphCogError(
+                'Rating cache is empty. An admin needs to run '
+                '`;cache ratingchanges missing` to populate it.'
+            )
 
         rank = cf.rating2rank(rating)
         color = rank.color_embed if rank.color_embed is not None else 0xffaa10

@@ -84,6 +84,11 @@ async def main():
     async def init():
         logging.info('on_ready fired, starting initialization')
         await cf_common.initialize(args.nodb)
+        try:
+            synced = await bot.tree.sync()
+            logging.info(f'Synced {len(synced)} slash commands globally')
+        except Exception:
+            logging.exception('Failed to sync slash commands')
         logging.info('Initialization complete, bot is ready')
         asyncio.create_task(discord_common.presence(bot))
 
