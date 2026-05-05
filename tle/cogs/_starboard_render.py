@@ -293,14 +293,11 @@ async def build_starboard_message(message, emoji_str, count, color):
 
         embeds.append(embed)
 
-    # Gallery: if the message has multiple non-spoiler images, append an
-    # extra embed per additional image. Discord groups embeds that share
-    # the same `url` field into a single visual gallery, so we set
-    # `url=jump_url` on the main embed and on each extra image embed.
+    # Multiple images on the original message → one extra embed per
+    # additional image, stacked after the main embed.
     if len(image_urls) > 1 and need_embed:
-        embed.url = message.jump_url
         for extra_url in image_urls[1:]:
-            extra = discord.Embed(color=color, url=message.jump_url)
+            extra = discord.Embed(color=color)
             extra.set_image(url=extra_url)
             embeds.append(extra)
 

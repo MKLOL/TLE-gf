@@ -126,13 +126,12 @@ sys.modules['discord'].app_commands = _app_commands
 # Stub discord module attributes used by starboard.py
 _discord_mod = sys.modules['discord']
 class _StubEmbed:
-    """Minimal Embed stub that tracks fields, title, footer, image, url, and author."""
+    """Minimal Embed stub that tracks fields, title, footer, image, and author."""
     def __init__(self, **kw):
         self.color = kw.get('color')
         self.timestamp = kw.get('timestamp')
         self.title = kw.get('title')
         self.description = kw.get('description')
-        self.url = kw.get('url')
         self.fields = []
         self.footer = None
         self.image_url = None
