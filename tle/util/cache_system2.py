@@ -341,9 +341,9 @@ class ProblemsetCache:
 
     async def _fetch_for_contest(self, contest_id):
         try:
-            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id, from_=1,
-                                                          count=1)
-            
+            contest, problemset, _ = await cf.contest.standings(contest_id=contest_id)
+
+
             divisions = [div_tag for div_tag in _DIV_TAGS if contest.matches([div_tag])] 
 
             for problem in problemset:
@@ -608,10 +608,8 @@ class RanklistCache:
             self.ranklist_by_contest[contest_id] = ranklist
 
     @staticmethod
-    async def _get_contest_details(contest_id, show_unofficial, source=cf.RANKLIST_SOURCE_STANDINGS):
-        contest, problems, standings = await cf.contest.standings(contest_id=contest_id,
-                                                                  show_unofficial=show_unofficial,
-                                                                  source=source)
+    async def _get_contest_details(contest_id):
+        contest, problems, standings = await cf.contest.standings(contest_id=contest_id)
         # Exclude PRACTICE and MANAGER
         standings = [row for row in standings
                      if row.party.participantType in ('CONTESTANT', 'OUT_OF_COMPETITION', 'VIRTUAL')]
@@ -620,9 +618,8 @@ class RanklistCache:
 
     # Fetch final rating changes from CF.
     # For older contests.
-    async def _get_ranklist_with_fetched_changes(self, contest_id, show_unofficial,
-                                                 source=cf.RANKLIST_SOURCE_STANDINGS):
-        contest, problems, standings = await self._get_contest_details(contest_id, show_unofficial, source)
+    async def _get_ranklist_with_fetched_changes(self, contest_id):
+        contest, problems, standings = await self._get_contest_details(contest_id)
         now = time.time()
 
         is_rated = False
@@ -644,16 +641,13 @@ class RanklistCache:
 
     # Rating changes have not been applied yet, predict rating changes.
     # For running/recent/unrated contests.
-    async def _get_ranklist_with_predicted_changes(self, contest_id, show_unofficial,
-                                                   source=cf.RANKLIST_SOURCE_STANDINGS):
-        contest, problems, standings = await self._get_contest_details(contest_id, show_unofficial, source)
+    async def _get_ranklist_with_predicted_changes(self, contest_id):
+        contest, problems, standings = await self._get_contest_details(contest_id)
         now = time.time()
 
-        standings_official = None
-        if not show_unofficial:
-            standings_official = standings
-        else:
-            _, _, standings_official = await cf.contest.standings(contest_id=contest_id, source=source)
+        # CF's restricted contest.standings endpoint only returns CONTESTANT
+        # rows for ordinary callers, so official == fetched.
+        standings_official = standings
 
         has_teams = any(row.party.teamId is not None for row in standings_official)
         if cf_common.is_nonstandard_contest(contest) or has_teams:
@@ -673,15 +667,15 @@ class RanklistCache:
         return ranklist
 
     async def generate_ranklist(self, contest_id, *, fetch_changes=False, predict_changes=False,
-                                show_unofficial=True, source=cf.RANKLIST_SOURCE_STANDINGS):
+                                show_unofficial=True):
         assert fetch_changes ^ predict_changes
 
         ranklist = None
         if fetch_changes:
-            ranklist = await self._get_ranklist_with_fetched_changes(contest_id, show_unofficial, source)
+            ranklist = await self._get_ranklist_with_fetched_changes(contest_id)
         if ranklist is None:
             # Either predict_changes was true or fetching rating changes failed
-            ranklist = await self._get_ranklist_with_predicted_changes(contest_id, show_unofficial, source)
+            ranklist = await self._get_ranklist_with_predicted_changes(contest_id)
 
         # for some reason Educational contests also have div1 peeps in the official standings.
         # hence we need to manually weed them out
@@ -690,12 +684,9 @@ class RanklistCache:
 
         return ranklist
 
-    async def generate_vc_ranklist(self, contest_id, handle_to_member_id,
-                                   source=cf.RANKLIST_SOURCE_STANDINGS):
+    async def generate_vc_ranklist(self, contest_id, handle_to_member_id):
         handles = list(handle_to_member_id.keys())
-        contest, problems, standings = await cf.contest.standings(contest_id=contest_id,
-                                                                  show_unofficial=True,
-                                                                  source=source)
+        contest, problems, standings = await cf.contest.standings(contest_id=contest_id)
         # Exclude PRACTICE, MANAGER and OUR_OF_COMPETITION
         standings = [row for row in standings
                      if row.party.participantType == 'CONTESTANT' or

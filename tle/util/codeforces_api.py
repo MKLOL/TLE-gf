@@ -328,16 +328,6 @@ _CF_API_KEY = os.environ.get('CF_API_KEY')
 _CF_API_SECRET = os.environ.get('CF_API_SECRET')
 _SIG_RAND_CHARS = string.ascii_lowercase + string.digits
 
-# Ranklist data sources. CF restricts contest.standings to admin users for
-# regular rounds as of April 2026, which breaks ;ranklist/;probrat/VC when
-# the bot key lacks admin access. Callers can pass source='rating_changes'
-# to synthesize standings from the public contest.ratingChanges endpoint.
-# Degraded: no per-problem results, only works after ratings are applied,
-# unrated contests return empty.
-RANKLIST_SOURCE_STANDINGS = 'standings'
-RANKLIST_SOURCE_RATING_CHANGES = 'rating_changes'
-
-
 async def initialize() -> None:
     """Initialization for the Codeforces API module."""
     global _session
@@ -440,6 +430,33 @@ async def _query_api(path: str, data: Any=None):
     raise TrueApiError(comment)
 
 
+@cf_ratelimit
+async def _query_api_anonymous_get(path: str, params: Optional[Dict[str, Any]] = None):
+    """Anonymous GET request — no signing. Required by CF for
+    contest.standings on public regular contests as of May 2026.
+    """
+    url = API_BASE_URL + path
+    try:
+        logger.info(f'GET CF API at {url} with {_scrub_for_log(params)}')
+        headers = {'Accept-Encoding': 'gzip'}
+        async with _session.get(url, params=params, headers=headers) as resp:
+            try:
+                respjson = await resp.json()
+            except aiohttp.ContentTypeError:
+                logger.warning(f'CF API did not respond with JSON, status {resp.status}.')
+                raise CodeforcesApiError
+            if resp.status == 200:
+                return respjson['result']
+            comment = f'HTTP Error {resp.status}, {respjson.get("comment")}'
+    except aiohttp.ClientError as e:
+        logger.error(f'Request to CF API encountered error: {e!r}')
+        raise ClientError from e
+    logger.warning(f'Query to CF API failed: {comment}')
+    if 'limit exceeded' in comment:
+        raise CallLimitExceededError(comment)
+    raise TrueApiError(comment)
+
+
 class contest:
     @staticmethod
     async def list(*, gym: Optional[bool] = None) -> List[Contest]:
@@ -468,29 +485,19 @@ class contest:
     async def standings(
         *,
         contest_id: Any,
-        from_: Optional[int] = None,
-        count: Optional[int] = None,
         handles: Optional[List[str]] = None,
-        room: Optional[Any] = None,
-        show_unofficial: Optional[bool] = None,
-        source: str = RANKLIST_SOURCE_STANDINGS,
     ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
-        if source == RANKLIST_SOURCE_RATING_CHANGES:
-            return await contest._standings_from_rating_changes(
-                contest_id=contest_id, from_=from_, count=count, handles=handles)
+        """Fetch standings for a public regular contest.
+
+        Sent as an anonymous GET with only `contestId`, per the CF
+        restriction in effect since May 2026. The endpoint returns
+        CONTESTANT-participation rows only — VIRTUAL/PRACTICE/OUT_OF_COMPETITION
+        rows are not available to ordinary callers. `handles` filters
+        the returned rows client-side.
+        """
         params = {'contestId': contest_id}
-        if from_ is not None:
-            params['from'] = from_
-        if count is not None:
-            params['count'] = count
-        if handles is not None:
-            params['handles'] = ';'.join(handles)
-        if room is not None:
-            params['room'] = room
-        if show_unofficial is not None:
-            params['showUnofficial'] = _bool_to_str(show_unofficial)
         try:
-            resp = await _query_api('contest.standings', params)
+            resp = await _query_api_anonymous_get('contest.standings', params)
         except TrueApiError as e:
             if 'not found' in e.comment:
                 raise ContestNotFoundError(e.comment, contest_id)
@@ -504,81 +511,11 @@ class contest:
             row['problemResults'] = [make_from_dict(ProblemResult, problem_result)
                                      for problem_result in row['problemResults']]
         ranklist = [make_from_dict(RanklistRow, row_dict) for row_dict in resp['rows']]
-        return contest_, problems, ranklist
-
-    @staticmethod
-    async def _standings_from_rating_changes(
-        *,
-        contest_id: Any,
-        from_: Optional[int] = None,
-        count: Optional[int] = None,
-        handles: Optional[List[str]] = None,
-    ) -> Tuple[Contest, List[Problem], List[RanklistRow]]:
-        """Fallback for when contest.standings is gated behind admin access.
-
-        Synthesizes the (Contest, problems, ranklist) triple from three
-        still-public endpoints: contest.list, problemset.problems, and
-        contest.ratingChanges. RanklistRows carry real rank + handle;
-        problemResults is padded to len(problems) with zero-value
-        placeholders so the standings table can still render. Participant
-        type is stamped CONTESTANT for all. Empty if ratings not yet
-        applied or the contest was unrated.
-        """
-        contests = await contest.list()
-        contest_obj = next((c for c in contests if c.id == contest_id), None)
-        if contest_obj is None:
-            raise ContestNotFoundError(
-                f'contestId: Contest with id {contest_id} not found', contest_id)
-
-        all_problems, _ = await problemset.problems()
-        problems = sorted(
-            (p for p in all_problems if p.contestId == contest_id),
-            key=lambda p: p.index,
-        )
-
-        try:
-            changes = await contest.ratingChanges(contest_id=contest_id)
-        except RatingChangesUnavailableError:
-            changes = []
-
-        # Placeholder results for rendering — real per-problem data isn't
-        # available via ratingChanges. Matches problems count so the table
-        # column layout stays consistent.
-        placeholder_results = [
-            ProblemResult(points=0.0, penalty=0, rejectedAttemptCount=0,
-                          type='PRELIMINARY', bestSubmissionTimeSeconds=None)
-            for _ in problems
-        ]
-
-        rows: List[RanklistRow] = []
-        for ch in changes:
-            party = Party(
-                contestId=contest_id,
-                members=[Member(handle=ch.handle)],
-                participantType='CONTESTANT',
-                teamId=None,
-                teamName=None,
-                ghost=False,
-                room=None,
-                startTimeSeconds=contest_obj.startTimeSeconds,
-            )
-            rows.append(RanklistRow(
-                party=party,
-                rank=ch.rank,
-                points=0.0,
-                penalty=0,
-                problemResults=list(placeholder_results),
-            ))
-
         if handles:
             wanted = set(handles)
-            rows = [r for r in rows if r.party.members[0].handle in wanted]
-        if from_ is not None:
-            rows = rows[max(from_ - 1, 0):]
-        if count is not None:
-            rows = rows[:count]
-
-        return contest_obj, problems, rows
+            ranklist = [r for r in ranklist
+                        if r.party.members and r.party.members[0].handle in wanted]
+        return contest_, problems, ranklist
 
 
 class problemset:
