@@ -22,6 +22,10 @@ _DEFAULT_TIME = '10:00'
 _DEFAULT_TZ = 'US/Eastern'
 _PICK_COUNT = 5
 _STATS_PER_PAGE = 15
+# Edit the backfill progress embed every N scanned messages. Discord rate-
+# limits message edits to ~5/5s — 250 is a comfortable cadence even for
+# multi-thousand-message channels.
+_BACKFILL_PROGRESS_INTERVAL = 250
 
 # Greatday message template: "I hope <@id> <@id> ... having a great day!"
 # Anchors: prefix "I hope " and the trailing "having a great day!" — anything
@@ -359,7 +363,7 @@ class GreatDay(commands.Cog):
             raise GreatDayCogError('Configured great day channel is not accessible.')
 
         progress = await ctx.send(embed=discord_common.embed_neutral(
-            f'Backfilling from {channel.mention}…'))
+            f'Backfilling from {channel.mention}… (scanned **0**, matched **0**)'))
 
         bot_user_id = self.bot.user.id if self.bot and self.bot.user else None
         scanned = 0
@@ -368,15 +372,28 @@ class GreatDay(commands.Cog):
         async for msg in channel.history(limit=None, oldest_first=True):
             scanned += 1
             uids = _parse_greatday_message(msg, bot_user_id)
-            if uids is None:
-                continue
-            matched += 1
-            inserted += cf_common.user_db.greatday_record_picks(
-                ctx.guild.id, uids, msg.id, msg.created_at.timestamp())
+            if uids is not None:
+                matched += 1
+                inserted += cf_common.user_db.greatday_record_picks(
+                    ctx.guild.id, uids, msg.id, msg.created_at.timestamp())
+
+            if scanned % _BACKFILL_PROGRESS_INTERVAL == 0:
+                try:
+                    await progress.edit(embed=discord_common.embed_neutral(
+                        f'Backfilling from {channel.mention}… '
+                        f'scanned **{scanned}**, matched **{matched}**, '
+                        f'inserted **{inserted}** so far.'))
+                except discord.HTTPException:
+                    # Rate-limited or message deleted — keep scanning either way.
+                    pass
 
         await progress.edit(embed=discord_common.embed_success(
             f'Backfill complete. Scanned **{scanned}** message(s), '
             f'matched **{matched}**, inserted **{inserted}** new pick row(s).'))
+        # Fresh ping so the invoker sees completion even if the progress
+        # message has scrolled out of view.
+        await ctx.send(f'{ctx.author.mention} `;greatday backfill` finished — '
+                       f'inserted **{inserted}** new pick row(s).')
 
     # ── Error handler ──────────────────────────────────────────────────
 
