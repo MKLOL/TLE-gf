@@ -369,7 +369,10 @@ class GreatDay(commands.Cog):
         scanned = 0
         matched = 0
         inserted = 0
-        async for msg in channel.history(limit=None, oldest_first=True):
+        # Newest first — leaderboard updates with recent picks immediately,
+        # and if the admin aborts (bot restart) the most relevant history
+        # is already saved.
+        async for msg in channel.history(limit=None, oldest_first=False):
             scanned += 1
             uids = _parse_greatday_message(msg, bot_user_id)
             if uids is not None:
