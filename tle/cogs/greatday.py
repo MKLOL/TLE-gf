@@ -33,16 +33,16 @@ _BACKFILL_STOP_GAP_SECONDS = 5 * 24 * 3600
 
 
 def _personal_rank_line(rows, user_id):
-    """Render the 'Your rank: #N — great-day'd K times' suffix for the
-    stats leaderboard. `rows` is sorted desc-by-count (the natural
-    output of greatday_get_stats). Returns a leading-newline string so
-    it can be appended directly to the embed description."""
+    """Render the 'Your rank: #N — great-day'd K times' line for the
+    stats command. `rows` is sorted desc-by-count (the natural output
+    of greatday_get_stats). Returned as plain text — the caller puts it
+    above the embed as message content, not inside the embed."""
     user_id_str = str(user_id)
     for i, row in enumerate(rows):
         if str(row.user_id) == user_id_str:
-            return (f"\nYour rank: **#{i + 1}** — great-day'd "
+            return (f"Your rank: **#{i + 1}** — great-day'd "
                     f'**{row.cnt}** time(s).')
-    return "\nYou haven't been great-day'd yet."
+    return "You haven't been great-day'd yet."
 
 
 def _should_stop_backfill(last_match_ts, current_msg_ts, max_gap_seconds):
@@ -364,13 +364,12 @@ class GreatDay(commands.Cog):
                 m = ctx.guild.get_member(int(row.user_id))
                 name = m.mention if m is not None else f'`{row.user_id}`'
                 lines.append(f'**#{rank}** {name} — **{row.cnt}**')
-            lines.append(personal)
             embed = discord.Embed(
                 title='Great Day leaderboard',
                 description='\n'.join(lines),
                 color=0x00aaff,
             )
-            pages.append((None, embed))
+            pages.append((personal, embed))
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
                            set_pagenum_footers=True, author_id=ctx.author.id)
 

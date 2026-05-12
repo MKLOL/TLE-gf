@@ -731,6 +731,14 @@ class TestPersonalRankLine:
         from tle.cogs.greatday import _personal_rank_line
         assert "haven't" in _personal_rank_line([], 100)
 
+    def test_returns_plain_text_no_leading_whitespace(self):
+        """Renders as message content (above the embed), not as part of
+        the embed description — must not start with a stray newline."""
+        from tle.cogs.greatday import _personal_rank_line
+        rows = [self._row(100, 10)]
+        assert _personal_rank_line(rows, 100)[0] != '\n'
+        assert _personal_rank_line([], 100)[0] != '\n'
+
 
 class TestBackfillStopHeuristic:
     """The backfill scans newest-first and stops early once we've walked
