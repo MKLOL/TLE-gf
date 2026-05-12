@@ -532,3 +532,23 @@ def upgrade_1_22_0(db):
         pass
     db.commit()
     logger.info('1.22.0: message_link column added to complaint table')
+
+
+@registry.register('1.23.0', 'Great Day pick history table')
+def upgrade_1_23_0(db):
+    logger.info('1.23.0: Creating greatday_pick table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS greatday_pick (
+            guild_id    TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            message_id  TEXT NOT NULL,
+            picked_at   REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id, message_id)
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_greatday_pick_user
+            ON greatday_pick (guild_id, user_id)
+    ''')
+    db.commit()
+    logger.info('1.23.0: greatday_pick table created')

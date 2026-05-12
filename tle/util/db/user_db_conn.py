@@ -374,6 +374,20 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 PRIMARY KEY (guild_id, user_id)
             )
         ''')
+        # Great Day pick history (one row per (guild, user, message))
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS greatday_pick (
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                message_id  TEXT NOT NULL,
+                picked_at   REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id, message_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_greatday_pick_user
+                ON greatday_pick (guild_id, user_id)
+        ''')
         self.conn.execute(
             'CREATE TABLE IF NOT EXISTS rankup ('
             'guild_id     TEXT PRIMARY KEY,'
@@ -1812,6 +1826,37 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             (str(guild_id), str(user_id))).rowcount
         self.conn.commit()
         return rc > 0
+
+    def greatday_record_picks(self, guild_id, user_ids, message_id, picked_at):
+        """Insert one row per picked user. Idempotent on (guild, user, message)."""
+        if not user_ids:
+            return 0
+        guild_id = str(guild_id)
+        message_id = str(message_id)
+        cur = self.conn.executemany(
+            'INSERT OR IGNORE INTO greatday_pick '
+            '(guild_id, user_id, message_id, picked_at) VALUES (?, ?, ?, ?)',
+            [(guild_id, str(uid), message_id, picked_at) for uid in user_ids]
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def greatday_get_stats(self, guild_id):
+        """Return [(user_id, count)] for all users picked in the guild, most-first."""
+        return self.conn.execute(
+            'SELECT user_id, COUNT(*) AS cnt FROM greatday_pick '
+            'WHERE guild_id = ? GROUP BY user_id ORDER BY cnt DESC, user_id ASC',
+            (str(guild_id),)
+        ).fetchall()
+
+    def greatday_get_count(self, guild_id, user_id):
+        """Return how many times a user has been picked in the guild."""
+        row = self.conn.execute(
+            'SELECT COUNT(*) AS cnt FROM greatday_pick '
+            'WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))
+        ).fetchone()
+        return row.cnt
 
     def greatday_is_banned(self, guild_id, user_id):
         """Check if a user is banned from great day."""

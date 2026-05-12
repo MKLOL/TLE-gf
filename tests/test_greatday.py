@@ -40,6 +40,15 @@ class FakeGreatDayDb:
                 value TEXT
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE greatday_pick (
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                message_id  TEXT NOT NULL,
+                picked_at   REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id, message_id)
+            )
+        ''')
         self.conn.commit()
 
     greatday_signup = UserDbConn.greatday_signup
@@ -48,6 +57,9 @@ class FakeGreatDayDb:
     greatday_ban = UserDbConn.greatday_ban
     greatday_unban = UserDbConn.greatday_unban
     greatday_is_banned = UserDbConn.greatday_is_banned
+    greatday_record_picks = UserDbConn.greatday_record_picks
+    greatday_get_stats = UserDbConn.greatday_get_stats
+    greatday_get_count = UserDbConn.greatday_get_count
     kvs_set = UserDbConn.kvs_set
     kvs_get = UserDbConn.kvs_get
     kvs_delete = UserDbConn.kvs_delete
@@ -167,12 +179,27 @@ import asyncio
 from tle.util import codeforces_common as cf_common
 
 
+class _FakeMessage:
+    _next_id = 1000
+
+    def __init__(self, content):
+        self.content = content
+        type(self)._next_id += 1
+        self.id = type(self)._next_id
+
+        class _Created:
+            def timestamp(self_inner):
+                return 0.0
+        self.created_at = _Created()
+
+
 class _FakeChannel:
     def __init__(self):
         self.sent = []
 
     async def send(self, content):
         self.sent.append(content)
+        return _FakeMessage(content)
 
 
 class _FakeGuild:
@@ -503,3 +530,85 @@ class TestUpgrade:
         rows = conn.execute('SELECT * FROM greatday_ban').fetchall()
         assert len(rows) == 1
         conn.close()
+
+    def test_upgrade_creates_pick_table(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        from tle.util.db.user_db_upgrades import upgrade_1_23_0
+        upgrade_1_23_0(conn)
+        conn.execute(
+            'INSERT INTO greatday_pick (guild_id, user_id, message_id, picked_at) '
+            'VALUES (?, ?, ?, ?)', ('1', '10', 'mid', 0.0))
+        rows = conn.execute('SELECT * FROM greatday_pick').fetchall()
+        assert len(rows) == 1
+        conn.close()
+
+
+class TestPickStats:
+    def test_record_picks_inserts_rows(self, db):
+        n = db.greatday_record_picks(GUILD, [USER_A, USER_B], 'mid1', 1000.0)
+        assert n == 2
+        rows = db.greatday_get_stats(GUILD)
+        assert {(r.user_id, r.cnt) for r in rows} == {(USER_A, 1), (USER_B, 1)}
+
+    def test_record_picks_idempotent_same_message(self, db):
+        db.greatday_record_picks(GUILD, [USER_A], 'mid1', 1000.0)
+        n = db.greatday_record_picks(GUILD, [USER_A], 'mid1', 1000.0)
+        assert n == 0  # duplicate (guild, user, message) is ignored
+        assert db.greatday_get_count(GUILD, USER_A) == 1
+
+    def test_record_picks_separate_messages_increment(self, db):
+        db.greatday_record_picks(GUILD, [USER_A], 'mid1', 1000.0)
+        db.greatday_record_picks(GUILD, [USER_A], 'mid2', 2000.0)
+        assert db.greatday_get_count(GUILD, USER_A) == 2
+
+    def test_get_stats_orders_by_count_desc(self, db):
+        db.greatday_record_picks(GUILD, [USER_A], 'mid1', 1.0)
+        db.greatday_record_picks(GUILD, [USER_B], 'mid2', 2.0)
+        db.greatday_record_picks(GUILD, [USER_B], 'mid3', 3.0)
+        db.greatday_record_picks(GUILD, [USER_C], 'mid4', 4.0)
+        db.greatday_record_picks(GUILD, [USER_C], 'mid5', 5.0)
+        db.greatday_record_picks(GUILD, [USER_C], 'mid6', 6.0)
+        rows = db.greatday_get_stats(GUILD)
+        assert [(r.user_id, r.cnt) for r in rows] == [
+            (USER_C, 3), (USER_B, 2), (USER_A, 1)]
+
+    def test_get_stats_guild_isolation(self, db):
+        db.greatday_record_picks(GUILD, [USER_A], 'mid1', 1.0)
+        db.greatday_record_picks('999', [USER_A], 'mid2', 2.0)
+        assert db.greatday_get_count(GUILD, USER_A) == 1
+        assert db.greatday_get_count('999', USER_A) == 1
+
+    def test_get_stats_empty(self, db):
+        assert db.greatday_get_stats(GUILD) == []
+        assert db.greatday_get_count(GUILD, USER_A) == 0
+
+    def test_record_picks_empty_list_returns_zero(self, db):
+        assert db.greatday_record_picks(GUILD, [], 'mid', 1.0) == 0
+
+
+class TestBackfillRegex:
+    def _matches(self, content):
+        from tle.cogs.greatday import _GREATDAY_RE, _MENTION_RE
+        if not _GREATDAY_RE.match(content):
+            return None
+        return _MENTION_RE.findall(content)
+
+    def test_matches_singular(self):
+        assert self._matches('I hope <@111> is having a great day!') == ['111']
+
+    def test_matches_plural(self):
+        assert self._matches(
+            'I hope <@111> <@222> <@333> are having a great day!'
+        ) == ['111', '222', '333']
+
+    def test_matches_nick_mention_format(self):
+        assert self._matches('I hope <@!111> is having a great day!') == ['111']
+
+    def test_rejects_unrelated_message(self):
+        assert self._matches('hello world') is None
+        assert self._matches('I hope you have a great day!') is None
+        assert self._matches('I hope <@1> wins!') is None
+
+    def test_tolerates_trailing_whitespace(self):
+        assert self._matches('I hope <@111> is having a great day! ') == ['111']
