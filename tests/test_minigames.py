@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tle.util import table
 from tle.util import codeforces_common as cf_common
 from tle.util.db.user_db_conn import namedtuple_factory
 from tle.util.db.user_db_upgrades import upgrade_1_14_0, upgrade_1_15_0
@@ -27,7 +28,11 @@ from tle.cogs._minigame_guessgame import (
     guessgame_score_matchup,
 )
 from tle.cogs.minigames import Minigames
-from tle.cogs.minigames import _format_akari_puzzle_table, _maybe_parse_puzzle_selector
+from tle.cogs.minigames import (
+    _format_akari_puzzle_table,
+    _format_akari_puzzle_table_pages,
+    _maybe_parse_puzzle_selector,
+)
 
 
 _GAME = 'akari'
@@ -787,6 +792,35 @@ class TestFormatting:
         assert '1  Alice  perfect  1:00' in table_str
         assert '2  Bob    perfect  1:20' in table_str
         assert '3  Cara   97%      0:50' in table_str
+
+    def test_format_akari_puzzle_table_pages_split_by_embed_limit(self):
+        members = [
+            _FakeDiscordMember(user_id, f'user{user_id}', f'Player {user_id:03d}')
+            for user_id in range(1, 301)
+        ]
+        guild = _FakeGuild(1, members=members)
+        rows = [
+            _row(user_id, user_id, '2026-03-26', False, user_id, 90, 445)
+            for user_id in range(1, 301)
+        ]
+
+        pages = _format_akari_puzzle_table_pages(guild, rows)
+
+        assert len(pages) > 1
+        assert all(len(page) <= table.DISCORD_EMBED_DESCRIPTION_LIMIT for page in pages)
+        assert all('#  Name' in page for page in pages)
+
+    def test_format_akari_puzzle_table_pages_truncates_name_that_cannot_fit(self):
+        guild = _FakeGuild(1, members=[
+            _FakeDiscordMember(10, 'alice', 'Alice' * 2000),
+        ])
+        rows = [_row(1, 10, '2026-03-26', True, 60, 100, 445)]
+
+        pages = _format_akari_puzzle_table_pages(guild, rows)
+
+        assert len(pages) == 1
+        assert len(pages[0]) <= table.DISCORD_EMBED_DESCRIPTION_LIMIT
+        assert '...' in pages[0]
 
 
 class TestCogSafety:

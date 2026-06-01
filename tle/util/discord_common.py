@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from tle.util import codeforces_api as cf
 from tle.util import db
+from tle.util import paginator
 from tle.util import tasks
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,23 @@ def random_cf_color():
 
 def cf_color_embed(**kwargs):
     return discord.Embed(**kwargs, color=random_cf_color())
+
+
+async def send_paginated_embeds(ctx, description_pages, *, title=None, url=None,
+                                wait_time=300):
+    embeds = [
+        cf_color_embed(title=title, url=url, description=description)
+        for description in description_pages
+    ]
+    if len(embeds) == 1:
+        await ctx.send(embed=embeds[0])
+        return
+
+    pages = [(None, embed) for embed in embeds]
+    paginator.paginate(
+        ctx.bot, ctx.channel, pages, wait_time=wait_time,
+        set_pagenum_footers=True, author_id=ctx.author.id,
+    )
 
 
 def set_same_cf_color(embeds):
@@ -188,4 +206,3 @@ class TleHelp(commands.DefaultHelpCommand):
                 for line in command.help.splitlines():
                     self.paginator.add_line(line)
                 self.paginator.add_line()
-

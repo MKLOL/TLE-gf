@@ -967,18 +967,21 @@ class Contests(commands.Cog):
                         ratings.append(rating_cache[member])
             predicted.append(calculateDifficulty(ratings,solves))
 
-        # Output results
-        style = table.Style('{:<}  {:>}  {:>}')
-        t = table.Table(style)
-        t += table.Header('#', 'Official', 'Predicted (C)' if from_cache else 'Predicted')
-        t += table.Line()
-        for i, index in enumerate(indicies):
-            t += table.Data(f'{index}', f'{officialRatings[i]}', f'{predicted[i]}')
-        table_str = f'```\n{t}\n```'
         url = f'{cf.CONTEST_BASE_URL}{contest_id}'
         title = reqcontest[0].name
-        embed = discord_common.cf_color_embed(description=table_str, title=title, url=url)
-        await ctx.send(embed=embed)
+        table_pages = self._format_problemratings_table_pages(
+            indicies, officialRatings, predicted, from_cache=from_cache)
+        await discord_common.send_paginated_embeds(ctx, table_pages, title=title, url=url)
+
+    @staticmethod
+    def _format_problemratings_table_pages(indices, official_ratings, predicted, *, from_cache):
+        style = table.Style('{:<}  {:>}  {:>}')
+        header = ('#', 'Official', 'Predicted (C)' if from_cache else 'Predicted')
+        rows = [
+            (index, official_ratings[i], predicted[i])
+            for i, index in enumerate(indices)
+        ]
+        return table.format_table_pages(style, header, rows, flexible_cols=(0,))
 
     @discord_common.send_error_if(ContestCogError, rl.RanklistError,
                                   cache_system2.CacheError, cf_common.ResolveHandleError)

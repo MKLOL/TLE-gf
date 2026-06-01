@@ -166,29 +166,45 @@ def _format_akari_result_status(row):
     return f'{int(row.accuracy)}%'
 
 
+def _akari_puzzle_table_rows(guild, rows):
+    return [
+        (
+            index,
+            _safe_user_name(guild, row.user_id),
+            _format_akari_result_status(row),
+            format_duration(row.time_seconds),
+        )
+        for index, row in enumerate(sorted(
+            rows,
+            key=lambda row: (
+                -int(bool(row.is_perfect)),
+                -int(getattr(row, 'accuracy', 0)),
+                int(getattr(row, 'time_seconds', 0)),
+                int(getattr(row, 'message_id', 0)),
+            ),
+        ), start=1)
+    ]
+
+
 def _format_akari_puzzle_table(guild, rows):
     style = table.Style('{:>}  {:<}  {:<}  {:>}')
     t = table.Table(style)
     t += table.Header('#', 'Name', 'Result', 'Time')
     t += table.Line()
 
-    ordered_rows = sorted(
-        rows,
-        key=lambda row: (
-            -int(bool(row.is_perfect)),
-            -int(getattr(row, 'accuracy', 0)),
-            int(getattr(row, 'time_seconds', 0)),
-            int(getattr(row, 'message_id', 0)),
-        ),
-    )
-    for index, row in enumerate(ordered_rows, start=1):
-        t += table.Data(
-            index,
-            _safe_user_name(guild, row.user_id),
-            _format_akari_result_status(row),
-            format_duration(row.time_seconds),
-        )
+    for row in _akari_puzzle_table_rows(guild, rows):
+        t += table.Data(*row)
     return str(t)
+
+
+def _format_akari_puzzle_table_pages(guild, rows):
+    style = table.Style('{:>}  {:<}  {:<}  {:>}')
+    return table.format_table_pages(
+        style,
+        ('#', 'Name', 'Result', 'Time'),
+        _akari_puzzle_table_rows(guild, rows),
+        flexible_cols=(1,),
+    )
 
 
 class Minigames(commands.Cog):
@@ -773,12 +789,12 @@ class Minigames(commands.Cog):
                 if not rows:
                     raise MinigameCogError(f'No {game.display_name} results found for `{args[0]}`.')
 
-                table_str = _format_akari_puzzle_table(ctx.guild, rows)
-                embed = discord_common.cf_color_embed(
+                table_pages = _format_akari_puzzle_table_pages(ctx.guild, rows)
+                await discord_common.send_paginated_embeds(
+                    ctx,
+                    table_pages,
                     title=title,
-                    description=f'```\n{table_str}\n```',
                 )
-                await ctx.send(embed=embed)
                 return
 
         filter_args = list(args)
