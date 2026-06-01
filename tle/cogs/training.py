@@ -26,6 +26,11 @@ FONTS = [
     'Noto Sans CJK TC',
     'Noto Sans CJK HK',
     'Noto Sans CJK KR',
+    # Emoji fallbacks, only reached for codepoints the sans/CJK fonts lack.
+    # Color preferred; monochrome outline font as a last resort so emoji
+    # render as glyphs instead of tofu even where color glyphs can't be drawn.
+    'Noto Color Emoji',
+    'Noto Emoji',
 ]
 
 
