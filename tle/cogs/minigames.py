@@ -191,8 +191,27 @@ def _format_score(score):
 
 
 def _maybe_parse_puzzle_selector(arg):
+    """Resolve a single ``;akari stats`` argument into a puzzle/day selector.
+
+    Returns ``('puzzle', n)``, ``('day', date)``, or ``None`` (the caller then
+    treats ``arg`` as a member/filter).
+
+    An explicit ``#N`` or ``p=N`` prefix always means puzzle number ``N``. This
+    is the unambiguous way to look up a puzzle whose number collides with a bare
+    date format -- e.g. ``#1000`` once daily puzzle numbers reach four digits,
+    since a bare ``1000`` parses as the year 1000. Bare numbers keep their
+    historical meaning: length 4/6/8 digit strings are dates (year / month-year
+    / day-month-year), anything else is a puzzle number.
+    """
     if not arg:
         return None
+    explicit = None
+    if arg.startswith('#'):
+        explicit = arg[1:]
+    elif arg[:2].lower() == 'p=':
+        explicit = arg[2:]
+    if explicit is not None:
+        return ('puzzle', int(explicit)) if explicit.isdigit() else None
     try:
         day_start = int(cf_common.parse_date(arg))
     except (cf_common.ParamParseError, ValueError, OverflowError):
@@ -1426,7 +1445,7 @@ class Minigames(commands.Cog):
         await self._cmd_top(ctx, AKARI_GAME, *args)
 
     @akari.command(name='stats', brief='Show personal stats with graphs',
-                   usage='[@user] [filters...] | [day|puzzle_id]')
+                   usage='[@user] [filters...] | [day | puzzle_id | #puzzle_id]')
     async def akari_stats(self, ctx, *args):
         await self._cmd_stats(ctx, AKARI_GAME, *args)
 

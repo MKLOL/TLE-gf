@@ -472,6 +472,38 @@ class TestArgs:
         assert _maybe_parse_puzzle_selector('week') is None
         assert _maybe_parse_puzzle_selector('p>=445') is None
 
+    def test_bare_four_digit_number_is_a_year_not_a_puzzle(self):
+        # Back-compat: a bare 4/6/8-digit value keeps parsing as a date.
+        assert _maybe_parse_puzzle_selector('2026') == ('day', dt.date(2026, 1, 1))
+        assert _maybe_parse_puzzle_selector('032026') == ('day', dt.date(2026, 3, 1))
+
+    def test_hash_prefix_forces_puzzle_number(self):
+        # The unambiguous way to reach a puzzle whose number collides with a
+        # date format once daily puzzle numbers reach four digits.
+        assert _maybe_parse_puzzle_selector('#1000') == ('puzzle', 1000)
+        assert _maybe_parse_puzzle_selector('#2026') == ('puzzle', 2026)
+        assert _maybe_parse_puzzle_selector('#112024') == ('puzzle', 112024)
+
+    def test_p_equals_prefix_forces_puzzle_number(self):
+        assert _maybe_parse_puzzle_selector('p=1000') == ('puzzle', 1000)
+        assert _maybe_parse_puzzle_selector('P=2026') == ('puzzle', 2026)
+
+    def test_explicit_prefix_still_works_for_small_numbers(self):
+        # #N is consistent for every puzzle, not just the colliding ones.
+        assert _maybe_parse_puzzle_selector('#445') == ('puzzle', 445)
+        assert _maybe_parse_puzzle_selector('p=445') == ('puzzle', 445)
+
+    def test_explicit_prefix_with_non_digit_is_rejected(self):
+        assert _maybe_parse_puzzle_selector('#abc') is None
+        assert _maybe_parse_puzzle_selector('#') is None
+        assert _maybe_parse_puzzle_selector('p=') is None
+
+    def test_bare_small_numbers_remain_puzzles(self):
+        # Lengths that are not valid date formats stay puzzle numbers.
+        assert _maybe_parse_puzzle_selector('5') == ('puzzle', 5)
+        assert _maybe_parse_puzzle_selector('445') == ('puzzle', 445)
+        assert _maybe_parse_puzzle_selector('99999') == ('puzzle', 99999)
+
 
 class TestDbMixin:
     def test_channel_crud(self, db):
