@@ -351,12 +351,27 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             CREATE INDEX IF NOT EXISTS idx_minigame_raw_message_guild
                 ON minigame_raw_message (guild_id)
         ''')
-        # Minigame ratings (registrants + rebuildable Akari rating snapshot)
+        # Akari ratings (registrants + rebuildable rating snapshot).
+        # Registration is akari-specific — guessgame doesn't have a rating
+        # system, so the opt-in roster has no reason to be game-keyed.
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS minigame_registrant (
+            CREATE TABLE IF NOT EXISTS akari_registrant (
                 guild_id      TEXT NOT NULL,
                 user_id       TEXT NOT NULL,
                 registered_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        # Akari ingestion banlist. Banned users' messages (live + edits + import
+        # + reparse) are silently dropped — no raw store, no result row.
+        # Forward-only: existing data is untouched, banning just stops the bleed.
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS akari_ban (
+                guild_id   TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
                 PRIMARY KEY (guild_id, user_id)
             )
         ''')

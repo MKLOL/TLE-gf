@@ -309,13 +309,13 @@ class MinigameDbMixin:
         self.conn.commit()
         return live_rc + imported_rc
 
-    # ── Rating: registration ─────────────────────────────────────────
+    # ── Akari rating: registration ───────────────────────────────────
 
-    def register_minigame_user(self, guild_id, user_id, registered_at):
-        """Opt a user in to minigame ratings. Returns 1 if newly added, else 0."""
+    def register_akari_user(self, guild_id, user_id, registered_at):
+        """Opt a user in to Akari ratings. Returns 1 if newly added, else 0."""
         rc = self.conn.execute(
             '''
-            INSERT OR IGNORE INTO minigame_registrant (guild_id, user_id, registered_at)
+            INSERT OR IGNORE INTO akari_registrant (guild_id, user_id, registered_at)
             VALUES (?, ?, ?)
             ''',
             (str(guild_id), str(user_id), float(registered_at))
@@ -323,29 +323,80 @@ class MinigameDbMixin:
         self.conn.commit()
         return rc
 
-    def unregister_minigame_user(self, guild_id, user_id):
+    def unregister_akari_user(self, guild_id, user_id):
         """Opt a user out. Returns the number of rows removed (1 or 0)."""
         rc = self.conn.execute(
-            'DELETE FROM minigame_registrant WHERE guild_id = ? AND user_id = ?',
+            'DELETE FROM akari_registrant WHERE guild_id = ? AND user_id = ?',
             (str(guild_id), str(user_id))
         ).rowcount
         self.conn.commit()
         return rc
 
-    def is_minigame_registered(self, guild_id, user_id):
+    def is_akari_registered(self, guild_id, user_id):
         row = self.conn.execute(
-            'SELECT user_id FROM minigame_registrant WHERE guild_id = ? AND user_id = ?',
+            'SELECT user_id FROM akari_registrant WHERE guild_id = ? AND user_id = ?',
             (str(guild_id), str(user_id))
         ).fetchone()
         return row is not None
 
-    def get_minigame_registrants(self, guild_id):
+    def get_akari_registrants(self, guild_id):
         """Return the set of opted-in user_ids (as TEXT) for a guild."""
         rows = self.conn.execute(
-            'SELECT user_id FROM minigame_registrant WHERE guild_id = ?',
+            'SELECT user_id FROM akari_registrant WHERE guild_id = ?',
             (str(guild_id),)
         ).fetchall()
         return {row.user_id for row in rows}
+
+    # ── Akari rating: banlist ────────────────────────────────────────
+
+    def ban_akari_user(self, guild_id, user_id, banned_at, banned_by, reason=None):
+        """Ban a user from Akari ingestion.
+
+        Returns 1 if newly banned, 0 if already banned (existing ban metadata
+        is preserved).  To update the reason of an existing ban, unban first.
+        """
+        rc = self.conn.execute(
+            '''
+            INSERT OR IGNORE INTO akari_ban
+                (guild_id, user_id, banned_at, banned_by, reason)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (str(guild_id), str(user_id), float(banned_at),
+             str(banned_by), reason)
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def unban_akari_user(self, guild_id, user_id):
+        """Lift a ban. Returns the number of rows removed (1 or 0)."""
+        rc = self.conn.execute(
+            'DELETE FROM akari_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def is_akari_banned(self, guild_id, user_id):
+        row = self.conn.execute(
+            'SELECT user_id FROM akari_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))
+        ).fetchone()
+        return row is not None
+
+    def get_akari_bans(self, guild_id):
+        """List bans for a guild, newest first.
+
+        Returns rows with ``user_id``, ``banned_at``, ``banned_by``, ``reason``.
+        """
+        return self.conn.execute(
+            '''
+            SELECT user_id, banned_at, banned_by, reason
+            FROM akari_ban
+            WHERE guild_id = ?
+            ORDER BY banned_at DESC, user_id ASC
+            ''',
+            (str(guild_id),)
+        ).fetchall()
 
     # ── Rating: snapshot ─────────────────────────────────────────────
 

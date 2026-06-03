@@ -49,12 +49,12 @@ AKARI_RANKS = (
     _AkariRank(1000, 1100, 'Pupil', 'P', '#77FF77', 0x008000),
     _AkariRank(1100, 1200, 'Specialist', 'S', '#77DDBB', 0x03a89e),
     _AkariRank(1200, 1300, 'Expert', 'E', '#AAAAFF', 0x0000ff),
-    _AkariRank(1300, 1500, 'Candidate Master', 'CM', '#FF88FF', 0xaa00aa),
-    _AkariRank(1500, 1700, 'Master', 'M', '#FFCC88', 0xff8c00),
-    _AkariRank(1700, 1800, 'International Master', 'IM', '#FFBB55', 0xf57500),
-    _AkariRank(1800, 2000, 'Grandmaster', 'GM', '#FF7777', 0xff3030),
-    _AkariRank(2000, 2500, 'International Grandmaster', 'IGM', '#FF3333', 0xff0000),
-    _AkariRank(2500, 10 ** 9, 'Legendary Grandmaster', 'LGM', '#AA0000', 0xcc0000),
+    _AkariRank(1300, 1400, 'Candidate Master', 'CM', '#FF88FF', 0xaa00aa),
+    _AkariRank(1400, 1500, 'Master', 'M', '#FFCC88', 0xff8c00),
+    _AkariRank(1500, 1600, 'International Master', 'IM', '#FFBB55', 0xf57500),
+    _AkariRank(1600, 1800, 'Grandmaster', 'GM', '#FF7777', 0xff3030),
+    _AkariRank(1800, 2000, 'International Grandmaster', 'IGM', '#FF3333', 0xff0000),
+    _AkariRank(2000, 10 ** 9, 'Legendary Grandmaster', 'LGM', '#AA0000', 0xcc0000),
 )
 
 

@@ -108,10 +108,20 @@ class FakeMinigameDb(MinigameDbMixin):
             )
         ''')
         self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS minigame_registrant (
+            CREATE TABLE IF NOT EXISTS akari_registrant (
                 guild_id      TEXT NOT NULL,
                 user_id       TEXT NOT NULL,
                 registered_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS akari_ban (
+                guild_id   TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
                 PRIMARY KEY (guild_id, user_id)
             )
         ''')
@@ -1786,25 +1796,25 @@ class TestSlashCtx:
 
 class TestRatingDb:
     def test_register_is_idempotent(self, db):
-        assert db.register_minigame_user(1, 999, 123.0) == 1
-        assert db.register_minigame_user(1, 999, 124.0) == 0
-        assert db.is_minigame_registered(1, 999) is True
-        assert db.is_minigame_registered(1, 888) is False
-        assert db.get_minigame_registrants(1) == {'999'}
+        assert db.register_akari_user(1, 999, 123.0) == 1
+        assert db.register_akari_user(1, 999, 124.0) == 0
+        assert db.is_akari_registered(1, 999) is True
+        assert db.is_akari_registered(1, 888) is False
+        assert db.get_akari_registrants(1) == {'999'}
 
     def test_unregister(self, db):
-        db.register_minigame_user(1, 999, 1.0)
-        assert db.unregister_minigame_user(1, 999) == 1
-        assert db.unregister_minigame_user(1, 999) == 0
-        assert db.is_minigame_registered(1, 999) is False
-        assert db.get_minigame_registrants(1) == set()
+        db.register_akari_user(1, 999, 1.0)
+        assert db.unregister_akari_user(1, 999) == 1
+        assert db.unregister_akari_user(1, 999) == 0
+        assert db.is_akari_registered(1, 999) is False
+        assert db.get_akari_registrants(1) == set()
 
     def test_registrants_are_guild_scoped(self, db):
-        db.register_minigame_user(1, 999, 1.0)
-        db.register_minigame_user(2, 999, 1.0)
-        db.unregister_minigame_user(1, 999)
-        assert db.get_minigame_registrants(1) == set()
-        assert db.get_minigame_registrants(2) == {'999'}
+        db.register_akari_user(1, 999, 1.0)
+        db.register_akari_user(2, 999, 1.0)
+        db.unregister_akari_user(1, 999)
+        assert db.get_akari_registrants(1) == set()
+        assert db.get_akari_registrants(2) == {'999'}
 
     def test_replace_and_get_ratings_sorted_desc(self, db):
         states = [
@@ -1937,13 +1947,13 @@ class TestCogRating:
 
     def test_debug_leaderboard_includes_shadow_rated(self, db, monkeypatch):
         # ;mg akari ratings debug is the admin variant: it must include users
-        # who haven't opted in via ;mg register (shadow-rated), with the ✓
+        # who haven't opted in via ;mg akari register (shadow-rated), with the ✓
         # marker preserved so admins can still tell who's registered.
         monkeypatch.setattr(cf_common, 'user_db', db)
         self._no_puzzle_filter(monkeypatch)
         self._enable(db)
         # Alice opts in; Bob is shadow-rated.
-        db.register_minigame_user(1, 999, 1.0)
+        db.register_akari_user(1, 999, 1.0)
         cog = Minigames(bot=None)
 
         async def _seed():
@@ -1997,6 +2007,134 @@ class TestCogRating:
         # The result still saved despite the rating failure.
         assert bad.get_minigame_result(1) is not None
         bad.close()
+
+
+class TestRegisterTarget:
+    """`;mg akari register [@user]` — anyone can self-register; only mods can
+    pass a different @user."""
+
+    @staticmethod
+    def _ctx(author_id, author_roles):
+        roles = [SimpleNamespace(name=r) for r in author_roles]
+        return SimpleNamespace(
+            author=SimpleNamespace(id=author_id, roles=roles))
+
+    def test_non_mod_can_self_register_without_arg(self):
+        ctx = self._ctx(999, author_roles=[])
+        target = Minigames._resolve_registrar_target(ctx, member=None)
+        assert target is ctx.author
+
+    def test_non_mod_can_pass_self_explicitly(self):
+        ctx = self._ctx(999, author_roles=[])
+        target = Minigames._resolve_registrar_target(
+            ctx, member=SimpleNamespace(id=999))
+        # When the explicit member matches the author, we collapse to the
+        # author (so message logic sees a "self" registration).
+        assert target.id == ctx.author.id
+
+    def test_non_mod_blocked_from_registering_other(self):
+        ctx = self._ctx(999, author_roles=['Member'])
+        with pytest.raises(Exception, match='Only.*can register'):
+            Minigames._resolve_registrar_target(
+                ctx, member=SimpleNamespace(id=888))
+
+    def test_admin_can_register_other(self):
+        ctx = self._ctx(999, author_roles=['Admin'])
+        other = SimpleNamespace(id=888)
+        assert Minigames._resolve_registrar_target(ctx, member=other) is other
+
+    def test_moderator_can_register_other(self):
+        ctx = self._ctx(999, author_roles=['Moderator'])
+        other = SimpleNamespace(id=888)
+        assert Minigames._resolve_registrar_target(ctx, member=other) is other
+
+
+class TestAkariBan:
+    """`;mg akari ban @user` blocks the user's future Akari ingest path.
+
+    Verifies the four ingest entry points all short-circuit on the banlist,
+    and that the DB methods round-trip cleanly.
+    """
+
+    def test_ban_db_methods_roundtrip(self, db):
+        assert db.is_akari_banned(1, 999) is False
+        assert db.ban_akari_user(1, 999, 100.0, 7, 'spam') == 1
+        assert db.ban_akari_user(1, 999, 200.0, 7, 'spam') == 0   # idempotent
+        assert db.is_akari_banned(1, 999) is True
+        rows = db.get_akari_bans(1)
+        assert len(rows) == 1
+        assert rows[0].user_id == '999'
+        assert rows[0].reason == 'spam'
+        # Original ban metadata preserved (re-ban kept the first banned_at).
+        assert rows[0].banned_at == 100.0
+        assert db.unban_akari_user(1, 999) == 1
+        assert db.is_akari_banned(1, 999) is False
+
+    def test_get_akari_bans_sorted_newest_first(self, db):
+        db.ban_akari_user(1, 'a', 100.0, 7, None)
+        db.ban_akari_user(1, 'b', 300.0, 7, None)
+        db.ban_akari_user(1, 'c', 200.0, 7, None)
+        order = [r.user_id for r in db.get_akari_bans(1)]
+        assert order == ['b', 'c', 'a']
+
+    def test_on_message_drops_banned_user(self, db, monkeypatch):
+        # A banned user's Akari message is fully ignored: no raw store, no
+        # result row, no rating recompute side-effect.
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        TestCogRating._enable(db)
+        db.ban_akari_user(1, 999, 1.0, 7, 'leak')
+        cog = Minigames(bot=None)
+        msg = TestCogRating._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')
+        asyncio.run(cog.on_message(msg))
+        assert db.get_minigame_result(1) is None
+        # No raw row stored either.
+        raws = db.conn.execute(
+            'SELECT 1 FROM minigame_raw_message WHERE message_id = ?',
+            ('1',)).fetchall()
+        assert raws == []
+
+    def test_on_message_passes_non_banned_user(self, db, monkeypatch):
+        # Sanity: the ingest path itself still works when the user isn't banned.
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        TestCogRating._enable(db)
+        cog = Minigames(bot=None)
+        msg = TestCogRating._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')
+        asyncio.run(cog.on_message(msg))
+        assert db.get_minigame_result(1) is not None
+
+    def test_reparse_skips_banned_user(self, db, monkeypatch):
+        # Even if a banned user's raw message is in the store from before the
+        # ban, reparse must not produce a result row for them.
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        TestCogRating._enable(db)
+        # Stash a pre-ban raw message authored by the soon-to-be-banned user.
+        msg = TestCogRating._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')
+        db.save_raw_message(
+            msg.id, msg.guild.id, msg.channel.id, msg.author.id,
+            msg.created_at.isoformat(), msg.content)
+        db.ban_akari_user(1, 999, 200.0, 7, None)
+        # Also clear out any imported rows that an earlier setup might have
+        # left lying around for this guild.
+        db.clear_imported_minigame_results(1, 'akari')
+
+        sent_messages = []
+
+        async def _send(*a, **k):
+            sent_messages.append((a, k))
+
+        cog = Minigames(bot=None)
+        ctx = SimpleNamespace(
+            guild=_FakeGuild(1, members=[_FakeDiscordMember(999, 'Alice')]),
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=7),
+            send=_send,
+        )
+        asyncio.run(cog._cmd_reparse(ctx, AKARI_GAME))
+        # No imported row created for the banned author.
+        imported = db.conn.execute(
+            'SELECT 1 FROM minigame_import_result WHERE user_id = ?',
+            ('999',)).fetchall()
+        assert imported == []
 
 
 class TestRatingDisplayNoLeak:

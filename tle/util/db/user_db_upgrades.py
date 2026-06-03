@@ -557,7 +557,7 @@ def upgrade_1_23_0(db):
 @registry.register('1.24.0', 'Akari ratings')
 def upgrade_1_24_0(db):
     logger.info('1.24.0: Creating minigame_registrant and akari_rating tables')
-    # Who has opted in via `;mg register`. Rating is computed for everyone with
+    # Who has opted in via `;mg akari register`. Rating is computed for everyone with
     # results regardless; this table only records the opt-in flag.
     db.execute('''
         CREATE TABLE IF NOT EXISTS minigame_registrant (
@@ -602,3 +602,62 @@ def upgrade_1_25_0(db):
             logger.debug('1.25.0: %s column already exists or error: %s', column, e)
     db.commit()
     logger.info('1.25.0: Upgrade complete')
+
+
+@registry.register('1.26.0', 'Rename minigame_registrant to akari_registrant')
+def upgrade_1_26_0(db):
+    """Make the registrant table akari-specific.
+
+    Registration was only ever consumed by akari rating displays, so the
+    ``minigame_`` prefix was a misnomer.  Rename the table and lift the data
+    over verbatim — same shape, same PK, just an honest name.  If guessgame
+    ever gets ratings, it will get its own table.
+    """
+    logger.info('1.26.0: Renaming minigame_registrant to akari_registrant')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS akari_registrant (
+            guild_id      TEXT NOT NULL,
+            user_id       TEXT NOT NULL,
+            registered_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    # Idempotent copy in case this runs twice or rows were already moved.
+    try:
+        moved = db.execute(
+            '''INSERT OR IGNORE INTO akari_registrant
+               (guild_id, user_id, registered_at)
+               SELECT guild_id, user_id, registered_at FROM minigame_registrant
+            '''
+        ).rowcount
+        logger.info('1.26.0: Copied %s registrant row(s)', moved)
+        db.execute('DROP TABLE minigame_registrant')
+    except Exception as e:
+        # Fresh DB created via user_db_conn.py never had minigame_registrant;
+        # there's nothing to copy or drop.
+        logger.debug('1.26.0: legacy table absent (%s) — fresh DB path', e)
+    db.commit()
+    logger.info('1.26.0: Upgrade complete')
+
+
+@registry.register('1.27.0', 'Akari ingestion banlist')
+def upgrade_1_27_0(db):
+    """Create the akari_ban table.
+
+    Banned users' Akari messages are silently dropped at ingest time.  The
+    table is forward-only (existing rows are not affected); banning is purely
+    a save-time filter.
+    """
+    logger.info('1.27.0: Creating akari_ban table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS akari_ban (
+            guild_id   TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            banned_at  REAL NOT NULL,
+            banned_by  TEXT NOT NULL,
+            reason     TEXT,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.27.0: Upgrade complete')

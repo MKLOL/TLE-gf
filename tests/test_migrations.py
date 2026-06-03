@@ -392,6 +392,70 @@ class TestUpgrade125:
         upgrade_1_25_0(db)  # ALTER guarded by try/except -> safe to re-run
 
 
+class TestUpgrade126:
+    def test_renames_table_and_preserves_rows(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_24_0, upgrade_1_26_0
+        upgrade_1_24_0(db)  # creates the legacy minigame_registrant table
+        db.execute(
+            "INSERT INTO minigame_registrant (guild_id, user_id, registered_at) "
+            "VALUES ('1', '999', 123.0), ('1', '888', 124.0)")
+        upgrade_1_26_0(db)
+        # Old table is gone; new table has the rows.
+        rows = db.execute(
+            'SELECT guild_id, user_id, registered_at FROM akari_registrant '
+            'ORDER BY user_id').fetchall()
+        assert [(r.guild_id, r.user_id, r.registered_at) for r in rows] == [
+            ('1', '888', 124.0),
+            ('1', '999', 123.0),
+        ]
+        legacy_exists = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='minigame_registrant'").fetchone()
+        assert legacy_exists is None
+
+    def test_no_legacy_table_is_a_noop(self, db):
+        # Fresh DBs created via user_db_conn.py never had minigame_registrant —
+        # the migration must skip the copy/drop without failing.
+        from tle.util.db.user_db_upgrades import upgrade_1_26_0
+        upgrade_1_26_0(db)
+        # akari_registrant exists and is empty.
+        rows = db.execute('SELECT user_id FROM akari_registrant').fetchall()
+        assert rows == []
+
+    def test_idempotent(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_24_0, upgrade_1_26_0
+        upgrade_1_24_0(db)
+        db.execute(
+            "INSERT INTO minigame_registrant (guild_id, user_id, registered_at) "
+            "VALUES ('1', '999', 123.0)")
+        upgrade_1_26_0(db)
+        upgrade_1_26_0(db)  # legacy table absent on second pass — must not raise
+        rows = db.execute('SELECT user_id FROM akari_registrant').fetchall()
+        assert {r.user_id for r in rows} == {'999'}
+
+
+class TestUpgrade127:
+    def test_creates_ban_table(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_27_0
+        upgrade_1_27_0(db)
+        # Insert + read to verify the schema is queryable.
+        db.execute(
+            "INSERT INTO akari_ban (guild_id, user_id, banned_at, banned_by, reason) "
+            "VALUES ('1', '999', 100.0, '7', 'spam')")
+        row = db.execute(
+            'SELECT user_id, banned_at, banned_by, reason '
+            'FROM akari_ban').fetchone()
+        assert row.user_id == '999'
+        assert row.banned_at == 100.0
+        assert row.banned_by == '7'
+        assert row.reason == 'spam'
+
+    def test_idempotent(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_27_0
+        upgrade_1_27_0(db)
+        upgrade_1_27_0(db)  # CREATE … IF NOT EXISTS — safe to re-run
+
+
 class TestFreshDbSchema:
     """A fresh DB stamps the latest version WITHOUT running migrations, so every
     migration table/column must also be created by create_tables()."""
@@ -403,12 +467,20 @@ class TestFreshDbSchema:
         conn = UserDbConn(':memory:')
         try:
             # These would raise "no such table"/"no such column" if only the
-            # 1.24.0/1.25.0 migrations (which a fresh DB never runs) created them.
+            # 1.24.0/1.25.0/1.26.0/1.27.0 migrations (which a fresh DB never
+            # runs) created them.
             conn.conn.execute('SELECT guild_id, user_id, registered_at '
-                              'FROM minigame_registrant').fetchall()
+                              'FROM akari_registrant').fetchall()
             conn.conn.execute('SELECT guild_id, user_id, rating, games, peak, '
                               'last_delta, skip_streak, last_puzzle, updated_at '
                               'FROM akari_rating').fetchall()
+            conn.conn.execute('SELECT guild_id, user_id, banned_at, banned_by, '
+                              'reason FROM akari_ban').fetchall()
+            # And the legacy table must NOT be created by the fresh path.
+            legacy = conn.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='minigame_registrant'").fetchone()
+            assert legacy is None
             assert registry.get_current_version(conn.conn) == registry.latest_version
         finally:
             conn.conn.close()

@@ -23,8 +23,8 @@ from tle.util import table
 
 from tle.cogs._minigame_common import (
     compute_vs, compute_vs_matchups, compute_streak, compute_longest_streak, compute_top,
-    pick_best_results, format_duration, parse_date_args, resolve_scoring,
-    strip_codeblock,
+    pick_best_results, format_duration, normalize_puzzle_date, parse_date_args,
+    resolve_scoring, strip_codeblock,
 )
 from tle.cogs._minigame_akari import AKARI_GAME, expected_puzzle_number
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
@@ -358,7 +358,7 @@ def _akari_rating_table_rows(guild, rating_rows, registrants, *, mark_registered
     ``rating`` is rounded only here for display, and the rank abbreviation
     (N/P/S/E/CM/…) is appended so scanners see the tier without a separate
     column.  When ``mark_registered`` is True, a ``✓`` after the name marks
-    users who opted in via ``;mg register``; pass False on a registered-only
+    users who opted in via ``;mg akari register``; pass False on a registered-only
     view (the marker is redundant when every row is opted in).
     """
     rows = []
@@ -403,6 +403,53 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
         table_rows, title=title, footer=footer,
         header=('#', 'Name', 'Handle', 'Rating', 'Games'),
         row_colors=row_colors)
+
+
+# Same per-page count as ``;handles updates`` — embed descriptions cap at 4096
+# chars so 15 contest lines (~80 chars each) leave plenty of headroom.
+_AKARI_HISTORY_PER_PAGE = 15
+
+
+def _format_akari_history_line(point):
+    """One CF-style line of ``;mg akari history`` for one contest day.
+
+    ``**#446** · 2026-06-03 · 🌟 1:34 · 1234 ─ **+12** → 1246 (CM) · perf 1289``
+
+    The horizontal bar / right-arrow combo mirrors ``;handles updates``
+    (handles.py:884-889), the canonical CF rating-change format in this
+    codebase. Solo days are filtered out by the caller, so ``performance`` is
+    guaranteed to be non-None here.
+    """
+    new_rating = round(point.rating)
+    old_rating = round(point.rating - point.delta)
+    delta = round(point.delta)
+    rank_abbr = rank_for_rating(new_rating).title_abbr
+    if point.is_perfect:
+        result_str = f'\N{GLOWING STAR} {format_duration(point.time_seconds)}'
+    else:
+        result_str = f'{point.accuracy}% {format_duration(point.time_seconds)}'
+    date_str = normalize_puzzle_date(point.puzzle_date).isoformat()
+    return (
+        f'**#{point.puzzle_number}** \N{MIDDLE DOT} {date_str} '
+        f'\N{MIDDLE DOT} {result_str} '
+        f'\N{MIDDLE DOT} {old_rating} \N{HORIZONTAL BAR} **{delta:+}** '
+        f'\N{LONG RIGHTWARDS ARROW} {new_rating} ({rank_abbr}) '
+        f'\N{MIDDLE DOT} perf {round(point.performance)}'
+    )
+
+
+def _format_akari_ban_line(guild, row):
+    """One line of ``;mg akari bans``: who's banned, when, by whom, why.
+
+    Example:
+        ``• **Alice** \N{MIDDLE DOT} banned 2026-06-03 by **mod1** \N{MIDDLE DOT} spamming``
+    """
+    target = _safe_user_name(guild, row.user_id)
+    banner = _safe_user_name(guild, row.banned_by)
+    date_str = dt.datetime.fromtimestamp(row.banned_at).date().isoformat()
+    reason_part = f' \N{MIDDLE DOT} {row.reason}' if row.reason else ''
+    return (f'\N{BULLET} **{target}** \N{MIDDLE DOT} banned {date_str} '
+            f'by **{banner}**{reason_part}')
 
 
 class Minigames(commands.Cog):
@@ -456,6 +503,24 @@ class Minigames(commands.Cog):
             return await CaseInsensitiveMember().convert(ctx, member_text)
         except commands.BadArgument as exc:
             raise MinigameCogError(str(exc)) from exc
+
+    @staticmethod
+    def _resolve_registrar_target(ctx, member):
+        """Validate that ``ctx.author`` may (un)register ``member``.
+
+        Anyone can (un)register themselves; only mods/admins can act on someone
+        else.  Passing your own member object is treated the same as omitting
+        it.  Returns the resolved target.
+        """
+        if member is None or member.id == ctx.author.id:
+            return ctx.author
+        is_mod = any(r.name in (constants.TLE_ADMIN, constants.TLE_MODERATOR)
+                     for r in ctx.author.roles)
+        if not is_mod:
+            raise MinigameCogError(
+                f'Only `{constants.TLE_ADMIN}` / `{constants.TLE_MODERATOR}` '
+                f'can register or unregister other users.')
+        return member
 
     # ── Rating ──────────────────────────────────────────────────────────
 
@@ -530,6 +595,17 @@ class Minigames(commands.Cog):
             saved += 1
         return saved
 
+    @staticmethod
+    def _is_akari_banned(guild_id, user_id, game):
+        """True iff this is an Akari message from a banned user.
+
+        Banning is akari-only — other games (e.g. GuessGame) don't have a
+        banlist and pass through.  Used to short-circuit ingest at every entry
+        point: live messages, edits, history import, and reparse.
+        """
+        return (game.name == AKARI_GAME.name
+                and cf_common.user_db.is_akari_banned(guild_id, user_id))
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.guild is None or message.author.bot or cf_common.user_db is None:
@@ -537,6 +613,8 @@ class Minigames(commands.Cog):
         game = self._game_for_channel(message)
         if game is not None:
             try:
+                if self._is_akari_banned(message.guild.id, message.author.id, game):
+                    return  # silently drop — no raw store, no ingest
                 # Save raw content for future reparse
                 cf_common.user_db.save_raw_message(
                     message.id, message.guild.id, message.channel.id,
@@ -556,6 +634,8 @@ class Minigames(commands.Cog):
         game = self._game_for_channel(after)
         if game is None:
             return
+        if self._is_akari_banned(after.guild.id, after.author.id, game):
+            return  # silent drop — leave pre-ban data untouched
         try:
             # Update raw content so future reparse uses the edited version
             cf_common.user_db.update_raw_message(after.id, after.content)
@@ -647,6 +727,9 @@ class Minigames(commands.Cog):
                 status['scanned'] += 1
                 if message.author.bot or not message.content:
                     continue
+
+                if self._is_akari_banned(guild_id, message.author.id, game):
+                    continue  # skip banned users entirely (no raw, no result)
 
                 # Save every non-bot message for future reparse
                 cf_common.user_db.save_raw_message(
@@ -1027,12 +1110,12 @@ class Minigames(commands.Cog):
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} ratings yet. They appear once '
                 f'players post results.')
-        registrants = cf_common.user_db.get_minigame_registrants(ctx.guild.id)
+        registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         registered = [r for r in rows if r.user_id in registrants]
         if not registered:
             raise MinigameCogError(
                 f'No registered {AKARI_GAME.display_name} players yet. '
-                f'Players opt in with `;mg register`.')
+                f'Players opt in with `;mg akari register`.')
         active = self._active_ranking_rows(registered)
         if not active:
             raise MinigameCogError(
@@ -1061,16 +1144,16 @@ class Minigames(commands.Cog):
         """Per-user rating graph (``;plot rating`` style).
 
         ``require_registered=True`` (the default, public-facing path) refuses
-        to show the rating of users who haven't opted in via ``;mg register``.
+        to show the rating of users who haven't opted in via ``;mg akari register``.
         The ``rating debug`` subcommand passes False so admins can inspect any
         shadow-rated player.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if require_registered and not cf_common.user_db.is_minigame_registered(
+        if require_registered and not cf_common.user_db.is_akari_registered(
                 ctx.guild.id, member.id):
             raise MinigameCogError(
                 f'`{_safe_member_name(member)}` has not opted in to '
-                f'{AKARI_GAME.display_name} ratings (`;mg register`).')
+                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
         row = cf_common.user_db.get_akari_rating(ctx.guild.id, member.id)
         if row is None:
             raise MinigameCogError(
@@ -1086,12 +1169,17 @@ class Minigames(commands.Cog):
         rating = round(row.rating)
         rank = rank_for_rating(rating)
         peak_rank = rank_for_rating(round(row.peak))
-        # Last contest day's performance (skip solo-day Nones).
-        last_perf = next((h.performance for h in reversed(history)
-                          if h.performance is not None), None)
-        last_perf_str = (f'{round(last_perf)} '
-                         f'({rank_for_rating(round(last_perf)).title_abbr})'
-                         if last_perf is not None else '—')
+        # Last contest day's delta and performance (skip solo-day Nones).
+        # row.last_delta on the snapshot is overwritten by daily decay steps and
+        # rounds to +0 for most users — use the history to find their last
+        # actual contest instead, matching how Performance is computed below.
+        last_contest = next((h for h in reversed(history)
+                             if h.performance is not None), None)
+        last_change_str = (f'{last_contest.delta:+.0f}'
+                           if last_contest is not None else '—')
+        last_perf_str = (f'{round(last_contest.performance)} '
+                         f'({rank_for_rating(round(last_contest.performance)).title_abbr})'
+                         if last_contest is not None else '—')
         discord_file = plot_akari_rating(history, _safe_member_name(member))
         embed = discord.Embed(
             title=f'{AKARI_GAME.display_name} rating — {_safe_member_name(member)}',
@@ -1100,7 +1188,7 @@ class Minigames(commands.Cog):
         embed.add_field(name='Rating', value=f'{rating} ({rank.title_abbr})')
         embed.add_field(name='Peak', value=f'{round(row.peak)} ({peak_rank.title_abbr})')
         embed.add_field(name='Games', value=str(row.games))
-        embed.add_field(name='Last change', value=f'{row.last_delta:+.0f}')
+        embed.add_field(name='Last change', value=last_change_str)
         embed.add_field(name='Last performance', value=last_perf_str)
         discord_common.attach_image(embed, discord_file)
         await ctx.send(embed=embed, file=discord_file)
@@ -1114,16 +1202,16 @@ class Minigames(commands.Cog):
         days have no field and are dropped from the plot.
 
         ``require_registered=True`` (the default, public-facing path) refuses
-        to show performance for users who haven't opted in via ``;mg register``.
+        to show performance for users who haven't opted in via ``;mg akari register``.
         The ``performance debug`` subcommand passes False so admins can inspect
         any shadow-rated player.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if require_registered and not cf_common.user_db.is_minigame_registered(
+        if require_registered and not cf_common.user_db.is_akari_registered(
                 ctx.guild.id, member.id):
             raise MinigameCogError(
                 f'`{_safe_member_name(member)}` has not opted in to '
-                f'{AKARI_GAME.display_name} ratings (`;mg register`).')
+                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
         row = cf_common.user_db.get_akari_rating(ctx.guild.id, member.id)
         if row is None:
             raise MinigameCogError(
@@ -1172,11 +1260,49 @@ class Minigames(commands.Cog):
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} players active in the last '
                 f'{constants.AKARI_RANKING_MAX_INACTIVE_DAYS} days.')
-        registrants = cf_common.user_db.get_minigame_registrants(ctx.guild.id)
+        registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         discord_file = _get_akari_rating_table_image_file(
             ctx.guild, active, registrants,
             title='Daily Akari Ratings (all)', mark_registered=True)
         await ctx.send(file=discord_file)
+
+    async def _cmd_akari_history(self, ctx, member, *, require_registered=True):
+        """Per-user paginated rating delta history (``;handles updates`` style).
+
+        One line per contest the user played, newest first.  Solo days (single
+        player) are skipped — they have no field, no contest delta, and don't
+        appear on the rating graph either.  Decay days never had their own
+        history points to begin with; their net effect surfaces in the next
+        played day's rating.
+        """
+        self._require_enabled(ctx.guild.id, AKARI_GAME)
+        if require_registered and not cf_common.user_db.is_akari_registered(
+                ctx.guild.id, member.id):
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` has not opted in to '
+                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
+
+        history = self._akari_user_history(ctx.guild.id, member.id)
+        contest_history = [h for h in history if h.performance is not None]
+        if not contest_history:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` has no contested '
+                f'{AKARI_GAME.display_name} days yet.')
+
+        lines = [_format_akari_history_line(h) for h in reversed(contest_history)]
+        title = (f'{AKARI_GAME.display_name} rating history — '
+                 f'{_safe_member_name(member)} ({len(contest_history)} contests)')
+        pages = []
+        for chunk in paginator.chunkify(lines, _AKARI_HISTORY_PER_PAGE):
+            embed = discord.Embed(
+                title=title,
+                description='\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )
+            pages.append((None, embed))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
 
     _STATS_PLOTTERS = {
         'akari': plot_akari_stats,
@@ -1343,6 +1469,8 @@ class Minigames(commands.Cog):
         skipped = []
 
         for row in raw_messages:
+            if self._is_akari_banned(row.guild_id, row.user_id, game):
+                continue  # banned users' raw rows stay in the store but produce no results
             cleaned = strip_codeblock(row.raw_content)
             results = game.parse(cleaned)
             if not results:
@@ -1389,24 +1517,6 @@ class Minigames(commands.Cog):
         """Daily puzzle minigame commands."""
         await ctx.send_help(ctx.command)
 
-    @minigames.command(name='register', brief='Opt in to Daily Akari ratings')
-    async def minigames_register(self, ctx):
-        added = cf_common.user_db.register_minigame_user(
-            ctx.guild.id, ctx.author.id, time.time())
-        msg = (f'You are now registered for {AKARI_GAME.display_name} ratings.'
-               if added else
-               f'You are already registered for {AKARI_GAME.display_name} ratings.')
-        await ctx.send(embed=discord_common.embed_success(msg))
-
-    @minigames.command(name='unregister', brief='Opt out of Daily Akari ratings')
-    async def minigames_unregister(self, ctx):
-        removed = cf_common.user_db.unregister_minigame_user(
-            ctx.guild.id, ctx.author.id)
-        msg = (f'You are no longer registered for {AKARI_GAME.display_name} ratings. '
-               f'Your results are still recorded.'
-               if removed else 'You were not registered.')
-        await ctx.send(embed=discord_common.embed_success(msg))
-
     # ── Akari commands: ;minigames akari … ──────────────────────────────
 
     @minigames.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
@@ -1428,6 +1538,95 @@ class Minigames(commands.Cog):
     @akari.command(name='show', brief='Show Daily Akari settings')
     async def akari_show(self, ctx):
         await self._cmd_show(ctx, AKARI_GAME)
+
+    @akari.command(name='register', brief='Opt in to Daily Akari ratings',
+                   usage='[@user (mods only)]')
+    async def akari_register(self, ctx, member: CaseInsensitiveMember = None):
+        target = self._resolve_registrar_target(ctx, member)
+        added = cf_common.user_db.register_akari_user(
+            ctx.guild.id, target.id, time.time())
+        who = ('You are' if target.id == ctx.author.id
+               else f'`{_safe_member_name(target)}` is')
+        msg = (f'{who} now registered for {AKARI_GAME.display_name} ratings.'
+               if added else
+               f'{who} already registered for {AKARI_GAME.display_name} ratings.')
+        await ctx.send(embed=discord_common.embed_success(msg))
+
+    @akari.command(name='unregister', brief='Opt out of Daily Akari ratings',
+                   usage='[@user (mods only)]')
+    async def akari_unregister(self, ctx, member: CaseInsensitiveMember = None):
+        target = self._resolve_registrar_target(ctx, member)
+        removed = cf_common.user_db.unregister_akari_user(
+            ctx.guild.id, target.id)
+        if removed:
+            who = ('You are' if target.id == ctx.author.id
+                   else f'`{_safe_member_name(target)}` is')
+            msg = (f'{who} no longer registered for {AKARI_GAME.display_name} ratings. '
+                   f'Results are still recorded.')
+        else:
+            msg = ('You were not registered.' if target.id == ctx.author.id
+                   else f'`{_safe_member_name(target)}` was not registered.')
+        await ctx.send(embed=discord_common.embed_success(msg))
+
+    @akari.command(name='ban',
+                   brief='(Mod) Block a user from Akari ingestion',
+                   usage='@user [reason...]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def akari_ban(self, ctx, member: CaseInsensitiveMember, *,
+                        reason: str = None):
+        added = cf_common.user_db.ban_akari_user(
+            ctx.guild.id, member.id, time.time(), ctx.author.id, reason)
+        if not added:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is already banned from '
+                f'{AKARI_GAME.display_name}.')
+        # Auto-unregister so the rating display state stays consistent.
+        unregistered = cf_common.user_db.unregister_akari_user(
+            ctx.guild.id, member.id)
+        lines = [f'`{_safe_member_name(member)}` is now banned from '
+                 f'{AKARI_GAME.display_name} ingestion. New results from '
+                 f'them will be dropped silently.']
+        if unregistered:
+            lines.append('Also removed from registrants.')
+        if reason:
+            lines.append(f'Reason: {reason}')
+        await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
+
+    @akari.command(name='unban',
+                   brief='(Mod) Lift an Akari ingestion ban',
+                   usage='@user')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def akari_unban(self, ctx, member: CaseInsensitiveMember):
+        removed = cf_common.user_db.unban_akari_user(ctx.guild.id, member.id)
+        if not removed:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not banned.')
+        await ctx.send(embed=discord_common.embed_success(
+            f'`{_safe_member_name(member)}` is no longer banned from '
+            f'{AKARI_GAME.display_name}. They are not auto-registered — '
+            f'they need to run `;mg akari register` again.'))
+
+    @akari.command(name='bans',
+                   brief='(Mod) List Akari ingestion bans')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def akari_bans(self, ctx):
+        rows = cf_common.user_db.get_akari_bans(ctx.guild.id)
+        if not rows:
+            raise MinigameCogError(
+                f'No active {AKARI_GAME.display_name} bans.')
+        lines = [_format_akari_ban_line(ctx.guild, row) for row in rows]
+        title = f'{AKARI_GAME.display_name} bans ({len(rows)})'
+        pages = []
+        for chunk in paginator.chunkify(lines, _AKARI_HISTORY_PER_PAGE):
+            embed = discord.Embed(
+                title=title,
+                description='\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )
+            pages.append((None, embed))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
 
     @akari.command(name='vs', brief='Head-to-head comparison',
                    usage='@user1 @user2 [filters...] [raw|all]')
@@ -1523,6 +1722,22 @@ class Minigames(commands.Cog):
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def akari_performance_debug(self, ctx, member: CaseInsensitiveMember):
         await self._cmd_akari_performance(ctx, member, require_registered=False)
+
+    @akari.group(name='history',
+                 brief='(Mod) Paginated rating delta log for one registered user',
+                 usage='[@user]', invoke_without_command=True)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def akari_history(self, ctx, member: CaseInsensitiveMember = None):
+        if member is None:
+            member = ctx.author
+        await self._cmd_akari_history(ctx, member)
+
+    @akari_history.command(name='debug',
+                           brief='(Mod) Rating delta log for any user (incl. shadow-rated)',
+                           usage='@user')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def akari_history_debug(self, ctx, member: CaseInsensitiveMember):
+        await self._cmd_akari_history(ctx, member, require_registered=False)
 
     @akari_ratings.command(name='recompute', brief='(Mod) Rebuild the rating snapshot')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
@@ -1791,6 +2006,27 @@ class Minigames(commands.Cog):
         target = member or interaction.user
         try:
             await self._cmd_akari_performance(_SlashCtx(interaction), target)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @akari_slash.command(name='history', description="(Mod) Show one user's Akari rating delta log")
+    @app_commands.describe(member='Player (defaults to you)')
+    async def slash_akari_history(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction,
+                f'You need the `{constants.TLE_ADMIN}` or '
+                f'`{constants.TLE_MODERATOR}` role.')
+        target = member or interaction.user
+        try:
+            await self._cmd_akari_history(_SlashCtx(interaction), target)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
         except Exception:
