@@ -130,6 +130,36 @@ class Meta(commands.Cog):
         await ctx.send('TLE has been running for ' +
                        pretty_time_format(time.time() - self.start_time))
 
+    @commands.group(brief='Off-site backup status', invoke_without_command=True)
+    async def backup(self, ctx):
+        """Off-site user.db backup service."""
+        await self._show_backup_status(ctx)
+
+    @backup.command(name='status', brief='Show the last successful backup time')
+    async def backup_status(self, ctx):
+        """Report when the off-site backup service last copied user.db."""
+        await self._show_backup_status(ctx)
+
+    async def _show_backup_status(self, ctx):
+        # 'last_backup_at' is written by the external tle-backup-service after each
+        # successful backup; the key string must stay in sync with that service.
+        val = cf_common.user_db.kvs_get('last_backup_at')
+        if not val:
+            await ctx.send(embed=discord_common.embed_alert(
+                'No successful backup has been recorded yet.'))
+            return
+        try:
+            ts = float(val)
+        except (TypeError, ValueError):
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Stored backup timestamp is invalid: `{val}`'))
+            return
+        when = datetime.datetime.fromtimestamp(
+            ts, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        ago = pretty_time_format(max(0, int(time.time() - ts)))
+        await ctx.send(embed=discord_common.embed_success(
+            f'Last successful backup: **{when}** ({ago} ago).'))
+
     @meta.command(brief='Print bot guilds')
     @commands.has_role(constants.TLE_ADMIN)
     async def guilds(self, ctx):

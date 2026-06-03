@@ -1,0 +1,6 @@
+# Never commit secrets, the pinned host keys, or local backup copies.
+backup.env
+known_hosts
+*.db
+*.db.part
+.venv/

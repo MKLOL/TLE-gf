@@ -1,0 +1,18 @@
+[Unit]
+Description=TLE-gf user.db off-site backup (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/tle-backup/backup.env
+ExecStart=/opt/tle-backup-service/.venv/bin/python /opt/tle-backup-service/backup_user_db.py
+# Don't hang a run forever if the network/source stalls.
+TimeoutStartSec=600
+# Light hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=false
+# Allow writing only where backups + the pinned known_hosts live.
+ReadWritePaths=/var/backups/tle-gf /opt/tle-backup-service

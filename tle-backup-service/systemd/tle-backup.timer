@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the TLE-gf user.db backup every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+# If the machine was off when a run was due, run once on next boot.
+Persistent=true
+Unit=tle-backup.service
+
+[Install]
+WantedBy=timers.target
