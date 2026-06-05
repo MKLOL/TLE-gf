@@ -594,7 +594,8 @@ class Starboard(BackfillMixin, commands.Cog):
         pages = self._make_leaderboard_pages(ctx, rows, emoji, 'Starboard Leaderboard', 'messages')
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300, set_pagenum_footers=True, author_id=ctx.author.id)
 
-    @starboard.command(name='star-leaderboard', brief='Show starboard leaderboard by star count',
+    @starboard.command(name='star-leaderboard', aliases=['rank'],
+                       brief='Show starboard leaderboard by star count',
                        usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def star_leaderboard(self, ctx, *args):
         """Show top users by total star count for an emoji.
