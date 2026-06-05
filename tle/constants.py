@@ -43,7 +43,7 @@ AKARI_RATING_DAMPING = 0.25
 # starts on the first absent day — but the knob is preserved so a server can
 # reintroduce a free window without touching code.
 AKARI_DECAY_BASE = 0.04
-AKARI_DECAY_MAX = 0.04
+AKARI_DECAY_MAX = 0.08
 AKARI_DECAY_GRACE = 0
 # A puzzle number more than this many days beyond today's real puzzle is treated
 # as bad data (e.g. a troll posting "Daily Akari 9999999999") and ignored for
