@@ -26,7 +26,8 @@ MAX_OPTIONS = 5
 _DEFAULT_DURATION = 86400  # 24 hours in seconds
 _SAFETY_NET_INTERVAL = 300  # Safety-net sweep every 5 minutes
 _DURATION_RE = re.compile(r'^\+(\d+)([mhd])$')
-_VALID_FORMULAS = ('sum', 'exp', 'team', 'osu', 'gg', 'mgg', 'fffff')
+_VALID_FORMULAS = ('sum', 'exp', 'team', 'osu', 'gg', 'mgg', 'fffff',
+                   'akari', 'akariexp')
 _FORMULA_LABELS = {
     'sum': 'sum of ratings',
     'exp': 'exponential: `2^(rating/400) * 100`',
@@ -35,6 +36,8 @@ _FORMULA_LABELS = {
     'gg': 'gitgud: all-time gg score',
     'mgg': 'monthly gitgud: score for poll creation month',
     'fffff': 'scaled linear: `max(0, 1 + (rating - 1900) / 1600) * 100`',
+    'akari': 'sum of Daily Akari ratings',
+    'akariexp': 'exponential of Daily Akari rating: `2^(rating/400) * 100`',
 }
 
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
@@ -65,8 +68,13 @@ def _parse_duration(token):
 
 
 def _apply_formula(formula, ratings):
-    """Apply a scoring formula to a list of individual ratings. Returns total score."""
-    if formula == 'exp':
+    """Apply a scoring formula to a list of individual ratings. Returns total score.
+
+    ``akari`` / ``akariexp`` share their composition with ``sum`` / ``exp``;
+    only the rating source (the Daily Akari snapshot vs CF) differs, and that
+    happens in :func:`_get_vote_weight` before the rating reaches this function.
+    """
+    if formula in ('exp', 'akariexp'):
         return round(sum(2 ** (r / 400) * 100 for r in ratings))
     if formula == 'team':
         if not ratings:
@@ -142,6 +150,19 @@ def _get_vote_weight(poll, user_id, guild_id):
         return cf_common.user_db.get_gudgitter_score(user_id)
     if poll.formula == 'mgg':
         return _get_monthly_gitgud_score(user_id, poll.created_at)
+    if poll.formula in ('akari', 'akariexp'):
+        # Respect the user's privacy choice: opted-out users (and banned ones,
+        # whose rating may not reflect current play anyway) contribute a
+        # zero-weight vote, same as anyone without a snapshot row.  The poll
+        # totals must not surface a rating the user has explicitly hidden.
+        if cf_common.user_db.is_akari_opted_out(guild_id, user_id):
+            return 0
+        if cf_common.user_db.is_akari_banned(guild_id, user_id):
+            return 0
+        row = cf_common.user_db.get_akari_rating(guild_id, user_id)
+        if row is None:
+            return 0
+        return int(round(row.rating))
     return cf_common.user_db.get_rpoll_user_rating(user_id, guild_id)
 
 
@@ -161,7 +182,7 @@ def _refresh_poll_ratings(poll, guild_id):
 
 def _compute_totals_map(poll_id, formula):
     """Compute per-option totals using the given scoring formula."""
-    if formula in {'exp', 'team', 'osu', 'fffff'}:
+    if formula in {'exp', 'team', 'osu', 'fffff', 'akariexp'}:
         votes = cf_common.user_db.get_rpoll_vote_ratings(poll_id)
         totals = {}
         for vote in votes:
@@ -536,6 +557,7 @@ class Rpoll(commands.Cog):
           +team: team Elo (solo rating with 50% win vs all)
           +osu: top vote full, then 0.67x decay
           +gg / +mgg: all-time / monthly gitgud score
+          +akari / +akariexp: Daily Akari rating (sum / exponential)
         """
         args = args.strip()
         # Normalize smart/curly quotes (common on macOS) to straight quotes

@@ -89,6 +89,38 @@ class FakeRpollDb:
                 num_skipped          INTEGER NOT NULL
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE akari_rating (
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                rating       REAL NOT NULL,
+                games        INTEGER NOT NULL DEFAULT 0,
+                peak         REAL NOT NULL,
+                last_delta   REAL NOT NULL DEFAULT 0,
+                skip_streak  INTEGER NOT NULL DEFAULT 0,
+                last_puzzle  INTEGER NOT NULL DEFAULT 0,
+                updated_at   REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE akari_optout (
+                guild_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                opted_out_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE akari_ban (
+                guild_id   TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
         self.conn.commit()
 
     def _fetchone(self, query, params=(), row_factory=None):
@@ -128,6 +160,9 @@ class FakeRpollDb:
     get_gudgitters_timerange_for_user = _UC.get_gudgitters_timerange_for_user
     get_handle = _UC.get_handle
     fetch_cf_user = _UC.fetch_cf_user
+    get_akari_rating = _UC.get_akari_rating
+    is_akari_opted_out = _UC.is_akari_opted_out
+    is_akari_banned = _UC.is_akari_banned
 
     def _seed_cf_user(self, user_id, guild_id, handle, rating):
         """Helper: link a Discord user to a CF handle with a rating."""
@@ -141,6 +176,36 @@ class FakeRpollDb:
             ' rating, maxRating, last_online_time, registration_time, friend_of_count, title_photo) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (handle, '', '', '', '', '', 0, rating, rating, 0, 0, 0, '')
+        )
+        self.conn.commit()
+
+    def _seed_akari_rating(self, user_id, guild_id, rating):
+        """Helper: write a Daily Akari rating snapshot row for tests."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO akari_rating '
+            '(guild_id, user_id, rating, games, peak, last_delta, '
+            ' skip_streak, last_puzzle, updated_at) '
+            'VALUES (?, ?, ?, 0, ?, 0, 0, 0, 0)',
+            (str(guild_id), str(user_id), float(rating), float(rating))
+        )
+        self.conn.commit()
+
+    def _seed_akari_optout(self, user_id, guild_id):
+        """Helper: mark a user as opted out of Akari rating visibility."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO akari_optout '
+            '(guild_id, user_id, opted_out_at) VALUES (?, ?, 0)',
+            (str(guild_id), str(user_id))
+        )
+        self.conn.commit()
+
+    def _seed_akari_ban(self, user_id, guild_id, banned_by='mod'):
+        """Helper: ban a user from Akari ingestion."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO akari_ban '
+            '(guild_id, user_id, banned_at, banned_by, reason) '
+            'VALUES (?, ?, 0, ?, NULL)',
+            (str(guild_id), str(user_id), str(banned_by))
         )
         self.conn.commit()
 

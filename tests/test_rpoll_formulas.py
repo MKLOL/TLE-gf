@@ -155,6 +155,98 @@ class TestGitgudFormulaHelpers:
         assert _get_vote_weight(poll, 'user1', 123) == 8
 
 
+class TestAkariFormula:
+    @pytest.fixture
+    def fake_db(self):
+        database = FakeRpollDb()
+        original = cf_common.user_db
+        cf_common.user_db = database
+        try:
+            yield database
+        finally:
+            cf_common.user_db = original
+            database.close()
+
+    def test_akari_sum_is_plain_addition(self):
+        assert _apply_formula('akari', [1234, 1567]) == 2801
+
+    def test_akari_sum_empty(self):
+        assert _apply_formula('akari', []) == 0
+
+    def test_akariexp_matches_exp_shape(self):
+        # akariexp's compositor is identical to exp — same formula, only the
+        # rating source upstream differs.
+        ratings = [1200, 1800, 2200]
+        assert _apply_formula('akariexp', ratings) == _apply_formula('exp', ratings)
+
+    def test_akariexp_higher_rating_weighs_more(self):
+        assert _apply_formula('akariexp', [2000]) > _apply_formula('akariexp', [1200])
+
+    def test_vote_weight_uses_akari_rating(self, fake_db):
+        fake_db._seed_akari_rating('user1', GUILD, 1456.7)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='akari', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 1457  # rounded display value
+
+    def test_vote_weight_akariexp_uses_same_source_as_akari(self, fake_db):
+        fake_db._seed_akari_rating('user1', GUILD, 1623.4)
+        Poll = namedtuple('Poll', 'formula created_at')
+        for formula in ('akari', 'akariexp'):
+            poll = Poll(formula=formula, created_at=0)
+            assert _get_vote_weight(poll, 'user1', GUILD) == 1623
+
+    def test_vote_weight_unrated_user_is_zero(self, fake_db):
+        # No snapshot row written — user hasn't played Akari yet.
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='akari', created_at=0)
+        assert _get_vote_weight(poll, 'ghost', GUILD) == 0
+
+    def test_vote_weight_is_guild_scoped(self, fake_db):
+        other_guild = GUILD + 1
+        fake_db._seed_akari_rating('user1', GUILD, 1500)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='akari', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 1500
+        # Same user has no rating in another guild — must be zero, not leak.
+        assert _get_vote_weight(poll, 'user1', other_guild) == 0
+
+    def test_opted_out_user_does_not_leak_rating(self, fake_db):
+        # Users who ran `;mg akari unregister` chose to hide their rating from
+        # public displays.  The poll path must respect that — their vote
+        # registers but contributes 0, otherwise totals (especially on solo
+        # options or anonymised polls) would reconstruct the hidden rating.
+        fake_db._seed_akari_rating('user1', GUILD, 1500)
+        fake_db._seed_akari_optout('user1', GUILD)
+        Poll = namedtuple('Poll', 'formula created_at')
+        for formula in ('akari', 'akariexp'):
+            poll = Poll(formula=formula, created_at=0)
+            assert _get_vote_weight(poll, 'user1', GUILD) == 0
+
+    def test_banned_user_contributes_nothing(self, fake_db):
+        # Banned users' ratings are stale (their post-ban play is dropped) and
+        # they're already excluded from akari displays; the poll should treat
+        # them the same way.
+        fake_db._seed_akari_rating('user1', GUILD, 1700)
+        fake_db._seed_akari_ban('user1', GUILD)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='akari', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 0
+
+    def test_opt_in_lifts_zero_weight(self, fake_db):
+        # Re-running `;mg akari register` clears the opt-out row; the next
+        # refresh of the poll picks up the real rating again.
+        fake_db._seed_akari_rating('user1', GUILD, 1500)
+        fake_db._seed_akari_optout('user1', GUILD)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='akari', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 0
+        fake_db.conn.execute(
+            'DELETE FROM akari_optout WHERE guild_id = ? AND user_id = ?',
+            (str(GUILD), 'user1'))
+        fake_db.conn.commit()
+        assert _get_vote_weight(poll, 'user1', GUILD) == 1500
+
+
 class TestRefreshPollRatings:
     @pytest.fixture
     def fake_db(self):
