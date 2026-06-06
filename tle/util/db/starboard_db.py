@@ -541,6 +541,34 @@ class StarboardDbMixin:
         """Get the main emoji plus all its aliases as a list. Used for union counting."""
         return [main_emoji] + self.get_aliases_for_emoji(guild_id, main_emoji)
 
+    # --- Per-user default emoji ---
+
+    def get_user_starboard_default(self, guild_id, user_id):
+        """Return the user's saved default emoji for this guild, or None."""
+        row = self.conn.execute(
+            'SELECT emoji FROM user_starboard_default WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))
+        ).fetchone()
+        return row.emoji if row else None
+
+    def set_user_starboard_default(self, guild_id, user_id, emoji):
+        """Upsert the user's default emoji for ``;starboard`` leaderboard commands."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO user_starboard_default (guild_id, user_id, emoji) '
+            'VALUES (?, ?, ?)',
+            (str(guild_id), str(user_id), emoji)
+        )
+        self.conn.commit()
+
+    def clear_user_starboard_default(self, guild_id, user_id):
+        """Remove the user's saved default emoji. Returns rowcount (0 or 1)."""
+        rc = self.conn.execute(
+            'DELETE FROM user_starboard_default WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
     # --- Guild config methods ---
 
     def get_guild_config(self, guild_id, key):

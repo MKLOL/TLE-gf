@@ -70,6 +70,14 @@ class FakeUserDb(StarboardDbMixin):
                 PRIMARY KEY (guild_id, key)
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_starboard_default (
+                guild_id TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                emoji    TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
         self.conn.commit()
 
     def close(self):
@@ -683,3 +691,52 @@ class TestDeleteEmojiIsolation:
         assert db.get_starboard_message_v1('333', STAR) is None
         assert db.get_starboard_entry(GUILD, STAR) is None
         assert db.resolve_alias(GUILD, FIRE) is None
+
+
+# =====================================================================
+# Per-user default emoji
+# =====================================================================
+
+USER_A = 999111111111111111
+USER_B = 999222222222222222
+GUILD_OTHER = 222222222222222222
+
+
+class TestUserStarboardDefault:
+    def test_get_returns_none_when_unset(self, db):
+        assert db.get_user_starboard_default(GUILD, USER_A) is None
+
+    def test_set_and_get(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        assert db.get_user_starboard_default(GUILD, USER_A) == FIRE
+
+    def test_set_overwrites(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        db.set_user_starboard_default(GUILD, USER_A, STAR)
+        assert db.get_user_starboard_default(GUILD, USER_A) == STAR
+
+    def test_clear_removes(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        rc = db.clear_user_starboard_default(GUILD, USER_A)
+        assert rc == 1
+        assert db.get_user_starboard_default(GUILD, USER_A) is None
+
+    def test_clear_unset_returns_zero(self, db):
+        assert db.clear_user_starboard_default(GUILD, USER_A) == 0
+
+    def test_per_user_isolation(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        db.set_user_starboard_default(GUILD, USER_B, STAR)
+        assert db.get_user_starboard_default(GUILD, USER_A) == FIRE
+        assert db.get_user_starboard_default(GUILD, USER_B) == STAR
+
+    def test_per_guild_isolation(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        db.set_user_starboard_default(GUILD_OTHER, USER_A, STAR)
+        assert db.get_user_starboard_default(GUILD, USER_A) == FIRE
+        assert db.get_user_starboard_default(GUILD_OTHER, USER_A) == STAR
+
+    def test_int_ids_accepted(self, db):
+        db.set_user_starboard_default(GUILD, USER_A, FIRE)
+        # Reading with the same int IDs (vs strings) must round-trip.
+        assert db.get_user_starboard_default(int(GUILD), int(USER_A)) == FIRE

@@ -77,6 +77,17 @@ class Starboard(BackfillMixin, commands.Cog):
     # --- Event listeners ---
 
     @staticmethod
+    def _user_default_emoji(guild_id, user_id):
+        """Per-user default emoji for ``;starboard`` leaderboard commands.
+
+        Falls back to ``constants._DEFAULT_STAR`` when the user has no saved
+        preference for this guild.  Resolution order in callers is:
+        explicit arg > this helper > the function's own default.
+        """
+        saved = cf_common.user_db.get_user_starboard_default(guild_id, user_id)
+        return saved or constants._DEFAULT_STAR
+
+    @staticmethod
     def _resolve_emoji(guild_id, emoji_str):
         """Resolve an emoji to its main emoji (if alias) and return (main_emoji, entry).
 
@@ -569,6 +580,62 @@ class Starboard(BackfillMixin, commands.Cog):
         lines = [f'{r.alias_emoji} \u2192 {r.main_emoji}' for r in rows]
         await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
 
+    # --- Per-user default emoji ---
+
+    @starboard.group(name='default', brief='Manage your default starboard emoji',
+                     invoke_without_command=True)
+    async def default_(self, ctx):
+        """Per-user default emoji for ``;starboard`` leaderboard commands.
+
+        Use ``set <emoji>`` to choose one, ``show`` to see it, ``clear`` to
+        remove it. Falls back to the server's default star (\N{WHITE MEDIUM STAR})
+        when unset.
+        """
+        await ctx.send_help(ctx.command)
+
+    @default_.command(name='set', brief='Set your default starboard emoji')
+    async def default_set(self, ctx, emoji: str):
+        """Set the emoji used by ``;starboard leaderboard`` / ``rank`` / etc.
+        when you don't pass one. Must be a configured main emoji or alias."""
+        main_emoji, entry = self._resolve_emoji(ctx.guild.id, emoji)
+        if entry is None:
+            raise StarboardCogError(
+                f'{emoji} is not configured for this starboard. '
+                f'Ask an admin to add it with `;starboard add {emoji}`.')
+        # Store the main emoji so leaderboard lookups skip the alias hop.
+        cf_common.user_db.set_user_starboard_default(
+            ctx.guild.id, ctx.author.id, main_emoji)
+        logger.info(f'CMD starboard default set: guild={ctx.guild.id} '
+                    f'user={ctx.author.id} emoji={main_emoji} (input={emoji})')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Your default starboard emoji is now {main_emoji}.'))
+
+    @default_.command(name='show', brief='Show your default starboard emoji')
+    async def default_show(self, ctx):
+        """Show your saved default, or the fallback if unset."""
+        saved = cf_common.user_db.get_user_starboard_default(
+            ctx.guild.id, ctx.author.id)
+        if saved is None:
+            await ctx.send(embed=discord_common.embed_neutral(
+                f'No default set. Falling back to {constants._DEFAULT_STAR}.'))
+            return
+        await ctx.send(embed=discord_common.embed_neutral(
+            f'Your default starboard emoji is {saved}.'))
+
+    @default_.command(name='clear', brief='Clear your default starboard emoji')
+    async def default_clear(self, ctx):
+        """Remove your saved default. Falls back to the server's default star."""
+        rc = cf_common.user_db.clear_user_starboard_default(
+            ctx.guild.id, ctx.author.id)
+        if not rc:
+            await ctx.send(embed=discord_common.embed_neutral(
+                'You had no default set.'))
+            return
+        logger.info(f'CMD starboard default clear: guild={ctx.guild.id} '
+                    f'user={ctx.author.id}')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Cleared. Falling back to {constants._DEFAULT_STAR}.'))
+
     # --- Leaderboard commands ---
 
     @starboard.command(brief='Show starboard leaderboard by message count',
@@ -577,7 +644,8 @@ class Starboard(BackfillMixin, commands.Cog):
         """Show top users by number of starboarded messages for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(args)
+        emoji, dlo, dhi = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -601,7 +669,8 @@ class Starboard(BackfillMixin, commands.Cog):
         """Show top users by total star count for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(args)
+        emoji, dlo, dhi = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -625,7 +694,8 @@ class Starboard(BackfillMixin, commands.Cog):
         """Show top users by number of stars given (reactions) for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(args)
+        emoji, dlo, dhi = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -650,7 +720,8 @@ class Starboard(BackfillMixin, commands.Cog):
         """Show users who star their own messages the most.
         Requires the `starboard_leaderboard` feature to be enabled.
         Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(args)
+        emoji, dlo, dhi = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
@@ -717,7 +788,9 @@ class Starboard(BackfillMixin, commands.Cog):
         if emoji_arg is not None:
             parse_args.append(emoji_arg)
         parse_args.extend(timeline_args)
-        emoji, dlo, dhi = _parse_starboard_args(parse_args)
+        emoji, dlo, dhi = _parse_starboard_args(
+            parse_args,
+            default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')

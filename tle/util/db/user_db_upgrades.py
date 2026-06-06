@@ -685,3 +685,25 @@ def upgrade_1_28_0(db):
     ''')
     db.commit()
     logger.info('1.28.0: Upgrade complete')
+
+
+@registry.register('1.29.0', 'Per-user starboard default emoji')
+def upgrade_1_29_0(db):
+    """Create the user_starboard_default table.
+
+    Stores each user's preferred emoji for ``;starboard`` leaderboard commands
+    that default to a single emoji (leaderboard / rank / star-givers /
+    narcissus / top).  Per-guild keyed because custom emojis are guild-scoped.
+    Resolution order: explicit arg > this table > ``constants._DEFAULT_STAR``.
+    """
+    logger.info('1.29.0: Creating user_starboard_default table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS user_starboard_default (
+            guild_id TEXT NOT NULL,
+            user_id  TEXT NOT NULL,
+            emoji    TEXT NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.29.0: Upgrade complete')

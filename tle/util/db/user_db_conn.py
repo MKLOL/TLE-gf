@@ -272,6 +272,15 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 PRIMARY KEY (guild_id, alias_emoji)
             )
         ''')
+        # Per-user default emoji for starboard leaderboard commands
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_starboard_default (
+                guild_id TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                emoji    TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
         # Guild config table
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS guild_config (
