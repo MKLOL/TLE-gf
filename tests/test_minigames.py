@@ -2058,8 +2058,9 @@ class TestCogRating:
         # Inactivity filter compares last_puzzle against today's real puzzle
         # number; the test's puzzle numbers are 1/2, so disable filtering for
         # this assertion.
-        monkeypatch.setattr(Minigames, '_active_ranking_rows',
-                            staticmethod(lambda rows: list(rows)))
+        monkeypatch.setattr(
+            Minigames, '_active_ranking_rows',
+            staticmethod(lambda rows, *, include_inactive=False: list(rows)))
 
         captured = {}
 
@@ -2135,7 +2136,7 @@ class TestAkariExcludeFilter:
         async def _go():
             return await cog._extract_akari_filters(
                 ctx, ['+decay', '+exclude=alice,cara', 'remaining'])
-        remaining, include_decay, excluded, included = asyncio.run(_go())
+        remaining, include_decay, excluded, included, _inactive = asyncio.run(_go())
         assert include_decay is True
         assert excluded == {'101', '303'}
         assert included == set()
@@ -2155,7 +2156,8 @@ class TestAkariExcludeFilter:
         async def _go():
             return await cog._extract_akari_filters(
                 ctx, ['+exclude=alice,,bob,'])
-        _remaining, _include_decay, excluded, _included = asyncio.run(_go())
+        (_remaining, _include_decay, excluded, _included,
+         _inactive) = asyncio.run(_go())
         assert excluded == {'101', '202'}
 
     def test_extract_filters_parses_include(self):
@@ -2171,7 +2173,8 @@ class TestAkariExcludeFilter:
         async def _go():
             return await cog._extract_akari_filters(
                 ctx, ['+include=alice,bob'])
-        _remaining, _include_decay, excluded, included = asyncio.run(_go())
+        (_remaining, _include_decay, excluded, included,
+         _inactive) = asyncio.run(_go())
         assert excluded == set()
         assert included == {'101', '202'}
 
@@ -2189,7 +2192,8 @@ class TestAkariExcludeFilter:
         async def _go():
             return await cog._extract_akari_filters(
                 ctx, ['+include=alice,bob,cara', '+exclude=cara'])
-        _remaining, _include_decay, excluded, included = asyncio.run(_go())
+        (_remaining, _include_decay, excluded, included,
+         _inactive) = asyncio.run(_go())
         assert excluded == {'303'}
         assert included == {'101', '202', '303'}
 
@@ -2353,7 +2357,8 @@ class TestAkariMultiMember:
         bob = _FakeDiscordMember(202, 'bob')
         cara = _FakeDiscordMember(303, 'cara')
         ctx = self._ctx([alice, bob, cara])
-        members, include_decay, excluded, included = asyncio.run(
+        (members, include_decay, excluded, included,
+         _inactive) = asyncio.run(
             cog._parse_akari_rating_args(ctx, ['alice', 'bob']))
         assert [m.id for m in members] == [101, 202]
         assert include_decay is False
@@ -2366,7 +2371,8 @@ class TestAkariMultiMember:
         bob = _FakeDiscordMember(202, 'bob')
         cara = _FakeDiscordMember(303, 'cara')
         ctx = self._ctx([alice, bob, cara])
-        members, include_decay, excluded, included = asyncio.run(
+        (members, include_decay, excluded, included,
+         _inactive) = asyncio.run(
             cog._parse_akari_rating_args(
                 ctx, ['alice', '+decay', 'bob', '+exclude=cara',
                       '+include=alice,bob,cara']))
@@ -2379,7 +2385,7 @@ class TestAkariMultiMember:
         cog = Minigames(bot=None)
         author = _FakeDiscordMember(999, 'author')
         ctx = self._ctx([author])
-        members, _decay, _excl, _incl = asyncio.run(
+        members, _decay, _excl, _incl, _inactive = asyncio.run(
             cog._parse_akari_rating_args(ctx, []))
         assert members == [author]
 
@@ -2792,4 +2798,68 @@ class TestMgAkariShortcuts:
         """Defensive: the test harness stubs commands.group; cog_load should no-op."""
         cog = Minigames(bot=None)
         asyncio.run(cog.cog_load())  # must not raise
+
+
+class TestActiveRankingRowsInactiveFlag:
+    """`include_inactive=True` should drop the day-cutoff but keep the
+    garbage-future-puzzle filter."""
+
+    def _rows(self):
+        from tle.cogs._minigame_akari import expected_puzzle_number
+        current = expected_puzzle_number(dt.date.today())
+        return [
+            SimpleNamespace(user_id='today', last_puzzle=current),
+            SimpleNamespace(user_id='week', last_puzzle=current - 7),
+            SimpleNamespace(user_id='month', last_puzzle=current - 40),       # >30d
+            SimpleNamespace(user_id='year', last_puzzle=current - 400),       # >>30d
+            SimpleNamespace(user_id='troll', last_puzzle=9223372036854775806),  # garbage
+        ]
+
+    def test_default_hides_inactive_and_garbage(self):
+        kept = {r.user_id for r in Minigames._active_ranking_rows(self._rows())}
+        assert kept == {'today', 'week'}
+
+    def test_include_inactive_keeps_dormant_but_drops_garbage(self):
+        kept = {
+            r.user_id for r in
+            Minigames._active_ranking_rows(self._rows(), include_inactive=True)
+        }
+        assert kept == {'today', 'week', 'month', 'year'}
+        assert 'troll' not in kept
+
+
+class TestExtractAkariFiltersInactive:
+    """`+inactive` should land as a 5th return value, default False."""
+
+    def _ctx_stub(self):
+        # _extract_akari_filters only touches ctx for +include / +exclude.
+        return SimpleNamespace()
+
+    def _run(self, args):
+        cog = Minigames(bot=None)
+        return asyncio.run(cog._extract_akari_filters(self._ctx_stub(), args))
+
+    def test_default_false(self):
+        remaining, include_decay, ex, inc, include_inactive = self._run(())
+        assert include_inactive is False
+        assert remaining == []
+        assert include_decay is False
+        assert ex == set()
+        assert inc == set()
+
+    def test_flag_sets_true(self):
+        remaining, _decay, _ex, _inc, include_inactive = self._run(('+inactive',))
+        assert include_inactive is True
+        assert remaining == []  # the flag is consumed, not passed through
+
+    def test_flag_composes_with_decay(self):
+        remaining, decay, _ex, _inc, inactive = self._run(
+            ('+inactive', '+decay'))
+        assert decay is True
+        assert inactive is True
+        assert remaining == []
+
+    def test_unknown_flag_passes_through(self):
+        remaining, _decay, _ex, _inc, _inactive = self._run(('+inactive', 'foo'))
+        assert remaining == ['foo']
 
