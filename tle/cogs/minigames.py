@@ -565,45 +565,19 @@ class Minigames(commands.Cog):
         self._import_tasks = {}   # (guild_id, game_name) -> asyncio.Task
         self._import_status = {}  # (guild_id, game_name) -> dict
 
-    # Read-only / display akari subcommands that get mirrored as direct
-    # children of the ;mg group so ;mg <name> works as a shortcut for
-    # ;mg akari <name>.  State-changing commands (here/clear/register/ban/
-    # remove/add/import/reparse) are intentionally excluded — the akari
-    # prefix stays required for those.
-    _AKARI_MG_SHORTCUTS = (
-        'ratings', 'rating', 'performance', 'history',
-        'stats', 'vs', 'streak', 'top', 'show',
-    )
-
-    @staticmethod
-    def _mirror_subcommands(source_group, target_group, names):
-        """Inject named ``source_group`` subcommands into ``target_group.all_commands``.
-
-        Each name's aliases are mirrored too; entries that already resolve on
-        ``target_group`` are left alone so a future namespace collision can't
-        be silently clobbered.  The mirrored ``Command`` objects keep their
-        original ``parent`` (still under ``source_group``), so they execute
-        the same callback regardless of which path resolves them.
-        """
-        for name in names:
-            cmd = source_group.get_command(name)
-            if cmd is None:
-                continue
-            for key in (name, *cmd.aliases):
-                if target_group.get_command(key) is None:
-                    target_group.all_commands[key] = cmd
-
     async def cog_load(self):
-        # Defensive: the discord.py command tree is missing in some test
-        # harnesses (commands.group is stubbed).  Real discord.py always
-        # exposes get_command on a Group, so this guard is harmless there.
-        if not hasattr(self.minigames, 'get_command'):
+        # ;akari is the canonical top-level group; mirror it under ;mg so the
+        # legacy ;mg akari … path keeps working.  Same object in both
+        # all_commands dicts → identical callback dispatch, no parent mutation.
+        # Defensive guard: the test harness stubs commands.group, so the
+        # group objects don't expose all_commands/get_command — skip in that case.
+        if not hasattr(self.minigames, 'all_commands'):
             return
-        akari_group = self.minigames.get_command('akari')
-        if akari_group is None:
+        if not hasattr(self.akari, 'aliases'):
             return
-        self._mirror_subcommands(
-            akari_group, self.minigames, self._AKARI_MG_SHORTCUTS)
+        for key in (self.akari.name, *self.akari.aliases):
+            if self.minigames.all_commands.get(key) is None:
+                self.minigames.all_commands[key] = self.akari
 
     async def cog_unload(self):
         tasks = list(self._import_tasks.values())
@@ -2188,10 +2162,10 @@ class Minigames(commands.Cog):
         """Daily puzzle minigame commands."""
         await ctx.send_help(ctx.command)
 
-    # ── Akari commands: ;minigames akari … ──────────────────────────────
+    # ── Akari commands: ;akari … (also mirrored onto ;mg for backcompat) ──
 
-    @minigames.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
-                     invoke_without_command=True)
+    @commands.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
+                    invoke_without_command=True)
     async def akari(self, ctx):
         """Daily Akari commands."""
         await ctx.send_help(ctx.command)

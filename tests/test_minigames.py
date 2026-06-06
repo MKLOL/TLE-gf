@@ -2714,12 +2714,14 @@ class TestRatingDisplayNoLeak:
 
 
 class _FakeGroup:
-    """Minimal Group stand-in for testing _mirror_subcommands.
+    """Minimal Group stand-in for testing cog_load's backcompat aliasing.
 
-    Real discord.py Groups expose all_commands + get_command; the test
-    conftest stub doesn't, so we build a real one here.
+    Real discord.py Groups expose all_commands + get_command; the conftest
+    stub doesn't, so we build a real one here.
     """
-    def __init__(self):
+    def __init__(self, name='stub', aliases=()):
+        self.name = name
+        self.aliases = list(aliases)
         self.all_commands = {}
 
     def add(self, cmd):
@@ -2731,71 +2733,42 @@ class _FakeGroup:
         return self.all_commands.get(name)
 
 
-class _FakeCommand:
-    def __init__(self, name, aliases=()):
-        self.name = name
-        self.aliases = list(aliases)
+class TestAkariMgBackcompat:
+    """`;akari …` is the canonical group; `;mg akari …` keeps working via
+    a same-object mirror that cog_load installs on the ;mg group."""
 
+    def _run_cog_load(self, cog, mg, akari):
+        """Substitute fake groups onto the cog and run cog_load."""
+        # The real cog has .minigames / .akari attributes that resolve to
+        # the decorator-built groups; the stubbed harness leaves those as
+        # opaque objects.  Patch them with our fakes so cog_load's logic
+        # actually runs end-to-end.
+        cog.minigames = mg
+        cog.akari = akari
+        asyncio.run(cog.cog_load())
 
-class TestMgAkariShortcuts:
-    """`;mg <name>` should resolve to the same callback as `;mg akari <name>`
-    for the read-only / display subset."""
+    def test_mg_resolves_akari_to_same_object(self):
+        cog = Minigames(bot=None)
+        mg = _FakeGroup(name='minigames', aliases=['mg'])
+        akari = _FakeGroup(name='akari', aliases=['dailyakari'])
+        self._run_cog_load(cog, mg, akari)
+        # ;mg akari and ;mg dailyakari both point at the canonical akari group
+        assert mg.get_command('akari') is akari
+        assert mg.get_command('dailyakari') is akari
 
-    def _build_akari(self):
-        """Build an akari group seeded with the real subcommand names."""
-        akari = _FakeGroup()
-        akari.add(_FakeCommand('ratings'))
-        akari.add(_FakeCommand('rating'))
-        akari.add(_FakeCommand('performance', aliases=['perf']))
-        akari.add(_FakeCommand('history'))
-        akari.add(_FakeCommand('stats'))
-        akari.add(_FakeCommand('vs'))
-        akari.add(_FakeCommand('streak'))
-        akari.add(_FakeCommand('top'))
-        akari.add(_FakeCommand('show'))
-        # State-changing siblings that must NOT be mirrored
-        akari.add(_FakeCommand('here'))
-        akari.add(_FakeCommand('register'))
-        akari.add(_FakeCommand('ban'))
-        akari.add(_FakeCommand('add'))
-        return akari
-
-    def test_shortcuts_resolve_to_akari_subcommands(self):
-        akari = self._build_akari()
-        mg = _FakeGroup()
-        Minigames._mirror_subcommands(akari, mg, Minigames._AKARI_MG_SHORTCUTS)
-        for name in Minigames._AKARI_MG_SHORTCUTS:
-            assert mg.get_command(name) is akari.get_command(name), (
-                f';mg {name} did not mirror ;mg akari {name}')
-
-    def test_aliases_also_mirrored(self):
-        akari = self._build_akari()
-        mg = _FakeGroup()
-        Minigames._mirror_subcommands(akari, mg, Minigames._AKARI_MG_SHORTCUTS)
-        perf_full = mg.get_command('performance')
-        perf_alias = mg.get_command('perf')
-        assert perf_full is akari.get_command('performance')
-        assert perf_alias is perf_full
-
-    def test_state_changing_akari_commands_not_mirrored(self):
-        akari = self._build_akari()
-        mg = _FakeGroup()
-        Minigames._mirror_subcommands(akari, mg, Minigames._AKARI_MG_SHORTCUTS)
-        for name in ('here', 'register', 'ban', 'add'):
-            assert mg.get_command(name) is None, (
-                f';mg {name} should not be a shortcut (state-changing)')
-
-    def test_existing_mg_commands_not_clobbered(self):
-        """If a name already resolves on ;mg, leave it alone."""
-        akari = self._build_akari()
-        mg = _FakeGroup()
-        original_top = _FakeCommand('top')
-        mg.add(original_top)
-        Minigames._mirror_subcommands(akari, mg, Minigames._AKARI_MG_SHORTCUTS)
-        assert mg.get_command('top') is original_top
+    def test_existing_mg_subcommand_not_clobbered(self):
+        """If ;mg.akari somehow already exists, leave it alone."""
+        cog = Minigames(bot=None)
+        mg = _FakeGroup(name='minigames', aliases=['mg'])
+        akari = _FakeGroup(name='akari', aliases=['dailyakari'])
+        original = _FakeGroup(name='akari')
+        mg.add(original)
+        self._run_cog_load(cog, mg, akari)
+        assert mg.get_command('akari') is original
 
     def test_cog_load_no_crash_with_stubbed_group(self):
-        """Defensive: the test harness stubs commands.group; cog_load should no-op."""
+        """The conftest stub leaves the cog's groups without all_commands;
+        cog_load must silently no-op rather than crash."""
         cog = Minigames(bot=None)
         asyncio.run(cog.cog_load())  # must not raise
 
