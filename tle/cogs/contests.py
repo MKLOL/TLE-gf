@@ -33,6 +33,10 @@ _FINISHED_CONTESTS_LIMIT = 5
 _WATCHING_RATED_VC_WAIT_TIME = 5 * 60  # seconds
 _RATED_VC_EXTRA_TIME = 10 * 60  # seconds
 _MIN_RATED_CONTESTANTS_FOR_RATED_VC = 50
+# Discord shrinks an embed to its title width and wraps the inner codeblock if
+# it's wider. Padding the probrat title to this many chars keeps the embed wide
+# enough for the (~25-char) table to render on one line per row.
+_MIN_PROBRAT_TITLE_WIDTH = 55
 
 def _load_monospace_font(size):
     for path in ('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
@@ -949,6 +953,12 @@ class Contests(commands.Cog):
         """
         title, url, indices, official_ratings, predicted, from_cache = (
             await self._compute_problem_ratings(ctx, contest_id))
+        # Discord auto-shrinks an embed to its (short) title and then wraps the
+        # codeblock, breaking row alignment. Pad with non-breaking spaces so the
+        # embed is always at least as wide as the table. Regular trailing
+        # whitespace is trimmed by Discord; NBSP survives.
+        if len(title) < _MIN_PROBRAT_TITLE_WIDTH:
+            title = title + ' ' * (_MIN_PROBRAT_TITLE_WIDTH - len(title))
         table_pages = self._format_problemratings_table_pages(
             indices, official_ratings, predicted, from_cache=from_cache)
         await discord_common.send_paginated_embeds(ctx, table_pages, title=title, url=url)
@@ -962,7 +972,7 @@ class Contests(commands.Cog):
             await self._compute_problem_ratings(ctx, contest_id))
         image_file = _render_problemratings_image(
             title, indices, official_ratings, predicted, from_cache=from_cache)
-        await ctx.send(content=url, file=image_file)
+        await ctx.send(content=f'<{url}>', file=image_file)
 
     async def _compute_problem_ratings(self, ctx, contest_id):
         await ctx.send('This will take a while')
