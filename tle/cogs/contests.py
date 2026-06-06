@@ -32,7 +32,7 @@ _WATCHING_RATED_VC_WAIT_TIME = 5 * 60  # seconds
 _RATED_VC_EXTRA_TIME = 10 * 60  # seconds
 _MIN_RATED_CONTESTANTS_FOR_RATED_VC = 50
 
-_SMOKE_WHITE = (250, 250, 250)
+_INDEX_CELL_COLOR = (0, 0, 0)
 
 
 def _cf_rating_color(rating):
@@ -62,7 +62,7 @@ def _render_problemratings_image(title, indices, official_ratings, predicted, *,
         for i, idx in enumerate(indices)
     ]
     cell_colors = [
-        (_SMOKE_WHITE, _cf_rating_color(official_ratings[i]), _cf_rating_color(predicted[i]))
+        (_INDEX_CELL_COLOR, _cf_rating_color(official_ratings[i]), _cf_rating_color(predicted[i]))
         for i in range(len(indices))
     ]
     return _get_akari_puzzle_table_image(
