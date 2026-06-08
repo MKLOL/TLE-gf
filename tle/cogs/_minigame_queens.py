@@ -3,7 +3,7 @@
 import re
 from collections import namedtuple
 
-from tle.cogs._minigame_common import GameDef
+from tle.cogs._minigame_common import GameDef, RatingDef
 
 
 _TIME_RE = re.compile(r'^\d{1,2}:\d{2}(?::\d{2})?$')
@@ -159,5 +159,5 @@ QUEENS_GAME = GameDef(
     winner_result_sort_key=queens_winner_result_sort_key,
     result_group_key=queens_result_group_key,
     manual_ingest_only=True,
-    rating_rank_fn=rank_queens_participants,
+    rating=RatingDef(rank_fn=rank_queens_participants),
 )

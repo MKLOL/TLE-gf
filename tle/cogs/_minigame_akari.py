@@ -4,8 +4,9 @@ import datetime as dt
 import re
 from types import SimpleNamespace
 
+from tle import constants
 from tle.cogs._minigame_common import (
-    ParsedResult, GameDef, ScoringDef, default_score_matchup,
+    ParsedResult, GameDef, RatingDef, ScoringDef, default_score_matchup,
 )
 
 
@@ -46,6 +47,10 @@ def puzzle_date_for(puzzle_number):
     ``puzzle_date`` matches what a real ingested message would have used.
     """
     return _ANCHOR_DATE + dt.timedelta(days=int(puzzle_number) - _ANCHOR_NUMBER)
+
+
+def current_puzzle_number():
+    return expected_puzzle_number(dt.date.today())
 
 
 def _parse_time(time_text):
@@ -227,6 +232,15 @@ AKARI_GAME = GameDef(
     feature_flag='akari',
     parse=parse_akari_message,
     detect=_HEADER_RE,
+    rating=RatingDef(
+        start_rating=constants.AKARI_START_RATING,
+        damping=constants.AKARI_RATING_DAMPING,
+        decay_base=constants.AKARI_DECAY_BASE,
+        decay_max=constants.AKARI_DECAY_MAX,
+        decay_grace=constants.AKARI_DECAY_GRACE,
+        current_puzzle_number_fn=current_puzzle_number,
+        max_puzzle_lookahead=constants.AKARI_MAX_PUZZLE_LOOKAHEAD,
+    ),
     scoring_variants={
         'raw': ScoringDef(
             score_matchup=akari_raw_score_matchup,

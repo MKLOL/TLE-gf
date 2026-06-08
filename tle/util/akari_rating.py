@@ -1,24 +1,26 @@
-"""Codeforces-style multiplayer rating for Daily Akari.
+"""Shared Codeforces-style multiplayer rating engine for minigames.
 
-Each Akari day (one ``puzzle_number`` per day) is treated as a single Codeforces
-contest: every player who submitted that day is ranked against the others, and
-ratings move toward each player's expected-versus-actual rank using the exact
-Codeforces rating formula (logistic win-probabilities, expected-rank "seed",
-geometric-mean target rank, binary-searched needed rating, and the two CF
-anti-inflation corrections).  The final per-contest change is then scaled by a
-small ``damping`` factor so the rating is *way less volatile* than real CF —
-appropriate because Akari is played daily, so a year of play is hundreds of
-"contests" and the undamped formula would swing wildly.
+Each minigame day (one ``puzzle_number`` per day) is treated as a single
+Codeforces contest: every player who submitted that day is ranked against the
+others, and ratings move toward each player's expected-versus-actual rank using
+the exact Codeforces rating formula (logistic win-probabilities, expected-rank
+"seed", geometric-mean target rank, binary-searched needed rating, and the two
+CF anti-inflation corrections).  The final per-contest change is then scaled by
+a small ``damping`` factor so the rating is less volatile than real CF —
+appropriate for daily games where a year of play is hundreds of "contests".
 
 This module is pure: no database, no discord, no wall-clock.  Given the same
 result rows it always returns the same ratings, regardless of row order, which
 keeps it trivially unit-testable and lets callers replay the full history on
 every change.
 
-Players start at :data:`tle.constants.AKARI_START_RATING` (1200).  Ratings are
-kept as ``float`` throughout the replay (and stored as ``REAL``); callers round
-only for display.  At a quarter-strength damping, rounding every daily delta to
-an integer would floor most of them to zero and ratings would never move.
+The default tuning is the original Akari tuning:
+:data:`tle.constants.AKARI_START_RATING` (1200), Akari damping, and Akari decay.
+Callers can override those values per game through ``compute_ratings`` kwargs
+(wired from ``GameDef.rating`` in the minigame cog).  Ratings are kept as
+``float`` throughout the replay (and stored as ``REAL``); callers round only for
+display.  At a quarter-strength damping, rounding every daily delta to an
+integer would floor most of them to zero and ratings would never move.
 
 Inactive players above the default rating decay back toward it, with the pull
 growing the longer they stay away (see :func:`compute_ratings`).  The points
@@ -262,7 +264,7 @@ def compute_ratings(rows, start_rating=None, damping=None,
                     max_puzzle=None, histories=None,
                     include_decay_in_history=False,
                     current_puzzle_number=None, rank_fn=None):
-    """Replay every Akari day in order and return ``{user_id: RatingState}``.
+    """Replay every minigame day in order and return ``{user_id: RatingState}``.
 
     ``rows`` is any iterable of result rows, each exposing ``user_id``,
     ``puzzle_number``, ``is_perfect``, ``accuracy`` and ``time_seconds``.  Pass
@@ -310,8 +312,8 @@ def compute_ratings(rows, start_rating=None, damping=None,
     every puzzle day in the data as concluded — useful in tests where there
     is no "today".
 
-    ``rank_fn`` optionally replaces Akari's default perfect/accuracy/time
-    ranking with another minigame's per-day ranker.
+    ``rank_fn`` optionally replaces the default Akari-style
+    perfect/accuracy/time ranking with another minigame's per-day ranker.
     """
     if rank_fn is None:
         rank_fn = rank_participants

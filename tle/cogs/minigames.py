@@ -42,7 +42,8 @@ from tle.cogs._minigame_stats import (
     plot_akari_stats, plot_guessgame_stats,
 )
 from tle.cogs._migrate_retry import discord_retry, RetryExhaustedError
-from tle.util.akari_rating import compute_ratings, rank_for_rating
+from tle.util.akari_rating import rank_for_rating
+from tle.util.minigame_rating import compute_ratings
 
 logger = logging.getLogger(__name__)
 
@@ -717,16 +718,26 @@ class Minigames(commands.Cog):
 
     def _recompute_minigame_ratings(self, guild_id, game):
         try:
+            rating = game.rating
+            if rating is None:
+                return
             rows = cf_common.user_db.get_minigame_results_for_guild(
                 guild_id, game.name)
             kwargs = {}
-            if game.name == AKARI_GAME.name:
-                current_puzzle = expected_puzzle_number(dt.date.today())
-                kwargs['max_puzzle'] = (
-                    current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD)
+            for name in (
+                    'start_rating', 'damping', 'decay_base', 'decay_max',
+                    'decay_grace'):
+                value = getattr(rating, name)
+                if value is not None:
+                    kwargs[name] = value
+            if rating.current_puzzle_number_fn is not None:
+                current_puzzle = rating.current_puzzle_number_fn()
                 kwargs['current_puzzle_number'] = current_puzzle
-            if game.rating_rank_fn is not None:
-                kwargs['rank_fn'] = game.rating_rank_fn
+                if rating.max_puzzle_lookahead is not None:
+                    kwargs['max_puzzle'] = (
+                        current_puzzle + rating.max_puzzle_lookahead)
+            if rating.rank_fn is not None:
+                kwargs['rank_fn'] = rating.rank_fn
             states = compute_ratings(rows, **kwargs)
             if game.name == AKARI_GAME.name:
                 cf_common.user_db.replace_akari_ratings(

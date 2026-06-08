@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tle import constants
 from tle.cogs import minigames as minigames_module
 from tle.util import codeforces_common as cf_common
 from tle.util.db.user_db_conn import namedtuple_factory
@@ -44,7 +45,7 @@ from tle.cogs.minigames import (
     _get_akari_puzzle_table_image,
     _maybe_parse_puzzle_selector,
 )
-from tle.util.akari_rating import RatingState
+from tle.util.minigame_rating import RatingState
 
 
 _GAME = 'akari'
@@ -398,6 +399,20 @@ class TestQueensParsing:
             QUEENS_GAME.winner_result_sort_key(rows[0])
             == QUEENS_GAME.winner_result_sort_key(rows[1])
         )
+
+
+class TestRatingDefinitions:
+    def test_games_declare_shared_rating_configs(self):
+        assert AKARI_GAME.rating is not None
+        assert AKARI_GAME.rating.damping == constants.AKARI_RATING_DAMPING
+        assert AKARI_GAME.rating.decay_base == constants.AKARI_DECAY_BASE
+        assert AKARI_GAME.rating.max_puzzle_lookahead == constants.AKARI_MAX_PUZZLE_LOOKAHEAD
+        assert callable(AKARI_GAME.rating.current_puzzle_number_fn)
+
+        assert QUEENS_GAME.rating is not None
+        assert QUEENS_GAME.rating.rank_fn is rank_queens_participants
+
+        assert GUESSGAME_GAME.rating is None
 
 
 def _row(message_id, user_id, puzzle_date, is_perfect, time_seconds, accuracy=100, number=1):

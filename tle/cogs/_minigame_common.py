@@ -50,6 +50,23 @@ class ScoringDef:
 
 
 @dataclass(frozen=True)
+class RatingDef:
+    """Configuration for the shared minigame rating engine.
+
+    Games share the same Codeforces-style replay engine, but can tune the
+    daily ranker, damping/decay constants, and puzzle validity window.
+    """
+    rank_fn: Optional[Callable] = None
+    start_rating: Optional[float] = None
+    damping: Optional[float] = None
+    decay_base: Optional[float] = None
+    decay_max: Optional[float] = None
+    decay_grace: Optional[int] = None
+    current_puzzle_number_fn: Optional[Callable[[], int]] = None
+    max_puzzle_lookahead: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class GameDef:
     """Definition of a daily puzzle minigame.
 
@@ -73,7 +90,7 @@ class GameDef:
     missing_result: object = None  # synthetic result for missing puzzles (used with score_fn)
     scoring_variants: Dict[str, ScoringDef] = field(default_factory=dict)
     manual_ingest_only: bool = False
-    rating_rank_fn: Optional[Callable] = None
+    rating: Optional[RatingDef] = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
