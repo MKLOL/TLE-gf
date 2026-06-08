@@ -266,14 +266,15 @@ def _format_queens_date(row_or_date):
     return normalize_puzzle_date(value).isoformat()
 
 
-def _split_queens_link_text(text):
-    urls = _URL_RE.findall(text or '')
-    external_url = urls[0] if urls else None
-    name = _URL_RE.sub('', text or '').strip()
+def _clean_queens_linkedin_name(text):
+    if _URL_RE.search(text or ''):
+        raise MinigameCogError(
+            'Profile URLs are not needed. Use only the LinkedIn display name.')
+    name = (text or '').strip()
     name = ' '.join(name.split())
     if not name:
         raise MinigameCogError('A LinkedIn display name is required.')
-    return name, external_url
+    return name
 
 
 def _format_queens_result(entry):
@@ -815,12 +816,9 @@ class Minigames(commands.Cog):
         if account is None:
             return (
                 'Ask a moderator to set the LinkedIn account to connect with '
-                'using `;queens connection set LinkedIn Name [profile_url]`.'
+                'using `;queens connection set LinkedIn Name`.'
             )
-        if account.get('url'):
-            account_text = f'[{account["name"]}]({account["url"]})'
-        else:
-            account_text = f'`{account["name"]}`'
+        account_text = f'`{account["name"]}`'
         return (
             f'In order to join the rating system, connect with {account_text} '
             'on LinkedIn so your result appears on the leaderboard.'
@@ -829,7 +827,7 @@ class Minigames(commands.Cog):
     async def _resolve_queens_registration_args(self, ctx, first, rest):
         if first is None:
             raise MinigameCogError(
-                'Usage: `;queens register LinkedIn Name [profile_url]`.')
+                'Usage: `;queens register LinkedIn Name`.')
         first = str(first).strip()
         rest = (rest or '').strip()
         target = ctx.author
@@ -928,7 +926,7 @@ class Minigames(commands.Cog):
     def _cmd_queens_register_link(self, ctx, member, linkedin_text):
         self._ensure_not_minigame_banned(
             ctx.guild.id, QUEENS_GAME, member.id, _safe_member_name(member))
-        name, external_url = _split_queens_link_text(linkedin_text)
+        name = _clean_queens_linkedin_name(linkedin_text)
         normalized = normalize_queens_name(name)
         existing = cf_common.user_db.get_minigame_player_link_by_name(
             ctx.guild.id, QUEENS_GAME.name, normalized)
@@ -938,7 +936,7 @@ class Minigames(commands.Cog):
                 f'{_safe_user_name(ctx.guild, existing.user_id)}.')
         cf_common.user_db.set_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id, name, normalized,
-            external_url, time.time(), ctx.author.id)
+            None, time.time(), ctx.author.id)
 
     def _resolve_queens_leaderboard(self, ctx, leaderboard):
         entries = parse_queens_leaderboard(leaderboard)
@@ -949,7 +947,7 @@ class Minigames(commands.Cog):
             ctx.guild.id, QUEENS_GAME.name, ctx.author.id)
         if importer_link is None:
             raise MinigameCogError(
-                'Register the importer with `;queens link` before importing '
+                'Register the importer with `;queens register` before importing '
                 'LinkedIn Queens leaderboard results.')
         resolved = []
         unresolved = []
@@ -2965,7 +2963,7 @@ class Minigames(commands.Cog):
 
     @queens.command(name='register',
                     brief='Link a Discord user to a LinkedIn Queens name',
-                    usage='LinkedIn Name [profile_url]')
+                    usage='LinkedIn Name')
     async def queens_register(self, ctx, first: str = None, *,
                               linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
@@ -2974,7 +2972,6 @@ class Minigames(commands.Cog):
         self._cmd_queens_register_link(ctx, member, linkedin_text)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
-        url = f'\nProfile: {link.external_url}' if link.external_url else ''
         who = (
             'You are'
             if member.id == ctx.author.id
@@ -2982,30 +2979,7 @@ class Minigames(commands.Cog):
         )
         await ctx.send(embed=discord_common.embed_success('\n'.join([
             f'{who} registered for {QUEENS_GAME.display_name} as '
-            f'`{link.external_name}`.{url}',
-            self._queens_connection_instruction(ctx.guild.id),
-        ])))
-
-    @queens.command(name='link',
-                    brief='Alias for register',
-                    usage='LinkedIn Name [profile_url]')
-    async def queens_link(self, ctx, first: str = None, *,
-                          linkedin: str = None):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        member, linkedin_text = await self._resolve_queens_registration_args(
-            ctx, first, linkedin)
-        self._cmd_queens_register_link(ctx, member, linkedin_text)
-        link = cf_common.user_db.get_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, member.id)
-        url = f'\nProfile: {link.external_url}' if link.external_url else ''
-        who = (
-            'You are'
-            if member.id == ctx.author.id
-            else f'`{_safe_member_name(member)}` is'
-        )
-        await ctx.send(embed=discord_common.embed_success('\n'.join([
-            f'{who} registered for {QUEENS_GAME.display_name} as '
-            f'`{link.external_name}`.{url}',
+            f'`{link.external_name}`.',
             self._queens_connection_instruction(ctx.guild.id),
         ])))
 
@@ -3040,10 +3014,9 @@ class Minigames(commands.Cog):
                 f'No {QUEENS_GAME.display_name} links registered.')
         lines = []
         for row in rows:
-            suffix = f' <{row.external_url}>' if row.external_url else ''
             lines.append(
                 f'- {_safe_user_name(ctx.guild, row.user_id)}: '
-                f'`{row.external_name}`{suffix}')
+                f'`{row.external_name}`')
         pages = []
         for chunk in paginator.chunkify(lines, _QUEENS_HISTORY_PER_PAGE):
             pages.append((None, discord.Embed(
@@ -3069,12 +3042,12 @@ class Minigames(commands.Cog):
 
     @queens_connection.command(name='set',
                                brief='(Mod) Set the LinkedIn connection account',
-                               usage='LinkedIn Name [profile_url]')
+                               usage='LinkedIn Name')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_connection_set(self, ctx, *, linkedin: str):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        name, external_url = _split_queens_link_text(linkedin)
-        self._set_queens_connection_account(ctx.guild.id, name, external_url)
+        name = _clean_queens_linkedin_name(linkedin)
+        self._set_queens_connection_account(ctx.guild.id, name, None)
         await ctx.send(embed=discord_common.embed_success(
             self._queens_connection_instruction(ctx.guild.id)))
 
