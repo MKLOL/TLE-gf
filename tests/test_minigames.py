@@ -2500,6 +2500,40 @@ class TestRatingDb:
         assert row.skip_streak == 7
         assert row.last_puzzle == 612
 
+    def test_akari_rating_reads_legacy_snapshot_if_generic_missing(self, db):
+        db.conn.execute(
+            '''
+            INSERT INTO akari_rating
+                (guild_id, user_id, rating, games, peak, last_delta,
+                 skip_streak, last_puzzle, updated_at)
+            VALUES ('1', 'a', 1300.0, 2, 1310.0, 5.0, 1, 445, 1000.0)
+            '''
+        )
+        db.conn.commit()
+
+        rows = db.get_akari_ratings(1)
+        assert [row.user_id for row in rows] == ['a']
+        assert db.get_akari_rating(1, 'a').rating == 1300.0
+
+    def test_akari_rating_prefers_generic_snapshot_when_present(self, db):
+        db.conn.execute(
+            '''
+            INSERT INTO akari_rating
+                (guild_id, user_id, rating, games, peak, last_delta,
+                 skip_streak, last_puzzle, updated_at)
+            VALUES ('1', 'a', 1300.0, 2, 1310.0, 5.0, 1, 445, 1000.0)
+            '''
+        )
+        db.replace_minigame_ratings(
+            1, 'akari',
+            [RatingState('a', 1400.0, 3, 1400.0, 10.0, 0, 446)],
+            1001.0,
+        )
+
+        rows = db.get_akari_ratings(1)
+        assert rows[0].rating == 1400.0
+        assert db.get_akari_rating(1, 'a').games == 3
+
 
 class TestCogRating:
     @staticmethod

@@ -697,7 +697,30 @@ class MinigameDbMixin:
 
     def get_akari_ratings(self, guild_id):
         """All rated users for a guild, strongest first."""
-        return self.get_minigame_ratings(guild_id, 'akari')
+        rows = self.get_minigame_ratings(guild_id, 'akari')
+        if rows:
+            return rows
+        return self.conn.execute(
+            '''
+            SELECT user_id, rating, games, peak, last_delta, skip_streak,
+                   last_puzzle, updated_at
+            FROM akari_rating
+            WHERE guild_id = ?
+            ORDER BY rating DESC, games DESC, user_id ASC
+            ''',
+            (str(guild_id),)
+        ).fetchall()
 
     def get_akari_rating(self, guild_id, user_id):
-        return self.get_minigame_rating(guild_id, 'akari', user_id)
+        row = self.get_minigame_rating(guild_id, 'akari', user_id)
+        if row is not None:
+            return row
+        return self.conn.execute(
+            '''
+            SELECT user_id, rating, games, peak, last_delta, skip_streak,
+                   last_puzzle, updated_at
+            FROM akari_rating
+            WHERE guild_id = ? AND user_id = ?
+            ''',
+            (str(guild_id), str(user_id))
+        ).fetchone()

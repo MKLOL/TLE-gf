@@ -492,6 +492,79 @@ class TestUpgrade131:
         db.execute('SELECT * FROM minigame_ban').fetchall()
 
 
+class TestUserDbConnUpgradeEndToEnd:
+    @staticmethod
+    def _seed_legacy_akari_rating(dbfile):
+        raw = sqlite3.connect(dbfile)
+        raw.execute('''
+            CREATE TABLE akari_rating (
+                guild_id    TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                rating      REAL NOT NULL,
+                games       INTEGER NOT NULL DEFAULT 0,
+                peak        REAL NOT NULL,
+                last_delta  REAL NOT NULL DEFAULT 0,
+                skip_streak INTEGER NOT NULL DEFAULT 0,
+                last_puzzle INTEGER NOT NULL DEFAULT 0,
+                updated_at  REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        raw.execute(
+            "INSERT INTO akari_rating "
+            "(guild_id, user_id, rating, games, peak, last_delta, "
+            "skip_streak, last_puzzle, updated_at) "
+            "VALUES ('1', '9', 1300, 2, 1310, -1.5, 4, 500, 123.0)")
+        return raw
+
+    def test_opening_versioned_129_db_copies_akari_ratings(self, tmp_path):
+        from tle.util.db.user_db_conn import UserDbConn
+        from tle.util.db.user_db_upgrades import registry
+
+        dbfile = tmp_path / 'user.db'
+        raw = self._seed_legacy_akari_rating(dbfile)
+        raw.execute('CREATE TABLE db_version (version TEXT NOT NULL)')
+        raw.execute("INSERT INTO db_version (version) VALUES ('1.29.0')")
+        raw.commit()
+        raw.close()
+
+        conn = UserDbConn(str(dbfile))
+        try:
+            row = conn.conn.execute(
+                'SELECT guild_id, game, user_id, rating, games, peak, '
+                'last_delta, skip_streak, last_puzzle, updated_at '
+                'FROM minigame_rating WHERE guild_id = ? AND game = ? '
+                'AND user_id = ?',
+                ('1', 'akari', '9'),
+            ).fetchone()
+            assert row is not None
+            assert row.rating == 1300
+            assert row.skip_streak == 4
+            assert row.last_puzzle == 500
+            assert conn.get_akari_rating('1', '9').rating == 1300
+            assert registry.get_current_version(conn.conn) == registry.latest_version
+        finally:
+            conn.conn.close()
+
+    def test_unversioned_db_with_akari_rating_rows_still_reads_them(self, tmp_path):
+        from tle.util.db.user_db_conn import UserDbConn
+        from tle.util.db.user_db_upgrades import registry
+
+        dbfile = tmp_path / 'user.db'
+        raw = self._seed_legacy_akari_rating(dbfile)
+        raw.commit()
+        raw.close()
+
+        conn = UserDbConn(str(dbfile))
+        try:
+            row = conn.get_akari_rating('1', '9')
+            assert row.rating == 1300
+            assert row.skip_streak == 4
+            assert registry.get_current_version(conn.conn) == registry.latest_version
+        finally:
+            conn.conn.close()
+
+
 class TestUpgrade127:
     def test_creates_ban_table(self, db):
         from tle.util.db.user_db_upgrades import upgrade_1_27_0
