@@ -722,6 +722,17 @@ class TestDbMixin:
         assert rc == 2
         assert db.get_minigame_result_for_user_puzzle(100, _GAME, 300, 445) is None
 
+    def test_delete_results_for_puzzle(self, db):
+        db.save_minigame_result(1, 100, _GAME, 200, 300, 445, '2026-03-26', 100, 89, True, 'c1')
+        db.save_minigame_result(2, 100, _GAME, 200, 301, 445, '2026-03-26', 100, 90, True, 'c2')
+        db.save_imported_minigame_result(3, 100, _GAME, 200, 302, 445, '2026-03-26', 100, 91, True, 'c3')
+        db.save_minigame_result(4, 100, _GAME, 200, 300, 446, '2026-03-27', 100, 92, True, 'c4')
+
+        assert db.delete_minigame_results_for_puzzle(100, _GAME, 445) == 3
+
+        rows = db.get_minigame_results_for_guild(100, _GAME)
+        assert [(row.user_id, row.puzzle_number) for row in rows] == [('300', 446)]
+
     def test_puzzle_number_filtering(self, db):
         """plo/phi should filter results by puzzle_number at the DB level."""
         db.save_minigame_result(1, 100, _GAME, 200, 300, 440, '2026-03-20', 100, 60, True, 'c')
@@ -894,7 +905,7 @@ class TestQueensImport:
 
         cog = Minigames(bot=None)
         with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, '2026-06-08', content)
+            cog._make_queens_import_preview(ctx, '123', content)
 
     def test_preview_resolves_linked_names_and_you_then_saves_ratings(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -931,11 +942,12 @@ class TestQueensImport:
         )
 
         cog = Minigames(bot=None)
-        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
+        preview = cog._make_queens_import_preview(ctx, '#123', content)
 
-        assert preview.puzzle_number == 20260608
+        assert preview.puzzle_number == 123
         assert [entry.user_id for entry in preview.resolved] == ['300', '301']
         assert preview.unresolved == ['Unknown Person']
+        assert '#123' in cog._format_queens_import_preview(ctx, preview)
         assert 'Robert Kocharyan' in cog._format_queens_import_preview(ctx, preview)
 
         saved = cog._save_queens_import(ctx, preview)
@@ -946,9 +958,23 @@ class TestQueensImport:
             ('300', 4),
             ('301', 6),
         ]
+        assert {row.puzzle_number for row in rows} == {123}
+        assert {row.puzzle_date for row in rows} == {'1970-01-01'}
         ratings = db.get_minigame_ratings(100, 'queens')
         assert [row.user_id for row in ratings] == ['300', '301']
         assert ratings[0].rating > ratings[1].rating
+
+        reimport = cog._make_queens_import_preview(ctx, '123', (
+            'You\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:05\n'
+        ))
+        assert cog._save_queens_import(ctx, reimport) == 1
+        rows = db.get_minigame_results_for_guild(100, 'queens')
+        assert [(row.user_id, row.time_seconds) for row in rows] == [('301', 5)]
+        ratings = db.get_minigame_ratings(100, 'queens')
+        assert [row.user_id for row in ratings] == ['301']
+        assert ratings[0].games == 0
 
     def test_generic_recompute_writes_queens_snapshot_only(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

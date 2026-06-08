@@ -309,6 +309,24 @@ class MinigameDbMixin:
         self.conn.commit()
         return live_rc + imported_rc
 
+    def delete_minigame_results_for_puzzle(self, guild_id, game, puzzle_number):
+        live_rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_result
+            WHERE guild_id = ? AND game = ? AND puzzle_number = ?
+            ''',
+            (str(guild_id), game, int(puzzle_number))
+        ).rowcount
+        imported_rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_import_result
+            WHERE guild_id = ? AND game = ? AND puzzle_number = ?
+            ''',
+            (str(guild_id), game, int(puzzle_number))
+        ).rowcount
+        self.conn.commit()
+        return live_rc + imported_rc
+
     # ── Generic minigame identity links ───────────────────────────────
 
     def set_minigame_player_link(self, guild_id, game, user_id, external_name,
