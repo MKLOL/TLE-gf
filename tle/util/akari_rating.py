@@ -261,7 +261,7 @@ def compute_ratings(rows, start_rating=None, damping=None,
                     decay_base=None, decay_max=None, decay_grace=None,
                     max_puzzle=None, histories=None,
                     include_decay_in_history=False,
-                    current_puzzle_number=None):
+                    current_puzzle_number=None, rank_fn=None):
     """Replay every Akari day in order and return ``{user_id: RatingState}``.
 
     ``rows`` is any iterable of result rows, each exposing ``user_id``,
@@ -309,7 +309,12 @@ def compute_ratings(rows, start_rating=None, damping=None,
     post on the current day still runs.  Leave as ``None`` (default) to treat
     every puzzle day in the data as concluded — useful in tests where there
     is no "today".
+
+    ``rank_fn`` optionally replaces Akari's default perfect/accuracy/time
+    ranking with another minigame's per-day ranker.
     """
+    if rank_fn is None:
+        rank_fn = rank_participants
     if start_rating is None:
         start_rating = float(constants.AKARI_START_RATING)
     if damping is None:
@@ -360,7 +365,7 @@ def compute_ratings(rows, start_rating=None, damping=None,
         performances = {}
         if len(day_rows) >= 2:
             day_ratings = {user_id: ratings[user_id] for user_id in day_rows}
-            ranks = rank_participants(day_rows.values())
+            ranks = rank_fn(day_rows.values())
             # When the caller wants history, harvest the geometric-mean "need"
             # values that compute_round computes anyway, then convert to the
             # CF-style performance ``2*need - rating``: assuming ``need`` is the

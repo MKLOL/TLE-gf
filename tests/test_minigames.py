@@ -27,8 +27,15 @@ from tle.cogs._minigame_guessgame import (
     parse_guessgame_message,
     guessgame_score_matchup,
 )
+from tle.cogs._minigame_queens import (
+    QUEENS_GAME,
+    normalize_queens_name,
+    parse_queens_leaderboard,
+    rank_queens_participants,
+)
 from tle.cogs.minigames import Minigames
 from tle.cogs.minigames import (
+    MinigameCogError,
     _SlashCtx,
     _akari_puzzle_table_rows,
     _akari_rating_table_rows,
@@ -105,6 +112,35 @@ class FakeMinigameDb(MinigameDbMixin):
                 key         TEXT,
                 value       TEXT,
                 PRIMARY KEY (guild_id, key)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_player_link (
+                guild_id        TEXT NOT NULL,
+                game            TEXT NOT NULL,
+                user_id         TEXT NOT NULL,
+                external_name   TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                external_url    TEXT,
+                linked_at       REAL NOT NULL,
+                linked_by       TEXT NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id),
+                UNIQUE (guild_id, game, normalized_name)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_rating (
+                guild_id    TEXT NOT NULL,
+                game        TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                rating      REAL NOT NULL,
+                games       INTEGER NOT NULL DEFAULT 0,
+                peak        REAL NOT NULL,
+                last_delta  REAL NOT NULL DEFAULT 0,
+                skip_streak INTEGER NOT NULL DEFAULT 0,
+                last_puzzle INTEGER NOT NULL DEFAULT 0,
+                updated_at  REAL NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id)
             )
         ''')
         self.conn.execute('''
@@ -311,6 +347,57 @@ class TestParsing:
     def test_looks_like_non_pro_akari_rejects_non_akari(self):
         from tle.cogs._minigame_akari import looks_like_non_pro_akari
         assert looks_like_non_pro_akari('just chatting in the channel') is False
+
+
+class TestQueensParsing:
+    def test_parse_copied_linkedin_leaderboard(self):
+        results = parse_queens_leaderboard(
+            'Ali Farhat\n'
+            'Ali Farhat\n'
+            'Ali Farhat\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:04\n'
+            'Robert Kocharyan\n'
+            'Robert Kocharyan\n'
+            'You\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:06\n'
+            '4\n'
+            'Zepur Jokaklian\n'
+            'Zepur Jokaklian\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:07\n'
+        )
+
+        assert [r.linkedin_name for r in results] == [
+            'Ali Farhat',
+            'Robert Kocharyan',
+            'Zepur Jokaklian',
+        ]
+        assert [r.time_seconds for r in results] == [4, 6, 7]
+        assert all(r.no_hints and r.no_mistakes for r in results)
+
+    def test_parse_you_when_no_name_exists(self):
+        results = parse_queens_leaderboard(
+            'You\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:06\n'
+        )
+        assert len(results) == 1
+        assert results[0].linkedin_name == 'You'
+
+    def test_queens_rating_ranks_by_time_only(self):
+        rows = [
+            _row(1, 10, '2026-06-08', False, 10, 0, 20260608),
+            _row(2, 20, '2026-06-08', True, 10, 100, 20260608),
+            _row(3, 30, '2026-06-08', False, 8, 0, 20260608),
+        ]
+        ranks = rank_queens_participants(rows)
+        assert ranks == {'30': 1, '10': 2, '20': 2}
+        assert (
+            QUEENS_GAME.winner_result_sort_key(rows[0])
+            == QUEENS_GAME.winner_result_sort_key(rows[1])
+        )
 
 
 def _row(message_id, user_id, puzzle_date, is_perfect, time_seconds, accuracy=100, number=1):
@@ -693,6 +780,38 @@ class TestDbMixin:
         assert len(rows) == 1
         assert rows[0].channel_id == '201'
 
+    def test_minigame_player_link_crud_and_unique_name(self, db):
+        db.set_minigame_player_link(
+            100, 'queens', 300, 'Robert Kocharyan',
+            normalize_queens_name('Robert Kocharyan'),
+            'https://www.linkedin.com/in/robert/', 1.0, 999)
+        row = db.get_minigame_player_link(100, 'queens', 300)
+        assert row.external_name == 'Robert Kocharyan'
+        assert row.external_url == 'https://www.linkedin.com/in/robert/'
+
+        by_name = db.get_minigame_player_link_by_name(
+            100, 'queens', normalize_queens_name('  robert   kocharyan '))
+        assert by_name.user_id == '300'
+
+        with pytest.raises(sqlite3.IntegrityError):
+            db.set_minigame_player_link(
+                100, 'queens', 301, 'Robert   Kocharyan',
+                normalize_queens_name('Robert   Kocharyan'),
+                None, 2.0, 999)
+
+    def test_minigame_rating_snapshot_is_game_keyed(self, db):
+        states = [
+            RatingState('300', 1210.5, 2, 1210.5, 5.0),
+            RatingState('301', 1190.0, 2, 1200.0, -5.0),
+        ]
+        db.replace_minigame_ratings(100, 'queens', states, 12.0)
+        db.replace_minigame_ratings(100, 'akari', [RatingState('300', 1500, 1, 1500, 0)], 13.0)
+
+        queens = db.get_minigame_ratings(100, 'queens')
+        assert [row.user_id for row in queens] == ['300', '301']
+        assert db.get_minigame_rating(100, 'queens', 300).rating == 1210.5
+        assert db.get_minigame_rating(100, 'akari', 300).rating == 1500
+
 
 class _FakeGuild:
     def __init__(self, guild_id, members=None):
@@ -737,6 +856,84 @@ class _FakeMessage:
 
     async def reply(self, *args, **kwargs):
         self.replies.append({'args': args, 'kwargs': kwargs})
+
+
+class TestQueensImport:
+    def test_importer_must_be_linked(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        guild = _FakeGuild(100, members=[
+            _FakeDiscordMember(300, 'ali', 'Ali'),
+            _FakeDiscordMember(301, 'robert', 'Robert'),
+        ])
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=_FakeDiscordMember(301, 'robert', 'Robert'),
+            channel=_FakeChannel(200),
+            message=SimpleNamespace(id=555),
+        )
+        content = (
+            'Ali Farhat\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:04\n'
+        )
+
+        cog = Minigames(bot=None)
+        with pytest.raises(MinigameCogError, match='Register the importer'):
+            cog._make_queens_import_preview(ctx, '2026-06-08', content)
+
+    def test_preview_resolves_linked_names_and_you_then_saves_ratings(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.set_minigame_player_link(
+            100, 'queens', 300, 'Ali Farhat',
+            normalize_queens_name('Ali Farhat'), None, 1.0, 999)
+        db.set_minigame_player_link(
+            100, 'queens', 301, 'Robert Kocharyan',
+            normalize_queens_name('Robert Kocharyan'),
+            'https://www.linkedin.com/in/robert/', 1.0, 999)
+
+        guild = _FakeGuild(100, members=[
+            _FakeDiscordMember(300, 'ali', 'Ali'),
+            _FakeDiscordMember(301, 'robert', 'Robert'),
+        ])
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=_FakeDiscordMember(301, 'robert', 'Robert'),
+            channel=_FakeChannel(200),
+            message=SimpleNamespace(id=555),
+        )
+        content = (
+            'Ali Farhat\n'
+            'Ali Farhat\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:04\n'
+            'You\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:06\n'
+            'Unknown Person\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:07\n'
+        )
+
+        cog = Minigames(bot=None)
+        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
+
+        assert preview.puzzle_number == 20260608
+        assert [entry.user_id for entry in preview.resolved] == ['300', '301']
+        assert preview.unresolved == ['Unknown Person']
+        assert 'Robert Kocharyan' in cog._format_queens_import_preview(ctx, preview)
+
+        saved = cog._save_queens_import(ctx, preview)
+
+        assert saved == 2
+        rows = db.get_minigame_results_for_guild(100, 'queens')
+        assert sorted((row.user_id, row.time_seconds) for row in rows) == [
+            ('300', 4),
+            ('301', 6),
+        ]
+        ratings = db.get_minigame_ratings(100, 'queens')
+        assert [row.user_id for row in ratings] == ['300', '301']
+        assert ratings[0].rating > ratings[1].rating
 
 
 class TestCogIngest:
@@ -2835,4 +3032,3 @@ class TestExtractAkariFiltersInactive:
     def test_unknown_flag_passes_through(self):
         remaining, _decay, _ex, _inc, _inactive = self._run(('+inactive', 'foo'))
         assert remaining == ['foo']
-

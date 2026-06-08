@@ -21,7 +21,7 @@ from tle.cogs._starboard_helpers import _parse_jump_url
 
 logger = logging.getLogger(__name__)
 
-_KNOWN_FEATURES = ['starboard_leaderboard', 'akari', 'guessgame', 'migration_ops']
+_KNOWN_FEATURES = ['starboard_leaderboard', 'akari', 'guessgame', 'queens', 'migration_ops']
 
 RESTART = 42
 

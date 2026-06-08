@@ -434,6 +434,41 @@ class TestUpgrade126:
         assert {r.user_id for r in rows} == {'999'}
 
 
+class TestUpgrade130:
+    def test_creates_generic_minigame_tables_and_copies_akari_ratings(self, db):
+        from tle.util.db.user_db_upgrades import (
+            upgrade_1_24_0, upgrade_1_25_0, upgrade_1_30_0,
+        )
+        upgrade_1_24_0(db)
+        upgrade_1_25_0(db)
+        db.execute(
+            "INSERT INTO akari_rating (guild_id, user_id, rating, games, peak, "
+            "last_delta, skip_streak, last_puzzle, updated_at) "
+            "VALUES ('1', '9', 1300, 2, 1310, -1.5, 4, 500, 123.0)")
+
+        upgrade_1_30_0(db)
+
+        db.execute('SELECT guild_id, game, user_id, external_name, '
+                   'normalized_name, external_url, linked_at, linked_by '
+                   'FROM minigame_player_link').fetchall()
+        row = db.execute(
+            'SELECT guild_id, game, user_id, rating, games, peak, last_delta, '
+            'skip_streak, last_puzzle, updated_at FROM minigame_rating').fetchone()
+        assert row.guild_id == '1'
+        assert row.game == 'akari'
+        assert row.user_id == '9'
+        assert row.rating == 1300
+        assert row.skip_streak == 4
+        assert row.last_puzzle == 500
+
+    def test_idempotent_without_akari_rating_table(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_30_0
+        upgrade_1_30_0(db)
+        upgrade_1_30_0(db)
+        db.execute('SELECT * FROM minigame_player_link').fetchall()
+        db.execute('SELECT * FROM minigame_rating').fetchall()
+
+
 class TestUpgrade127:
     def test_creates_ban_table(self, db):
         from tle.util.db.user_db_upgrades import upgrade_1_27_0
@@ -476,6 +511,12 @@ class TestFreshDbSchema:
                               'FROM akari_rating').fetchall()
             conn.conn.execute('SELECT guild_id, user_id, banned_at, banned_by, '
                               'reason FROM akari_ban').fetchall()
+            conn.conn.execute('SELECT guild_id, game, user_id, external_name, '
+                              'normalized_name, external_url, linked_at, '
+                              'linked_by FROM minigame_player_link').fetchall()
+            conn.conn.execute('SELECT guild_id, game, user_id, rating, games, '
+                              'peak, last_delta, skip_streak, last_puzzle, '
+                              'updated_at FROM minigame_rating').fetchall()
             # And the legacy table must NOT be created by the fresh path.
             legacy = conn.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "

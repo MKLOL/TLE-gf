@@ -309,6 +309,132 @@ class MinigameDbMixin:
         self.conn.commit()
         return live_rc + imported_rc
 
+    # ── Generic minigame identity links ───────────────────────────────
+
+    def set_minigame_player_link(self, guild_id, game, user_id, external_name,
+                                 normalized_name, external_url, linked_at,
+                                 linked_by):
+        """Link a Discord user to an external game account/name.
+
+        ``normalized_name`` is unique per ``(guild, game)`` so a pasted
+        leaderboard name resolves to exactly one Discord user.  Callers should
+        normalize consistently before passing the value in.
+        """
+        self.conn.execute(
+            '''
+            INSERT INTO minigame_player_link (
+                guild_id, game, user_id, external_name, normalized_name,
+                external_url, linked_at, linked_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, game, user_id) DO UPDATE SET
+                external_name = excluded.external_name,
+                normalized_name = excluded.normalized_name,
+                external_url = excluded.external_url,
+                linked_at = excluded.linked_at,
+                linked_by = excluded.linked_by
+            ''',
+            (
+                str(guild_id), game, str(user_id), str(external_name),
+                str(normalized_name), external_url, float(linked_at),
+                str(linked_by),
+            )
+        )
+        self.conn.commit()
+
+    def get_minigame_player_link(self, guild_id, game, user_id):
+        return self.conn.execute(
+            '''
+            SELECT guild_id, game, user_id, external_name, normalized_name,
+                   external_url, linked_at, linked_by
+            FROM minigame_player_link
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).fetchone()
+
+    def get_minigame_player_link_by_name(self, guild_id, game, normalized_name):
+        return self.conn.execute(
+            '''
+            SELECT guild_id, game, user_id, external_name, normalized_name,
+                   external_url, linked_at, linked_by
+            FROM minigame_player_link
+            WHERE guild_id = ? AND game = ? AND normalized_name = ?
+            ''',
+            (str(guild_id), game, str(normalized_name))
+        ).fetchone()
+
+    def get_minigame_player_links(self, guild_id, game):
+        return self.conn.execute(
+            '''
+            SELECT guild_id, game, user_id, external_name, normalized_name,
+                   external_url, linked_at, linked_by
+            FROM minigame_player_link
+            WHERE guild_id = ? AND game = ?
+            ORDER BY normalized_name ASC
+            ''',
+            (str(guild_id), game)
+        ).fetchall()
+
+    def delete_minigame_player_link(self, guild_id, game, user_id):
+        rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_player_link
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    # ── Generic rating snapshots ─────────────────────────────────────
+
+    def replace_minigame_ratings(self, guild_id, game, states, updated_at):
+        """Atomically replace a guild/game's cached rating snapshot."""
+        guild_id = str(guild_id)
+        rows = [
+            (guild_id, game, str(state.user_id), float(state.rating),
+             int(state.games), float(state.peak), float(state.last_delta),
+             int(state.skip_streak), int(state.last_puzzle), float(updated_at))
+            for state in states
+        ]
+        with self.conn:
+            self.conn.execute(
+                'DELETE FROM minigame_rating WHERE guild_id = ? AND game = ?',
+                (guild_id, game))
+            self.conn.executemany(
+                '''
+                INSERT INTO minigame_rating
+                    (guild_id, game, user_id, rating, games, peak, last_delta,
+                     skip_streak, last_puzzle, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                rows
+            )
+        return len(rows)
+
+    def get_minigame_ratings(self, guild_id, game):
+        return self.conn.execute(
+            '''
+            SELECT user_id, rating, games, peak, last_delta, skip_streak,
+                   last_puzzle, updated_at
+            FROM minigame_rating
+            WHERE guild_id = ? AND game = ?
+            ORDER BY rating DESC, games DESC, user_id ASC
+            ''',
+            (str(guild_id), game)
+        ).fetchall()
+
+    def get_minigame_rating(self, guild_id, game, user_id):
+        return self.conn.execute(
+            '''
+            SELECT user_id, rating, games, peak, last_delta, skip_streak,
+                   last_puzzle, updated_at
+            FROM minigame_rating
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).fetchone()
+
     # ── Akari rating: registration ───────────────────────────────────
     #
     # Default opt-in: everyone with any Akari result is registered (visible in
@@ -469,6 +595,9 @@ class MinigameDbMixin:
         for display.  Returns the number of rows written.
         """
         guild_id = str(guild_id)
+        states = list(states)
+        count = self.replace_minigame_ratings(
+            guild_id, 'akari', states, updated_at)
         rows = [
             (guild_id, str(state.user_id), float(state.rating), int(state.games),
              float(state.peak), float(state.last_delta), int(state.skip_streak),
@@ -487,28 +616,11 @@ class MinigameDbMixin:
                 ''',
                 rows
             )
-        return len(rows)
+        return count
 
     def get_akari_ratings(self, guild_id):
         """All rated users for a guild, strongest first."""
-        return self.conn.execute(
-            '''
-            SELECT user_id, rating, games, peak, last_delta, skip_streak,
-                   last_puzzle, updated_at
-            FROM akari_rating
-            WHERE guild_id = ?
-            ORDER BY rating DESC, games DESC, user_id ASC
-            ''',
-            (str(guild_id),)
-        ).fetchall()
+        return self.get_minigame_ratings(guild_id, 'akari')
 
     def get_akari_rating(self, guild_id, user_id):
-        return self.conn.execute(
-            '''
-            SELECT user_id, rating, games, peak, last_delta, skip_streak,
-                   last_puzzle, updated_at
-            FROM akari_rating
-            WHERE guild_id = ? AND user_id = ?
-            ''',
-            (str(guild_id), str(user_id))
-        ).fetchone()
+        return self.get_minigame_rating(guild_id, 'akari', user_id)

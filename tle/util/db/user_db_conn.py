@@ -360,6 +360,43 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             CREATE INDEX IF NOT EXISTS idx_minigame_raw_message_guild
                 ON minigame_raw_message (guild_id)
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_player_link (
+                guild_id        TEXT NOT NULL,
+                game            TEXT NOT NULL,
+                user_id         TEXT NOT NULL,
+                external_name   TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                external_url    TEXT,
+                linked_at       REAL NOT NULL,
+                linked_by       TEXT NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id),
+                UNIQUE (guild_id, game, normalized_name)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_minigame_player_link_lookup
+                ON minigame_player_link (guild_id, game, normalized_name)
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_rating (
+                guild_id    TEXT NOT NULL,
+                game        TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                rating      REAL NOT NULL,
+                games       INTEGER NOT NULL DEFAULT 0,
+                peak        REAL NOT NULL,
+                last_delta  REAL NOT NULL DEFAULT 0,
+                skip_streak INTEGER NOT NULL DEFAULT 0,
+                last_puzzle INTEGER NOT NULL DEFAULT 0,
+                updated_at  REAL NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_minigame_rating_guild
+                ON minigame_rating (guild_id, game, rating DESC)
+        ''')
         # Akari ratings (registrants + rebuildable rating snapshot).
         # Registration is akari-specific — guessgame doesn't have a rating
         # system, so the opt-in roster has no reason to be game-keyed.

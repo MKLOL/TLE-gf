@@ -72,6 +72,8 @@ class GameDef:
     missing_is_loss: bool = False  # if True, missing puzzle = automatic loss in VS
     missing_result: object = None  # synthetic result for missing puzzles (used with score_fn)
     scoring_variants: Dict[str, ScoringDef] = field(default_factory=dict)
+    manual_ingest_only: bool = False
+    rating_rank_fn: Optional[Callable] = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────

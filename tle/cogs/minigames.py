@@ -1,8 +1,10 @@
 import asyncio
 import datetime as dt
+import hashlib
 import html
 import io
 import logging
+import re
 import time
 from collections import namedtuple
 from typing import Optional
@@ -31,6 +33,10 @@ from tle.cogs._minigame_akari import (
     AKARI_GAME, expected_puzzle_number, looks_like_non_pro_akari, puzzle_date_for,
 )
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
+from tle.cogs._minigame_queens import (
+    QUEENS_GAME, normalize_queens_name, parse_queens_leaderboard,
+    parse_queens_time, queens_status_flags,
+)
 from tle.cogs._minigame_stats import (
     plot_akari_performance, plot_akari_rating,
     plot_akari_stats, plot_guessgame_stats,
@@ -42,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 _IMPORT_BATCH_SIZE = 500
 _IMPORT_RATE_DELAY = 0.5
+_QUEENS_HISTORY_PER_PAGE = 15
 _AKARI_IMAGE_MAX_ROWS = 40
 _AKARI_IMAGE_WIDTH = 900
 _AKARI_IMAGE_MARGIN = 20
@@ -64,6 +71,14 @@ _AKARI_PUZZLE_DELTA_COLS = (54, 316, 230, 90, 90, 80)
 # the day's delta (contest + transfer share).  Built from a single full-history
 # replay so a stats request only costs one ``compute_ratings`` pass.
 _PuzzlePlayerInfo = namedtuple('_PuzzlePlayerInfo', 'pre_rating delta')
+_QueensResolvedEntry = namedtuple(
+    '_QueensResolvedEntry',
+    'user_id linkedin_name time_seconds no_hints no_mistakes',
+)
+_QueensImportPreview = namedtuple(
+    '_QueensImportPreview',
+    'puzzle_date puzzle_number resolved unresolved raw_content',
+)
 _AKARI_IMAGE_FONTS = [
     'Noto Sans',
     'Noto Sans CJK JP',
@@ -81,6 +96,7 @@ _DISCORD_GRAY = (.212, .244, .247)
 _TABLE_ROW_COLORS = ((0.95, 0.95, 0.95), (0.9, 0.9, 0.9))
 _BLACK = (0, 0, 0)
 _SMOKE_WHITE = (250, 250, 250)
+_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 
 
 class MinigameCogError(commands.CommandError):
@@ -206,6 +222,44 @@ def _safe_cf_handle(guild, user_id):
         return '-'
     handle = cf_common.user_db.get_handle(user_id, guild.id)
     return handle or '-'
+
+
+def _parse_queens_date(date_text):
+    try:
+        return dt.date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise MinigameCogError(
+            f'Could not parse date `{date_text}`. Use `YYYY-MM-DD`.') from exc
+
+
+def _queens_puzzle_number_for_date(puzzle_date):
+    return int(puzzle_date.strftime('%Y%m%d'))
+
+
+def _queens_result_message_id(guild_id, puzzle_number, user_id):
+    raw = f'{guild_id}:queens:{puzzle_number}:{user_id}'.encode('utf-8')
+    digest = hashlib.blake2b(raw, digest_size=8).digest()
+    return str(int.from_bytes(digest, 'big') & ((1 << 63) - 1))
+
+
+def _split_queens_link_text(text):
+    urls = _URL_RE.findall(text or '')
+    external_url = urls[0] if urls else None
+    name = _URL_RE.sub('', text or '').strip()
+    name = ' '.join(name.split())
+    if not name:
+        raise MinigameCogError('A LinkedIn display name is required.')
+    return name, external_url
+
+
+def _format_queens_result(entry):
+    badges = []
+    if entry.no_hints:
+        badges.append('no hints')
+    if entry.no_mistakes:
+        badges.append('no mistakes')
+    suffix = f' ({", ".join(badges)})' if badges else ''
+    return f'{entry.linkedin_name} — {format_duration(entry.time_seconds)}{suffix}'
 
 
 def _legend_name_for(guild, member):
@@ -558,26 +612,29 @@ class Minigames(commands.Cog):
     GAMES = {
         'akari': AKARI_GAME,
         'guessgame': GUESSGAME_GAME,
+        'queens': QUEENS_GAME,
     }
 
     def __init__(self, bot):
         self.bot = bot
         self._import_tasks = {}   # (guild_id, game_name) -> asyncio.Task
         self._import_status = {}  # (guild_id, game_name) -> dict
+        self._queens_pending_imports = {}  # (guild_id, user_id) -> _QueensImportPreview
 
     async def cog_load(self):
-        # ;akari is the canonical top-level group; mirror it under ;mg so the
-        # legacy ;mg akari … path keeps working.  Same object in both
-        # all_commands dicts → identical callback dispatch, no parent mutation.
+        # ;akari and ;queens are canonical top-level groups; mirror them under
+        # ;mg so the nested command paths keep working. Same object in both
+        # all_commands dicts -> identical callback dispatch, no parent mutation.
         # Defensive guard: the test harness stubs commands.group, so the
         # group objects don't expose all_commands/get_command — skip in that case.
         if not hasattr(self.minigames, 'all_commands'):
             return
-        if not hasattr(self.akari, 'aliases'):
-            return
-        for key in (self.akari.name, *self.akari.aliases):
-            if self.minigames.all_commands.get(key) is None:
-                self.minigames.all_commands[key] = self.akari
+        for group in (self.akari, self.queens):
+            if not hasattr(group, 'aliases'):
+                continue
+            for key in (group.name, *group.aliases):
+                if self.minigames.all_commands.get(key) is None:
+                    self.minigames.all_commands[key] = group
 
     async def cog_unload(self):
         tasks = list(self._import_tasks.values())
@@ -599,6 +656,8 @@ class Minigames(commands.Cog):
     def _game_for_channel(self, message):
         """Return the GameDef whose configured channel matches, or None."""
         for game in self.GAMES.values():
+            if game.manual_ingest_only:
+                continue
             if not self._is_enabled(message.guild.id, game.feature_flag):
                 continue
             channel_id = self._get_channel(message.guild.id, game.name)
@@ -651,18 +710,33 @@ class Minigames(commands.Cog):
         rating failure must not break ingestion.
         """
         try:
-            rows = cf_common.user_db.get_minigame_results_for_guild(
-                guild_id, AKARI_GAME.name)
-            current_puzzle = expected_puzzle_number(dt.date.today())
-            max_puzzle = current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD
-            states = compute_ratings(
-                rows, max_puzzle=max_puzzle,
-                current_puzzle_number=current_puzzle)
-            cf_common.user_db.replace_akari_ratings(
-                guild_id, states.values(), time.time())
+            self._recompute_minigame_ratings(guild_id, AKARI_GAME)
         except Exception:
             logger.error('Failed to recompute Akari ratings for guild %s',
                          guild_id, exc_info=True)
+
+    def _recompute_minigame_ratings(self, guild_id, game):
+        try:
+            rows = cf_common.user_db.get_minigame_results_for_guild(
+                guild_id, game.name)
+            kwargs = {}
+            if game.name == AKARI_GAME.name:
+                current_puzzle = expected_puzzle_number(dt.date.today())
+                kwargs['max_puzzle'] = (
+                    current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD)
+                kwargs['current_puzzle_number'] = current_puzzle
+            if game.rating_rank_fn is not None:
+                kwargs['rank_fn'] = game.rating_rank_fn
+            states = compute_ratings(rows, **kwargs)
+            if game.name == AKARI_GAME.name:
+                cf_common.user_db.replace_akari_ratings(
+                    guild_id, states.values(), time.time())
+            else:
+                cf_common.user_db.replace_minigame_ratings(
+                    guild_id, game.name, states.values(), time.time())
+        except Exception:
+            logger.error('Failed to recompute %s ratings for guild %s',
+                         game.name, guild_id, exc_info=True)
 
     @staticmethod
     def _active_ranking_rows(rows, *, include_inactive=False):
@@ -687,6 +761,134 @@ class Minigames(commands.Cog):
             row for row in rows
             if -lookahead <= current - int(row.last_puzzle) <= cutoff
         ]
+
+    # ── Queens helpers ─────────────────────────────────────────────────
+
+    def _cmd_queens_register_link(self, ctx, member, linkedin_text):
+        name, external_url = _split_queens_link_text(linkedin_text)
+        normalized = normalize_queens_name(name)
+        existing = cf_common.user_db.get_minigame_player_link_by_name(
+            ctx.guild.id, QUEENS_GAME.name, normalized)
+        if existing is not None and str(existing.user_id) != str(member.id):
+            raise MinigameCogError(
+                f'LinkedIn name `{name}` is already linked to '
+                f'{_safe_user_name(ctx.guild, existing.user_id)}.')
+        cf_common.user_db.set_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id, name, normalized,
+            external_url, time.time(), ctx.author.id)
+
+    def _resolve_queens_leaderboard(self, ctx, leaderboard):
+        entries = parse_queens_leaderboard(leaderboard)
+        if not entries:
+            raise MinigameCogError('No LinkedIn Queens leaderboard rows found.')
+
+        importer_link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, ctx.author.id)
+        if importer_link is None:
+            raise MinigameCogError(
+                'Register the importer with `;queens link` before importing '
+                'LinkedIn Queens leaderboard results.')
+        resolved = []
+        unresolved = []
+        seen_users = set()
+
+        for entry in entries:
+            normalized = normalize_queens_name(entry.linkedin_name)
+            if normalized == 'you':
+                link = importer_link
+                if link is None:
+                    unresolved.append('You')
+                    continue
+            else:
+                link = cf_common.user_db.get_minigame_player_link_by_name(
+                    ctx.guild.id, QUEENS_GAME.name, normalized)
+                if link is None:
+                    unresolved.append(entry.linkedin_name)
+                    continue
+
+            if link.user_id in seen_users:
+                continue
+            seen_users.add(link.user_id)
+            resolved.append(_QueensResolvedEntry(
+                user_id=link.user_id,
+                linkedin_name=link.external_name,
+                time_seconds=entry.time_seconds,
+                no_hints=entry.no_hints,
+                no_mistakes=entry.no_mistakes,
+            ))
+
+        return resolved, unresolved
+
+    def _make_queens_import_preview(self, ctx, date_text, leaderboard):
+        puzzle_date = _parse_queens_date(date_text)
+        puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
+        resolved, unresolved = self._resolve_queens_leaderboard(ctx, leaderboard)
+        if not resolved:
+            raise MinigameCogError(
+                'No leaderboard rows matched registered Queens players.')
+        return _QueensImportPreview(
+            puzzle_date=puzzle_date,
+            puzzle_number=puzzle_number,
+            resolved=resolved,
+            unresolved=unresolved,
+            raw_content=leaderboard,
+        )
+
+    def _format_queens_import_preview(self, ctx, preview):
+        lines = [
+            f'{QUEENS_GAME.display_name} import preview for '
+            f'{preview.puzzle_date.isoformat()}',
+            '',
+            'Resolved:',
+        ]
+        for index, entry in enumerate(
+                sorted(preview.resolved, key=lambda e: e.time_seconds), start=1):
+            lines.append(
+                f'{index}. {_safe_user_name(ctx.guild, entry.user_id)} — '
+                f'{_format_queens_result(entry)}')
+        if preview.unresolved:
+            lines += ['', 'Skipped unresolved LinkedIn names:']
+            for name in preview.unresolved[:20]:
+                lines.append(f'- {name}')
+            if len(preview.unresolved) > 20:
+                lines.append(f'- ... and {len(preview.unresolved) - 20} more')
+        lines += ['', 'Run `;queens import confirm` to save this preview.']
+        return '\n'.join(lines)
+
+    def _save_queens_import(self, ctx, preview):
+        for entry in preview.resolved:
+            cf_common.user_db.delete_minigame_result_for_user_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, entry.user_id,
+                preview.puzzle_number)
+            cf_common.user_db.save_minigame_result(
+                _queens_result_message_id(
+                    ctx.guild.id, preview.puzzle_number, entry.user_id),
+                ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, entry.user_id,
+                preview.puzzle_number, preview.puzzle_date.isoformat(),
+                100 if entry.no_mistakes else 0,
+                entry.time_seconds,
+                entry.no_hints and entry.no_mistakes,
+                preview.raw_content,
+            )
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        return len(preview.resolved)
+
+    async def _cmd_queens_ratings(self, ctx):
+        rows = cf_common.user_db.get_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME.name)
+        if not rows:
+            raise MinigameCogError(
+                f'No {QUEENS_GAME.display_name} ratings yet.')
+        lines = []
+        for index, row in enumerate(rows[:_QUEENS_HISTORY_PER_PAGE], start=1):
+            link = cf_common.user_db.get_minigame_player_link(
+                ctx.guild.id, QUEENS_GAME.name, row.user_id)
+            linked_name = link.external_name if link is not None else 'unlinked'
+            lines.append(
+                f'**#{index}** {_safe_user_name(ctx.guild, row.user_id)} '
+                f'({linked_name}) — **{round(row.rating)}** '
+                f'({row.games} games)')
+        await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
 
     # ── Listeners ───────────────────────────────────────────────────────
 
@@ -2458,6 +2660,167 @@ class Minigames(commands.Cog):
         await self._cmd_akari_ratings_debug(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive)
+
+    # ── Queens commands: moderator-gated while the workflow settles ─────
+
+    @commands.group(name='queens', aliases=['linkedinqueens'],
+                    brief='LinkedIn Queens commands',
+                    invoke_without_command=True)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens(self, ctx):
+        await ctx.send_help(ctx.command)
+
+    @queens.command(name='register',
+                    brief='Link a Discord user to a LinkedIn Queens name',
+                    usage='@user LinkedIn Name [profile_url]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_register(self, ctx, member: CaseInsensitiveMember, *,
+                              linkedin: str):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        self._cmd_queens_register_link(ctx, member, linkedin)
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        url = f'\nProfile: {link.external_url}' if link.external_url else ''
+        await ctx.send(embed=discord_common.embed_success(
+            f'Linked `{_safe_member_name(member)}` to '
+            f'`{link.external_name}` for {QUEENS_GAME.display_name}.{url}'))
+
+    @queens.command(name='link',
+                    brief='Alias for register',
+                    usage='@user LinkedIn Name [profile_url]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_link(self, ctx, member: CaseInsensitiveMember, *,
+                          linkedin: str):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        self._cmd_queens_register_link(ctx, member, linkedin)
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        url = f'\nProfile: {link.external_url}' if link.external_url else ''
+        await ctx.send(embed=discord_common.embed_success(
+            f'Linked `{_safe_member_name(member)}` to '
+            f'`{link.external_name}` for {QUEENS_GAME.display_name}.{url}'))
+
+    @queens.command(name='unregister',
+                    brief='Remove a user LinkedIn Queens link',
+                    usage='@user')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_unregister(self, ctx, member: CaseInsensitiveMember):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        removed = cf_common.user_db.delete_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        if not removed:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not registered for '
+                f'{QUEENS_GAME.display_name}.')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed {QUEENS_GAME.display_name} link for '
+            f'`{_safe_member_name(member)}`.'))
+
+    @queens.command(name='links', brief='List registered LinkedIn Queens names')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_links(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        rows = cf_common.user_db.get_minigame_player_links(
+            ctx.guild.id, QUEENS_GAME.name)
+        if not rows:
+            raise MinigameCogError(
+                f'No {QUEENS_GAME.display_name} links registered.')
+        lines = []
+        for row in rows:
+            suffix = f' <{row.external_url}>' if row.external_url else ''
+            lines.append(
+                f'- {_safe_user_name(ctx.guild, row.user_id)}: '
+                f'`{row.external_name}`{suffix}')
+        pages = []
+        for chunk in paginator.chunkify(lines, _QUEENS_HISTORY_PER_PAGE):
+            pages.append((None, discord.Embed(
+                title=f'{QUEENS_GAME.display_name} links',
+                description='\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
+
+    @queens.group(name='import', brief='Preview a pasted Queens leaderboard',
+                  usage='YYYY-MM-DD <pasted leaderboard>',
+                  invoke_without_command=True)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_import(self, ctx, puzzle_date: str = None, *,
+                            leaderboard: str = None):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        if puzzle_date is None or leaderboard is None:
+            raise MinigameCogError(
+                'Usage: `;queens import YYYY-MM-DD <pasted leaderboard>`.')
+        preview = self._make_queens_import_preview(ctx, puzzle_date, leaderboard)
+        self._queens_pending_imports[(ctx.guild.id, ctx.author.id)] = preview
+        await ctx.send(embed=discord_common.embed_neutral(
+            self._format_queens_import_preview(ctx, preview)))
+
+    @queens_import.command(name='confirm',
+                           brief='Save the latest Queens import preview')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_import_confirm(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        key = (ctx.guild.id, ctx.author.id)
+        preview = self._queens_pending_imports.pop(key, None)
+        if preview is None:
+            raise MinigameCogError(
+                'No pending Queens import preview. Run `;queens import` first.')
+        saved = self._save_queens_import(ctx, preview)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Saved {saved} {QUEENS_GAME.display_name} result(s) for '
+            f'{preview.puzzle_date.isoformat()}.'))
+
+    @queens.command(name='add',
+                    brief='Manually add a Queens result',
+                    usage='@user YYYY-MM-DD time [status...]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_add(self, ctx, member: CaseInsensitiveMember,
+                         puzzle_date: str, time_text: str, *,
+                         status: str = 'No hints & no mistakes'):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        linked = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        if linked is None:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not registered for '
+                f'{QUEENS_GAME.display_name}.')
+        parsed_date = _parse_queens_date(puzzle_date)
+        puzzle_number = _queens_puzzle_number_for_date(parsed_date)
+        no_hints, no_mistakes, _status_text = queens_status_flags(status)
+        time_seconds = parse_queens_time(time_text)
+        cf_common.user_db.delete_minigame_result_for_user_puzzle(
+            ctx.guild.id, QUEENS_GAME.name, member.id, puzzle_number)
+        cf_common.user_db.save_minigame_result(
+            _queens_result_message_id(ctx.guild.id, puzzle_number, member.id),
+            ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, member.id,
+            puzzle_number, parsed_date.isoformat(),
+            100 if no_mistakes else 0, time_seconds, no_hints and no_mistakes,
+            f'{linked.external_name}\n{status}\n{time_text}',
+        )
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Added {QUEENS_GAME.display_name} result for '
+            f'`{_safe_member_name(member)}` on {parsed_date.isoformat()}: '
+            f'**{format_duration(time_seconds)}**.'))
+
+    @queens.command(name='remove', brief='Remove a Queens result',
+                    usage='@user YYYY-MM-DD')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_remove(self, ctx, member: CaseInsensitiveMember,
+                            puzzle_date: str):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        parsed_date = _parse_queens_date(puzzle_date)
+        await self._cmd_remove(
+            ctx, QUEENS_GAME, member, _queens_puzzle_number_for_date(parsed_date))
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+
+    @queens.command(name='ratings', brief='Show Queens rating leaderboard')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_ratings(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        await self._cmd_queens_ratings(ctx)
 
     # ── GuessGame commands: ;minigames guessgame … ──────────────────────
 

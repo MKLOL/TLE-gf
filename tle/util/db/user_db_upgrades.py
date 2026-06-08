@@ -707,3 +707,66 @@ def upgrade_1_29_0(db):
     ''')
     db.commit()
     logger.info('1.29.0: Upgrade complete')
+
+
+@registry.register('1.30.0', 'Generic minigame player links and ratings')
+def upgrade_1_30_0(db):
+    """Create generic minigame identity and rating tables.
+
+    Akari used a dedicated ``akari_rating`` snapshot because it was the only
+    rated minigame.  Queens needs the same cache shape, so ratings are now
+    keyed by game.  Existing Akari rows are copied into the generic table while
+    the old table remains available for compatibility during the transition.
+    """
+    logger.info('1.30.0: Creating generic minigame link/rating tables')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS minigame_player_link (
+            guild_id        TEXT NOT NULL,
+            game            TEXT NOT NULL,
+            user_id         TEXT NOT NULL,
+            external_name   TEXT NOT NULL,
+            normalized_name TEXT NOT NULL,
+            external_url    TEXT,
+            linked_at       REAL NOT NULL,
+            linked_by       TEXT NOT NULL,
+            PRIMARY KEY (guild_id, game, user_id),
+            UNIQUE (guild_id, game, normalized_name)
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_player_link_lookup
+            ON minigame_player_link (guild_id, game, normalized_name)
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS minigame_rating (
+            guild_id    TEXT NOT NULL,
+            game        TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            rating      REAL NOT NULL,
+            games       INTEGER NOT NULL DEFAULT 0,
+            peak        REAL NOT NULL,
+            last_delta  REAL NOT NULL DEFAULT 0,
+            skip_streak INTEGER NOT NULL DEFAULT 0,
+            last_puzzle INTEGER NOT NULL DEFAULT 0,
+            updated_at  REAL NOT NULL,
+            PRIMARY KEY (guild_id, game, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_rating_guild
+            ON minigame_rating (guild_id, game, rating DESC)
+    ''')
+    try:
+        copied = db.execute('''
+            INSERT OR IGNORE INTO minigame_rating
+                (guild_id, game, user_id, rating, games, peak, last_delta,
+                 skip_streak, last_puzzle, updated_at)
+            SELECT guild_id, 'akari', user_id, rating, games, peak, last_delta,
+                   skip_streak, last_puzzle, updated_at
+            FROM akari_rating
+        ''').rowcount
+        logger.info('1.30.0: Copied %s Akari rating row(s)', copied)
+    except Exception as e:
+        logger.debug('1.30.0: akari_rating copy skipped (%s)', e)
+    db.commit()
+    logger.info('1.30.0: Upgrade complete')
