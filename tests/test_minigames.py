@@ -2547,6 +2547,59 @@ class TestCogRating:
         assert by_user['999'].games == 1
         assert rows[0].user_id == '999'  # strongest first
 
+    def test_generic_minigame_ban_cannot_hide_akari_ratings(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        self._no_puzzle_filter(monkeypatch)
+        self._enable(db)
+        cog = Minigames(bot=None)
+        asyncio.run(cog.on_message(
+            self._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')))
+        asyncio.run(cog.on_message(
+            self._akari_msg(2, 888, '\U0001f3af 96% \U0001f553 1:00')))
+
+        db.ban_minigame_user(1, 'akari', 999, 1.0, 7, 'wrong table')
+        cog._recompute_akari_ratings(1)
+
+        assert {row.user_id for row in db.get_akari_ratings(1)} == {'999', '888'}
+
+    def test_generic_minigame_ban_cannot_hide_akari_vs_or_top(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        self._enable(db)
+        cog = Minigames(bot=object())
+        alice = _FakeDiscordMember(999, 'Alice')
+        bob = _FakeDiscordMember(888, 'Bob')
+        guild = _FakeGuild(1, members=[alice, bob])
+
+        db.save_minigame_result(
+            1, 1, 'akari', 10, alice.id, 445,
+            '2026-03-26', 100, 60, True, 'raw')
+        db.save_minigame_result(
+            2, 1, 'akari', 10, bob.id, 445,
+            '2026-03-26', 100, 90, True, 'raw')
+        db.ban_minigame_user(1, 'akari', alice.id, 1.0, 7, 'wrong table')
+
+        sent = {}
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent['embed'] = embed
+
+        ctx = SimpleNamespace(
+            guild=guild,
+            channel=_FakeChannel(10),
+            author=alice,
+            send=send,
+        )
+        asyncio.run(cog._cmd_vs(ctx, AKARI_GAME, alice, bob))
+        assert 'Puzzles: **1**' in sent['embed'].description
+
+        pages = []
+        monkeypatch.setattr(
+            minigames_module.paginator, 'paginate',
+            lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
+        asyncio.run(cog._cmd_top(ctx, AKARI_GAME))
+        assert '`Alice` — **1** wins' in pages[0][1].description
+
     def test_recompute_runs_after_admin_remove(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         self._no_puzzle_filter(monkeypatch)

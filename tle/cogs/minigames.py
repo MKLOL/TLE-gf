@@ -772,6 +772,10 @@ class Minigames(commands.Cog):
         }
 
     def _filter_minigame_banned_rows(self, guild_id, game, rows):
+        # Akari has its own ban/opt-out/rating tables; generic bans are for
+        # manual minigames such as Queens and must not affect legacy Akari data.
+        if game.name == AKARI_GAME.name:
+            return rows
         banned = self._minigame_banned_user_ids(guild_id, game)
         if not banned:
             return rows
