@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import html
 import io
+import json
 import logging
 import re
 import statistics
@@ -99,6 +100,7 @@ _TABLE_ROW_COLORS = ((0.95, 0.95, 0.95), (0.9, 0.9, 0.9))
 _BLACK = (0, 0, 0)
 _SMOKE_WHITE = (250, 250, 250)
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_QUEENS_CONNECTION_ACCOUNT_KEY = 'queens_connection_account'
 
 
 class MinigameCogError(commands.CommandError):
@@ -761,6 +763,90 @@ class Minigames(commands.Cog):
                 f'can register or unregister other users.')
         return member
 
+    @staticmethod
+    def _minigame_banned_user_ids(guild_id, game):
+        return {
+            str(row.user_id)
+            for row in cf_common.user_db.get_minigame_bans(guild_id, game.name)
+        }
+
+    def _filter_minigame_banned_rows(self, guild_id, game, rows):
+        banned = self._minigame_banned_user_ids(guild_id, game)
+        if not banned:
+            return rows
+        return [row for row in rows if str(row.user_id) not in banned]
+
+    @staticmethod
+    def _ensure_not_minigame_banned(guild_id, game, user_id, member_name):
+        if cf_common.user_db.is_minigame_banned(guild_id, game.name, user_id):
+            raise MinigameCogError(
+                f'`{member_name}` is banned from {game.display_name}.')
+
+    @staticmethod
+    def _get_queens_connection_account(guild_id):
+        raw = cf_common.user_db.get_guild_config(
+            guild_id, _QUEENS_CONNECTION_ACCOUNT_KEY)
+        if raw is None:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return {'name': raw, 'url': None}
+        name = data.get('name')
+        if not name:
+            return None
+        return {'name': name, 'url': data.get('url')}
+
+    @staticmethod
+    def _set_queens_connection_account(guild_id, name, url):
+        cf_common.user_db.set_guild_config(
+            guild_id,
+            _QUEENS_CONNECTION_ACCOUNT_KEY,
+            json.dumps({'name': name, 'url': url}, sort_keys=True),
+        )
+
+    @staticmethod
+    def _clear_queens_connection_account(guild_id):
+        cf_common.user_db.delete_guild_config(
+            guild_id, _QUEENS_CONNECTION_ACCOUNT_KEY)
+
+    def _queens_connection_instruction(self, guild_id):
+        account = self._get_queens_connection_account(guild_id)
+        if account is None:
+            return (
+                'Ask a moderator to set the LinkedIn account to connect with '
+                'using `;queens connection set LinkedIn Name [profile_url]`.'
+            )
+        if account.get('url'):
+            account_text = f'[{account["name"]}]({account["url"]})'
+        else:
+            account_text = f'`{account["name"]}`'
+        return (
+            f'In order to join the rating system, connect with {account_text} '
+            'on LinkedIn so your result appears on the leaderboard.'
+        )
+
+    async def _resolve_queens_registration_args(self, ctx, first, rest):
+        if first is None:
+            raise MinigameCogError(
+                'Usage: `;queens register LinkedIn Name [profile_url]`.')
+        first = str(first).strip()
+        rest = (rest or '').strip()
+        target = ctx.author
+        linkedin = first if not rest else f'{first} {rest}'
+
+        looks_like_target = (
+            first.startswith('<@')
+            or first.isdigit()
+        )
+        if looks_like_target:
+            if not rest:
+                raise MinigameCogError('A LinkedIn display name is required.')
+            target = await self._resolve_member(ctx, first)
+            target = self._resolve_registrar_target(ctx, target)
+            linkedin = rest
+        return target, linkedin
+
     # ── Rating ──────────────────────────────────────────────────────────
 
     def _recompute_akari_ratings(self, guild_id):
@@ -786,6 +872,7 @@ class Minigames(commands.Cog):
                 return
             rows = cf_common.user_db.get_minigame_results_for_guild(
                 guild_id, game.name)
+            rows = self._filter_minigame_banned_rows(guild_id, game, rows)
             kwargs = {}
             for name in (
                     'start_rating', 'damping', 'decay_base', 'decay_max',
@@ -839,6 +926,8 @@ class Minigames(commands.Cog):
     # ── Queens helpers ─────────────────────────────────────────────────
 
     def _cmd_queens_register_link(self, ctx, member, linkedin_text):
+        self._ensure_not_minigame_banned(
+            ctx.guild.id, QUEENS_GAME, member.id, _safe_member_name(member))
         name, external_url = _split_queens_link_text(linkedin_text)
         normalized = normalize_queens_name(name)
         existing = cf_common.user_db.get_minigame_player_link_by_name(
@@ -880,6 +969,9 @@ class Minigames(commands.Cog):
                     unresolved.append(entry.linkedin_name)
                     continue
 
+            if cf_common.user_db.is_minigame_banned(
+                    ctx.guild.id, QUEENS_GAME.name, link.user_id):
+                continue
             if link.user_id in seen_users:
                 continue
             seen_users.add(link.user_id)
@@ -974,9 +1066,16 @@ class Minigames(commands.Cog):
         rows = cf_common.user_db.get_minigame_results_for_guild(
             ctx.guild.id, QUEENS_GAME.name)
         dates = {_format_queens_date(row) for row in rows}
+        account = self._get_queens_connection_account(ctx.guild.id)
+        account_text = 'not set'
+        if account is not None:
+            account_text = account['name']
+            if account.get('url'):
+                account_text += f' <{account["url"]}>'
         lines = [
             f'feature: `{"enabled" if enabled else "disabled"}`',
             'ingest: manual leaderboard import',
+            f'connection account: {account_text}',
             f'linked players: **{len(links)}**',
             f'results: **{len(rows)}** across **{len(dates)}** date(s)',
         ]
@@ -1002,6 +1101,7 @@ class Minigames(commands.Cog):
 
         rows = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, QUEENS_GAME.name, member.id, dlo, dhi, plo, phi)
+        rows = self._filter_minigame_banned_rows(ctx.guild.id, QUEENS_GAME, rows)
         if not rows:
             raise MinigameCogError(
                 f'No {QUEENS_GAME.display_name} results found for '
@@ -1042,6 +1142,7 @@ class Minigames(commands.Cog):
 
         rows = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, QUEENS_GAME.name, member.id, dlo, dhi, plo, phi)
+        rows = self._filter_minigame_banned_rows(ctx.guild.id, QUEENS_GAME, rows)
         best = _queens_best_results_by_date(rows)
         if not best:
             raise MinigameCogError(
@@ -1510,6 +1611,8 @@ class Minigames(commands.Cog):
             ctx.guild.id, game.name, member1.id, dlo, dhi, plo, phi)
         rows2 = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member2.id, dlo, dhi, plo, phi)
+        rows1 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows1)
+        rows2 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows2)
         stats = compute_vs(
             rows1, rows2,
             score_fn=scoring.score_matchup,
@@ -1644,6 +1747,7 @@ class Minigames(commands.Cog):
 
         rows = cf_common.user_db.get_minigame_results_for_guild(
             ctx.guild.id, game.name, dlo, dhi, plo, phi)
+        rows = self._filter_minigame_banned_rows(ctx.guild.id, game, rows)
         winners = compute_top(
             rows,
             is_eligible=scoring.is_eligible_winner,
@@ -2846,12 +2950,11 @@ class Minigames(commands.Cog):
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive)
 
-    # ── Queens commands: moderator-gated while the workflow settles ─────
+    # ── Queens commands ─────────────────────────────────────────────────
 
-    @commands.group(name='queens', aliases=['linkedinqueens'],
+    @commands.group(name='queens', aliases=['queen', 'linkedinqueens'],
                     brief='LinkedIn Queens commands',
                     invoke_without_command=True)
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens(self, ctx):
         await ctx.send_help(ctx.command)
 
@@ -2862,49 +2965,69 @@ class Minigames(commands.Cog):
 
     @queens.command(name='register',
                     brief='Link a Discord user to a LinkedIn Queens name',
-                    usage='@user LinkedIn Name [profile_url]')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_register(self, ctx, member: CaseInsensitiveMember, *,
-                              linkedin: str):
+                    usage='LinkedIn Name [profile_url]')
+    async def queens_register(self, ctx, first: str = None, *,
+                              linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._cmd_queens_register_link(ctx, member, linkedin)
+        member, linkedin_text = await self._resolve_queens_registration_args(
+            ctx, first, linkedin)
+        self._cmd_queens_register_link(ctx, member, linkedin_text)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
         url = f'\nProfile: {link.external_url}' if link.external_url else ''
-        await ctx.send(embed=discord_common.embed_success(
-            f'Linked `{_safe_member_name(member)}` to '
-            f'`{link.external_name}` for {QUEENS_GAME.display_name}.{url}'))
+        who = (
+            'You are'
+            if member.id == ctx.author.id
+            else f'`{_safe_member_name(member)}` is'
+        )
+        await ctx.send(embed=discord_common.embed_success('\n'.join([
+            f'{who} registered for {QUEENS_GAME.display_name} as '
+            f'`{link.external_name}`.{url}',
+            self._queens_connection_instruction(ctx.guild.id),
+        ])))
 
     @queens.command(name='link',
                     brief='Alias for register',
-                    usage='@user LinkedIn Name [profile_url]')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_link(self, ctx, member: CaseInsensitiveMember, *,
-                          linkedin: str):
+                    usage='LinkedIn Name [profile_url]')
+    async def queens_link(self, ctx, first: str = None, *,
+                          linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._cmd_queens_register_link(ctx, member, linkedin)
+        member, linkedin_text = await self._resolve_queens_registration_args(
+            ctx, first, linkedin)
+        self._cmd_queens_register_link(ctx, member, linkedin_text)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
         url = f'\nProfile: {link.external_url}' if link.external_url else ''
-        await ctx.send(embed=discord_common.embed_success(
-            f'Linked `{_safe_member_name(member)}` to '
-            f'`{link.external_name}` for {QUEENS_GAME.display_name}.{url}'))
+        who = (
+            'You are'
+            if member.id == ctx.author.id
+            else f'`{_safe_member_name(member)}` is'
+        )
+        await ctx.send(embed=discord_common.embed_success('\n'.join([
+            f'{who} registered for {QUEENS_GAME.display_name} as '
+            f'`{link.external_name}`.{url}',
+            self._queens_connection_instruction(ctx.guild.id),
+        ])))
 
     @queens.command(name='unregister',
                     brief='Remove a user LinkedIn Queens link',
-                    usage='@user')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_unregister(self, ctx, member: CaseInsensitiveMember):
+                    usage='[@user]')
+    async def queens_unregister(self, ctx, member: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        if member is None:
+            target = ctx.author
+        else:
+            target = await self._resolve_member(ctx, member)
+            target = self._resolve_registrar_target(ctx, target)
         removed = cf_common.user_db.delete_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, member.id)
+            ctx.guild.id, QUEENS_GAME.name, target.id)
         if not removed:
             raise MinigameCogError(
-                f'`{_safe_member_name(member)}` is not registered for '
+                f'`{_safe_member_name(target)}` is not registered for '
                 f'{QUEENS_GAME.display_name}.')
         await ctx.send(embed=discord_common.embed_success(
             f'Removed {QUEENS_GAME.display_name} link for '
-            f'`{_safe_member_name(member)}`.'))
+            f'`{_safe_member_name(target)}`.'))
 
     @queens.command(name='links', brief='List registered LinkedIn Queens names')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
@@ -2925,6 +3048,105 @@ class Minigames(commands.Cog):
         for chunk in paginator.chunkify(lines, _QUEENS_HISTORY_PER_PAGE):
             pages.append((None, discord.Embed(
                 title=f'{QUEENS_GAME.display_name} links',
+                description='\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
+
+    @queens.group(name='connection', aliases=['account'],
+                  brief='Show or set the LinkedIn account players connect to',
+                  invoke_without_command=True)
+    async def queens_connection(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        account = self._get_queens_connection_account(ctx.guild.id)
+        if account is None:
+            raise MinigameCogError(
+                'No LinkedIn connection account configured yet.')
+        await ctx.send(embed=discord_common.embed_neutral(
+            self._queens_connection_instruction(ctx.guild.id)))
+
+    @queens_connection.command(name='set',
+                               brief='(Mod) Set the LinkedIn connection account',
+                               usage='LinkedIn Name [profile_url]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_connection_set(self, ctx, *, linkedin: str):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        name, external_url = _split_queens_link_text(linkedin)
+        self._set_queens_connection_account(ctx.guild.id, name, external_url)
+        await ctx.send(embed=discord_common.embed_success(
+            self._queens_connection_instruction(ctx.guild.id)))
+
+    @queens_connection.command(name='clear',
+                               brief='(Mod) Clear the LinkedIn connection account')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_connection_clear(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        self._clear_queens_connection_account(ctx.guild.id)
+        await ctx.send(embed=discord_common.embed_success(
+            'Cleared the LinkedIn Queens connection account.'))
+
+    @queens.command(name='ban',
+                    brief='(Mod) Block a user from Queens imports/ratings',
+                    usage='@user [reason...]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_ban(self, ctx, member: CaseInsensitiveMember, *,
+                         reason: str = None):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        added = cf_common.user_db.ban_minigame_user(
+            ctx.guild.id, QUEENS_GAME.name, member.id, time.time(),
+            ctx.author.id, reason)
+        if not added:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is already banned from '
+                f'{QUEENS_GAME.display_name}.')
+        cf_common.user_db.delete_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        lines = [
+            f'`{_safe_member_name(member)}` is now banned from '
+            f'{QUEENS_GAME.display_name}. They will be skipped by imports, '
+            'manual adds, and rating recomputes.',
+            'Their LinkedIn Queens registration was removed.',
+        ]
+        if reason:
+            lines.append(f'Reason: {reason}')
+        await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
+
+    @queens.command(name='unban',
+                    brief='(Mod) Lift a Queens ban',
+                    usage='@user')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_unban(self, ctx, member: CaseInsensitiveMember):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        removed = cf_common.user_db.unban_minigame_user(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        if not removed:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not banned.')
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'`{_safe_member_name(member)}` is no longer banned from '
+            f'{QUEENS_GAME.display_name}. They need to run '
+            '`;queens register LinkedIn Name` again.'))
+
+    @queens.command(name='bans',
+                    brief='(Mod) List Queens bans')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_bans(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        rows = cf_common.user_db.get_minigame_bans(
+            ctx.guild.id, QUEENS_GAME.name)
+        if not rows:
+            raise MinigameCogError(
+                f'No active {QUEENS_GAME.display_name} bans.')
+        lines = [_format_akari_ban_line(ctx.guild, row) for row in rows]
+        title = f'{QUEENS_GAME.display_name} bans ({len(rows)})'
+        pages = []
+        for chunk in paginator.chunkify(lines, _AKARI_HISTORY_PER_PAGE):
+            pages.append((None, discord.Embed(
+                title=title,
                 description='\n'.join(chunk),
                 color=discord_common.random_cf_color(),
             )))
@@ -3001,6 +3223,8 @@ class Minigames(commands.Cog):
             raise MinigameCogError(
                 f'`{_safe_member_name(member)}` is not registered for '
                 f'{QUEENS_GAME.display_name}.')
+        self._ensure_not_minigame_banned(
+            ctx.guild.id, QUEENS_GAME, member.id, _safe_member_name(member))
         parsed_date = _parse_queens_date(puzzle_date)
         parsed_number = _queens_puzzle_number_for_date(parsed_date)
         no_hints, no_mistakes, _status_text = queens_status_flags(status)

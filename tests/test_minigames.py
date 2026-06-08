@@ -145,6 +145,17 @@ class FakeMinigameDb(MinigameDbMixin):
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_ban (
+                guild_id   TEXT NOT NULL,
+                game       TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS akari_registrant (
                 guild_id      TEXT NOT NULL,
                 user_id       TEXT NOT NULL,
@@ -199,6 +210,14 @@ class FakeMinigameDb(MinigameDbMixin):
             (str(guild_id), key, value)
         )
         self.conn.commit()
+
+    def delete_guild_config(self, guild_id, key):
+        rc = self.conn.execute(
+            'DELETE FROM guild_config WHERE guild_id = ? AND key = ?',
+            (str(guild_id), key)
+        ).rowcount
+        self.conn.commit()
+        return rc
 
     def close(self):
         self.conn.close()
@@ -839,6 +858,20 @@ class TestDbMixin:
         assert db.get_minigame_rating(100, 'queens', 300).rating == 1210.5
         assert db.get_minigame_rating(100, 'akari', 300).rating == 1500
 
+    def test_minigame_ban_roundtrip(self, db):
+        assert db.is_minigame_banned(100, 'queens', 300) is False
+        assert db.ban_minigame_user(
+            100, 'queens', 300, 12.0, 999, 'spam') == 1
+        assert db.ban_minigame_user(
+            100, 'queens', 300, 13.0, 999, 'again') == 0
+        assert db.is_minigame_banned(100, 'queens', 300) is True
+        row = db.get_minigame_ban(100, 'queens', 300)
+        assert row.reason == 'spam'
+        rows = db.get_minigame_bans(100, 'queens')
+        assert [r.user_id for r in rows] == ['300']
+        assert db.unban_minigame_user(100, 'queens', 300) == 1
+        assert db.is_minigame_banned(100, 'queens', 300) is False
+
 
 class _FakeGuild:
     def __init__(self, guild_id, members=None):
@@ -865,10 +898,11 @@ class _FakeAuthor:
 
 
 class _FakeDiscordMember(_FakeAuthor):
-    def __init__(self, user_id, name, display_name=None, bot=False):
+    def __init__(self, user_id, name, display_name=None, bot=False, roles=None):
         super().__init__(user_id, bot=bot)
         self.name = name
         self.display_name = display_name or name
+        self.roles = roles or []
 
 
 class _FakeMessage:
@@ -1096,6 +1130,83 @@ class TestQueensCommands:
         assert streak.title == 'LinkedIn Queens Streak'
         assert '**2** consecutive clean day(s)' in streak.description
         assert 'Latest result: **2026-06-11**' in streak.description
+
+    def test_register_self_includes_connection_instruction(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+        cog._set_queens_connection_account(
+            100, 'Linked User', 'https://www.linkedin.com/in/linked/')
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, 'Alice', linkedin='LinkedIn'))
+
+        row = db.get_minigame_player_link(100, 'queens', alice.id)
+        assert row.external_name == 'Alice LinkedIn'
+        instruction = cog._queens_connection_instruction(100)
+        assert '[Linked User](https://www.linkedin.com/in/linked/)' in instruction
+
+    def test_ban_removes_link_and_excludes_queens_rating(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        guild = _FakeGuild(100, members=[alice, bob, mod])
+        ctx = self._make_ctx(guild, mod)
+        cog = Minigames(bot=None)
+
+        db.set_minigame_player_link(
+            100, 'queens', alice.id, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, mod.id)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
+        self._save_queens_result(db, 2, bob.id, '2026-06-08', 6)
+        cog._recompute_minigame_ratings(100, QUEENS_GAME)
+        assert {row.user_id for row in db.get_minigame_ratings(100, 'queens')} == {
+            '300', '301',
+        }
+
+        asyncio.run(Minigames.queens_ban.__wrapped__(
+            cog, ctx, alice, reason='duplicate account'))
+
+        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        assert db.is_minigame_banned(100, 'queens', alice.id) is True
+        assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['301']
+        assert db.get_minigame_ban(100, 'queens', alice.id).reason == 'duplicate account'
+
+    def test_import_skips_banned_linked_user(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, bob)
+        cog = Minigames(bot=None)
+
+        db.set_minigame_player_link(
+            100, 'queens', alice.id, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, bob.id)
+        db.set_minigame_player_link(
+            100, 'queens', bob.id, 'Bob LinkedIn',
+            normalize_queens_name('Bob LinkedIn'), None, 1.0, bob.id)
+        db.ban_minigame_user(
+            100, 'queens', alice.id, 1.0, bob.id, 'duplicate account')
+
+        preview = cog._make_queens_import_preview(ctx, '2026-06-08', (
+            'Alice LinkedIn\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:04\n'
+            'Bob LinkedIn\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:05\n'
+        ))
+
+        assert [entry.user_id for entry in preview.resolved] == ['301']
 
     def test_vs_uses_time_only_scoring(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

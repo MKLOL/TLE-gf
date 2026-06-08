@@ -453,6 +453,65 @@ class MinigameDbMixin:
             (str(guild_id), game, str(user_id))
         ).fetchone()
 
+    # ── Generic minigame bans ──────────────────────────────────────────
+
+    def ban_minigame_user(self, guild_id, game, user_id, banned_at, banned_by,
+                          reason=None):
+        rc = self.conn.execute(
+            '''
+            INSERT OR IGNORE INTO minigame_ban
+                (guild_id, game, user_id, banned_at, banned_by, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''',
+            (str(guild_id), game, str(user_id), float(banned_at),
+             str(banned_by), reason)
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def unban_minigame_user(self, guild_id, game, user_id):
+        rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_ban
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def is_minigame_banned(self, guild_id, game, user_id):
+        row = self.conn.execute(
+            '''
+            SELECT user_id
+            FROM minigame_ban
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).fetchone()
+        return row is not None
+
+    def get_minigame_ban(self, guild_id, game, user_id):
+        return self.conn.execute(
+            '''
+            SELECT user_id, banned_at, banned_by, reason
+            FROM minigame_ban
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).fetchone()
+
+    def get_minigame_bans(self, guild_id, game):
+        return self.conn.execute(
+            '''
+            SELECT user_id, banned_at, banned_by, reason
+            FROM minigame_ban
+            WHERE guild_id = ? AND game = ?
+            ORDER BY banned_at DESC, user_id ASC
+            ''',
+            (str(guild_id), game)
+        ).fetchall()
+
     # ── Akari rating: registration ───────────────────────────────────
     #
     # Default opt-in: everyone with any Akari result is registered (visible in

@@ -770,3 +770,26 @@ def upgrade_1_30_0(db):
         logger.debug('1.30.0: akari_rating copy skipped (%s)', e)
     db.commit()
     logger.info('1.30.0: Upgrade complete')
+
+
+@registry.register('1.31.0', 'Generic minigame bans')
+def upgrade_1_31_0(db):
+    """Create a game-keyed ban table for manual minigame workflows."""
+    logger.info('1.31.0: Creating generic minigame ban table')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS minigame_ban (
+            guild_id   TEXT NOT NULL,
+            game       TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            banned_at  REAL NOT NULL,
+            banned_by  TEXT NOT NULL,
+            reason     TEXT,
+            PRIMARY KEY (guild_id, game, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_minigame_ban_guild
+            ON minigame_ban (guild_id, game, banned_at DESC)
+    ''')
+    db.commit()
+    logger.info('1.31.0: Upgrade complete')

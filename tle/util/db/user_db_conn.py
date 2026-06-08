@@ -379,6 +379,21 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 ON minigame_player_link (guild_id, game, normalized_name)
         ''')
         self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS minigame_ban (
+                guild_id   TEXT NOT NULL,
+                game       TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_minigame_ban_guild
+                ON minigame_ban (guild_id, game, banned_at DESC)
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS minigame_rating (
                 guild_id    TEXT NOT NULL,
                 game        TEXT NOT NULL,

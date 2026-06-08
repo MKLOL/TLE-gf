@@ -469,6 +469,29 @@ class TestUpgrade130:
         db.execute('SELECT * FROM minigame_rating').fetchall()
 
 
+class TestUpgrade131:
+    def test_creates_generic_minigame_ban_table(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_31_0
+        upgrade_1_31_0(db)
+        db.execute(
+            "INSERT INTO minigame_ban "
+            "(guild_id, game, user_id, banned_at, banned_by, reason) "
+            "VALUES ('1', 'queens', '9', 123.0, '7', 'spam')")
+        row = db.execute(
+            'SELECT guild_id, game, user_id, banned_at, banned_by, reason '
+            'FROM minigame_ban').fetchone()
+        assert row.guild_id == '1'
+        assert row.game == 'queens'
+        assert row.user_id == '9'
+        assert row.reason == 'spam'
+
+    def test_idempotent(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_31_0
+        upgrade_1_31_0(db)
+        upgrade_1_31_0(db)
+        db.execute('SELECT * FROM minigame_ban').fetchall()
+
+
 class TestUpgrade127:
     def test_creates_ban_table(self, db):
         from tle.util.db.user_db_upgrades import upgrade_1_27_0
@@ -517,6 +540,8 @@ class TestFreshDbSchema:
             conn.conn.execute('SELECT guild_id, game, user_id, rating, games, '
                               'peak, last_delta, skip_streak, last_puzzle, '
                               'updated_at FROM minigame_rating').fetchall()
+            conn.conn.execute('SELECT guild_id, game, user_id, banned_at, '
+                              'banned_by, reason FROM minigame_ban').fetchall()
             # And the legacy table must NOT be created by the fresh path.
             legacy = conn.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
