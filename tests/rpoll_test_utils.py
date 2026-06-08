@@ -104,6 +104,21 @@ class FakeRpollDb:
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE minigame_rating (
+                guild_id     TEXT NOT NULL,
+                game         TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                rating       REAL NOT NULL,
+                games        INTEGER NOT NULL DEFAULT 0,
+                peak         REAL NOT NULL,
+                last_delta   REAL NOT NULL DEFAULT 0,
+                skip_streak  INTEGER NOT NULL DEFAULT 0,
+                last_puzzle  INTEGER NOT NULL DEFAULT 0,
+                updated_at   REAL NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE akari_optout (
                 guild_id     TEXT NOT NULL,
                 user_id      TEXT NOT NULL,
@@ -160,6 +175,7 @@ class FakeRpollDb:
     get_gudgitters_timerange_for_user = _UC.get_gudgitters_timerange_for_user
     get_handle = _UC.get_handle
     fetch_cf_user = _UC.fetch_cf_user
+    get_minigame_rating = _UC.get_minigame_rating
     get_akari_rating = _UC.get_akari_rating
     is_akari_opted_out = _UC.is_akari_opted_out
     is_akari_banned = _UC.is_akari_banned
@@ -186,6 +202,13 @@ class FakeRpollDb:
             '(guild_id, user_id, rating, games, peak, last_delta, '
             ' skip_streak, last_puzzle, updated_at) '
             'VALUES (?, ?, ?, 0, ?, 0, 0, 0, 0)',
+            (str(guild_id), str(user_id), float(rating), float(rating))
+        )
+        self.conn.execute(
+            'INSERT OR REPLACE INTO minigame_rating '
+            '(guild_id, game, user_id, rating, games, peak, last_delta, '
+            ' skip_streak, last_puzzle, updated_at) '
+            "VALUES (?, 'akari', ?, ?, 0, ?, 0, 0, 0, 0)",
             (str(guild_id), str(user_id), float(rating), float(rating))
         )
         self.conn.commit()

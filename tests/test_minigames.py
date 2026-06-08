@@ -973,7 +973,7 @@ class TestQueensImport:
         }
         assert set(queens) == {'300', '301', '302'}
         assert queens['300'].rating > queens['301'].rating
-        assert queens['301'].rating == pytest.approx(queens['302'].rating)
+        assert abs(queens['301'].rating - queens['302'].rating) < 1e-9
         assert all(row.games == 1 for row in queens.values())
 
         akari = db.get_minigame_rating(100, 'akari', 999)

@@ -226,7 +226,10 @@ _pil_imagedraw.Draw = lambda *a, **kw: object()
 _discord_utils = types.ModuleType('discord.utils')
 def _escape_mentions(text):
     return text.replace('@everyone', '@\u200beveryone').replace('@here', '@\u200bhere')
+def _escape_markdown(text):
+    return str(text).replace('\\', '\\\\').replace('*', '\\*').replace('_', '\\_')
 _discord_utils.escape_mentions = _escape_mentions
+_discord_utils.escape_markdown = _escape_markdown
 sys.modules['discord.utils'] = _discord_utils
 _discord_mod.utils = _discord_utils
 
@@ -453,6 +456,7 @@ _util_path = os.path.join(_root, 'tle', 'util')
 
 # Extra discord stubs needed by codeforces_common.py
 _discord_mod.Member = type('Member', (), {})
+_discord_mod.Role = type('Role', (), {})
 _discord_mod.MessageReference = type('MessageReference', (), {
     '__init__': lambda self, **kw: None,
 })
