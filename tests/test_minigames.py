@@ -375,6 +375,7 @@ class TestQueensParsing:
             'Robert Kocharyan',
             'Zepur Jokaklian',
         ]
+        assert [r.is_you for r in results] == [False, True, False]
         assert [r.time_seconds for r in results] == [4, 6, 7]
         assert all(r.no_hints and r.no_mistakes for r in results)
 
@@ -905,7 +906,7 @@ class TestQueensImport:
 
         cog = Minigames(bot=None)
         with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, '123', content)
+            cog._make_queens_import_preview(ctx, '2026-06-08', content)
 
     def test_preview_resolves_linked_names_and_you_then_saves_ratings(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -942,12 +943,13 @@ class TestQueensImport:
         )
 
         cog = Minigames(bot=None)
-        preview = cog._make_queens_import_preview(ctx, '#123', content)
+        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
 
-        assert preview.puzzle_number == 123
+        assert preview.puzzle_date == dt.date(2026, 6, 8)
+        assert preview.puzzle_number == dt.date(2026, 6, 8).toordinal()
         assert [entry.user_id for entry in preview.resolved] == ['300', '301']
         assert preview.unresolved == ['Unknown Person']
-        assert '#123' in cog._format_queens_import_preview(ctx, preview)
+        assert '2026-06-08' in cog._format_queens_import_preview(ctx, preview)
         assert 'Robert Kocharyan' in cog._format_queens_import_preview(ctx, preview)
 
         saved = cog._save_queens_import(ctx, preview)
@@ -958,13 +960,13 @@ class TestQueensImport:
             ('300', 4),
             ('301', 6),
         ]
-        assert {row.puzzle_number for row in rows} == {123}
-        assert {row.puzzle_date for row in rows} == {'1970-01-01'}
+        assert {row.puzzle_number for row in rows} == {dt.date(2026, 6, 8).toordinal()}
+        assert {row.puzzle_date for row in rows} == {'2026-06-08'}
         ratings = db.get_minigame_ratings(100, 'queens')
         assert [row.user_id for row in ratings] == ['300', '301']
         assert ratings[0].rating > ratings[1].rating
 
-        reimport = cog._make_queens_import_preview(ctx, '123', (
+        reimport = cog._make_queens_import_preview(ctx, '08/06/2026', (
             'You\n'
             '\U0001f913\U0001f48e No hints & no mistakes!\n'
             '0:05\n'
@@ -976,18 +978,49 @@ class TestQueensImport:
         assert [row.user_id for row in ratings] == ['301']
         assert ratings[0].games == 0
 
+    def test_you_row_prefers_importer_even_when_name_is_copied(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_minigame_player_link(
+            100, 'queens', 300, 'Robert Kocharyan',
+            normalize_queens_name('Robert Kocharyan'), None, 1.0, 999)
+        db.set_minigame_player_link(
+            100, 'queens', 301, 'Importer Name',
+            normalize_queens_name('Importer Name'), None, 1.0, 999)
+        guild = _FakeGuild(100, members=[
+            _FakeDiscordMember(300, 'robert', 'Robert'),
+            _FakeDiscordMember(301, 'importer', 'Importer'),
+        ])
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=_FakeDiscordMember(301, 'importer', 'Importer'),
+            channel=_FakeChannel(200),
+            message=SimpleNamespace(id=555),
+        )
+        content = (
+            'Robert Kocharyan\n'
+            'Robert Kocharyan\n'
+            'You\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:06\n'
+        )
+
+        cog = Minigames(bot=None)
+        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
+
+        assert [entry.user_id for entry in preview.resolved] == ['301']
+
     def test_generic_recompute_writes_queens_snapshot_only(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.replace_minigame_ratings(
             100, 'akari', [RatingState('999', 1500, 1, 1500, 0)], 1.0)
         db.save_minigame_result(
-            1, 100, 'queens', 200, 300, 20260608, '2026-06-08',
+            1, 100, 'queens', 200, 300, dt.date(2026, 6, 8).toordinal(), '2026-06-08',
             0, 8, False, 'fast no badges')
         db.save_minigame_result(
-            2, 100, 'queens', 200, 301, 20260608, '2026-06-08',
+            2, 100, 'queens', 200, 301, dt.date(2026, 6, 8).toordinal(), '2026-06-08',
             100, 10, True, 'slow perfect')
         db.save_minigame_result(
-            3, 100, 'queens', 200, 302, 20260608, '2026-06-08',
+            3, 100, 'queens', 200, 302, dt.date(2026, 6, 8).toordinal(), '2026-06-08',
             0, 10, False, 'slow imperfect')
 
         cog = Minigames(bot=None)
@@ -1026,13 +1059,14 @@ class TestQueensCommands:
         )
 
     @staticmethod
-    def _save_queens_result(db, message_id, user_id, number, time_seconds,
+    def _save_queens_result(db, message_id, user_id, puzzle_date, time_seconds,
                             is_perfect=True, accuracy=100):
+        day = dt.date.fromisoformat(puzzle_date)
         db.save_minigame_result(
-            message_id, 100, 'queens', 200, user_id, number, '1970-01-01',
-            accuracy, time_seconds, is_perfect, f'#{number}')
+            message_id, 100, 'queens', 200, user_id, day.toordinal(),
+            puzzle_date, accuracy, time_seconds, is_perfect, puzzle_date)
 
-    def test_stats_and_streak_use_queens_numbers(self, db, monkeypatch):
+    def test_stats_and_streak_use_queens_dates(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
@@ -1040,24 +1074,28 @@ class TestQueensCommands:
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
 
-        self._save_queens_result(db, 1, alice.id, 100, 5, True, 100)
-        self._save_queens_result(db, 2, alice.id, 101, 9, False, 0)
-        self._save_queens_result(db, 3, alice.id, 102, 4, True, 100)
-        self._save_queens_result(db, 4, alice.id, 103, 6, True, 100)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5, True, 100)
+        self._save_queens_result(db, 2, alice.id, '2026-06-09', 9, False, 0)
+        self._save_queens_result(db, 3, alice.id, '2026-06-10', 4, True, 100)
+        self._save_queens_result(db, 4, alice.id, '2026-06-11', 6, True, 100)
 
         asyncio.run(cog._cmd_queens_stats(ctx))
         stats = ctx.sent['embed']
         assert stats.title == 'LinkedIn Queens Stats'
-        assert 'Queens numbers: **4**' in stats.description
+        assert 'Queens days: **4**' in stats.description
         assert 'Clean: **3**' in stats.description
         assert 'Current clean streak: **2**' in stats.description
-        assert 'Latest: **#103**' in stats.description
+        assert 'Latest: **2026-06-11**' in stats.description
+
+        asyncio.run(cog._cmd_queens_stats(ctx, 'd>=10062026'))
+        filtered = ctx.sent['embed']
+        assert 'Queens days: **2**' in filtered.description
 
         asyncio.run(cog._cmd_queens_streak(ctx))
         streak = ctx.sent['embed']
         assert streak.title == 'LinkedIn Queens Streak'
-        assert '**2** consecutive clean Queens number(s)' in streak.description
-        assert 'Latest result: **#103**' in streak.description
+        assert '**2** consecutive clean day(s)' in streak.description
+        assert 'Latest result: **2026-06-11**' in streak.description
 
     def test_vs_uses_time_only_scoring(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -1068,10 +1106,10 @@ class TestQueensCommands:
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
 
-        self._save_queens_result(db, 1, alice.id, 100, 5, False, 0)
-        self._save_queens_result(db, 2, bob.id, 100, 7, True, 100)
-        self._save_queens_result(db, 3, alice.id, 101, 8, True, 100)
-        self._save_queens_result(db, 4, bob.id, 101, 8, False, 0)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5, False, 0)
+        self._save_queens_result(db, 2, bob.id, '2026-06-08', 7, True, 100)
+        self._save_queens_result(db, 3, alice.id, '2026-06-09', 8, True, 100)
+        self._save_queens_result(db, 4, bob.id, '2026-06-09', 8, False, 0)
 
         asyncio.run(cog._cmd_vs(ctx, QUEENS_GAME, alice, bob))
 
@@ -1090,10 +1128,10 @@ class TestQueensCommands:
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=object())
 
-        self._save_queens_result(db, 1, alice.id, 100, 5, False, 0)
-        self._save_queens_result(db, 2, bob.id, 100, 7, True, 100)
-        self._save_queens_result(db, 3, alice.id, 101, 8, True, 100)
-        self._save_queens_result(db, 4, bob.id, 101, 9, False, 0)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5, False, 0)
+        self._save_queens_result(db, 2, bob.id, '2026-06-08', 7, True, 100)
+        self._save_queens_result(db, 3, alice.id, '2026-06-09', 8, True, 100)
+        self._save_queens_result(db, 4, bob.id, '2026-06-09', 9, False, 0)
 
         pages = []
         monkeypatch.setattr(

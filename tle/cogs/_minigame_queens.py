@@ -3,7 +3,9 @@
 import re
 from collections import namedtuple
 
-from tle.cogs._minigame_common import GameDef, RatingDef
+from tle.cogs._minigame_common import (
+    GameDef, RatingDef, normalize_puzzle_date,
+)
 
 
 _TIME_RE = re.compile(r'^\d{1,2}:\d{2}(?::\d{2})?$')
@@ -13,7 +15,7 @@ _DETECT_RE = re.compile(r'Queens|No hints|No mistakes|\b\d{1,2}:\d{2}\b', re.IGN
 
 QueensLeaderboardEntry = namedtuple(
     'QueensLeaderboardEntry',
-    'linkedin_name time_seconds no_hints no_mistakes status_text',
+    'linkedin_name time_seconds no_hints no_mistakes status_text is_you',
 )
 
 
@@ -75,10 +77,10 @@ def _candidate_name(lines):
 
     real_names = [name for name in collapsed if name != 'You']
     if real_names:
-        return real_names[-1]
+        return real_names[-1], 'You' in collapsed
     if 'You' in collapsed:
-        return 'You'
-    return None
+        return 'You', True
+    return None, False
 
 
 def parse_queens_leaderboard(content):
@@ -98,7 +100,7 @@ def parse_queens_leaderboard(content):
             continue
         block = lines[block_start:index]
         block_start = index + 1
-        name = _candidate_name(block)
+        name, is_you = _candidate_name(block)
         if name is None:
             continue
         no_hints, no_mistakes, status_text = queens_status_flags(block)
@@ -108,6 +110,7 @@ def parse_queens_leaderboard(content):
             no_hints=no_hints,
             no_mistakes=no_mistakes,
             status_text=status_text,
+            is_you=is_you,
         ))
 
     return entries
@@ -130,7 +133,7 @@ def queens_winner_result_sort_key(row):
 
 
 def queens_result_group_key(row):
-    return int(row.puzzle_number)
+    return normalize_puzzle_date(row.puzzle_date)
 
 
 def rank_queens_participants(rows):
