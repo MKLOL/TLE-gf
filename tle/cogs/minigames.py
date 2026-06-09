@@ -879,8 +879,9 @@ class Minigames(commands.Cog):
         else:
             account_text = 'the configured account'
         return (
-            f'In order to join the rating system, connect with {account_text} '
-            'on LinkedIn so your result appears on the leaderboard.'
+            f'In order to join the rating system, send a LinkedIn connection '
+            f'request to {account_text} with the note "GF Queens" so your '
+            'result appears on the leaderboard.'
         )
 
     async def _resolve_queens_registration_args(self, ctx, first, rest):
