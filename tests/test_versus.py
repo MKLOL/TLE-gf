@@ -10,14 +10,15 @@ RatingChange = collections.namedtuple(
 )
 
 
-def _make_rc(contest_id, handle, rank):
+def _make_rc(contest_id, handle, rank, update_time=None):
     """Helper to create a minimal RatingChange for testing."""
     return RatingChange(
         contestId=contest_id,
         contestName=f'Contest {contest_id}',
         handle=handle,
         rank=rank,
-        ratingUpdateTimeSeconds=1000000 + contest_id,
+        ratingUpdateTimeSeconds=(
+            update_time if update_time is not None else 1000000 + contest_id),
         oldRating=1500,
         newRating=1500,
     )
@@ -26,9 +27,11 @@ def _make_rc(contest_id, handle, rank):
 # Import the pure functions under test
 from tle.cogs.versus import (
     _compute_versus_stats,
+    _filter_changes_by_date,
     _is_stale,
     _get_rating_changes,
     _list_shared_contests,
+    _parse_versus_args,
 )
 import asyncio
 import time
@@ -243,6 +246,37 @@ class TestListSharedContests:
         # Mutating one shouldn't affect the other
         by_id[1]['ranks']['mutated'] = 99
         assert 'mutated' not in by_id[2]['ranks']
+
+
+class TestVersusDateFilters:
+    def test_parse_date_filters_removes_date_args(self):
+        strict, date_from, date_to, handles = _parse_versus_args(
+            ('+all', 'alice', 'd>=2024', 'bob', 'd<2025'))
+
+        assert strict is True
+        assert handles == ['alice', 'bob']
+        assert date_from > 0
+        assert date_to < 10**10
+        assert date_from < date_to
+
+    def test_filter_changes_by_date_is_inclusive_exclusive(self):
+        all_changes = {
+            'alice': [
+                _make_rc(1, 'alice', 10, update_time=99),
+                _make_rc(2, 'alice', 20, update_time=100),
+                _make_rc(3, 'alice', 30, update_time=199),
+                _make_rc(4, 'alice', 40, update_time=200),
+            ],
+            'bob': [
+                _make_rc(2, 'bob', 15, update_time=100),
+                _make_rc(4, 'bob', 35, update_time=200),
+            ],
+        }
+
+        filtered = _filter_changes_by_date(all_changes, 100, 200)
+
+        assert [rc.contestId for rc in filtered['alice']] == [2, 3]
+        assert [rc.contestId for rc in filtered['bob']] == [2]
 
 
 class TestStrictMode:

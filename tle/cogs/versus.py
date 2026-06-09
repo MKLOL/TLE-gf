@@ -16,6 +16,8 @@ from tle.util import paginator
 # 14 days normally, 2 days in Dec/Jan (CF rename season).
 _STALE_SECONDS = 14 * 24 * 60 * 60
 _STALE_SECONDS_RENAME_SEASON = 2 * 24 * 60 * 60
+_NO_DATE_LOWER_BOUND = 0
+_NO_DATE_UPPER_BOUND = 10**10
 
 
 class VersusCogError(commands.CommandError):
@@ -96,6 +98,29 @@ def _list_shared_contests(handles, all_changes, strict=False):
         rows.append({'contest_id': cid, 'name': name, 'time': t, 'ranks': dict(ranks)})
     rows.sort(key=lambda r: r['time'], reverse=True)
     return rows
+
+
+def _is_versus_date_arg(arg):
+    return arg.startswith('d<') or arg.startswith('d>=')
+
+
+def _parse_versus_args(args):
+    (strict,), rest = cf_common.filter_flags(args, ['+all'])
+    date_from, date_to = cf_common.parse_daterange(rest)
+    handles = [arg for arg in rest if not _is_versus_date_arg(arg)]
+    return strict, date_from, date_to, handles
+
+
+def _filter_changes_by_date(all_changes, date_from, date_to):
+    if date_from == _NO_DATE_LOWER_BOUND and date_to == _NO_DATE_UPPER_BOUND:
+        return all_changes
+    return {
+        handle: [
+            change for change in changes
+            if date_from <= change.ratingUpdateTimeSeconds < date_to
+        ]
+        for handle, changes in all_changes.items()
+    }
 
 
 def _is_stale(resolved_at):
@@ -200,13 +225,13 @@ class Versus(commands.Cog):
 
     @commands.group(brief='Compare contest results between users',
                     aliases=['vs'],
-                    usage='[+all] handle1 handle2 [handle3 ...]',
+                    usage='[+all] handle1 handle2 [handle3 ...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]',
                     invoke_without_command=True)
     async def versus(self, ctx, *args: str):
         """Show head-to-head contest win counts among the given users.
         Use ! prefix for Discord users (e.g. !username), -c to force CF handle (e.g. -ctourist).
         Use +all to only count contests where every listed user participated."""
-        (strict,), handles = cf_common.filter_flags(args, ['+all'])
+        strict, date_from, date_to, handles = _parse_versus_args(args)
 
         if len(handles) < 2:
             raise VersusCogError('Please provide at least 2 handles.')
@@ -216,6 +241,7 @@ class Versus(commands.Cog):
 
         cache = cf_common.cache2.rating_changes_cache
         all_changes = await _get_all_changes(handles, cache)
+        all_changes = _filter_changes_by_date(all_changes, date_from, date_to)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
                                                                strict=strict)
@@ -241,12 +267,12 @@ class Versus(commands.Cog):
         await ctx.send(embed=embed)
 
     @versus.command(brief='List shared contests between users',
-                    usage='[+all] handle1 handle2 [handle3 ...]')
+                    usage='[+all] handle1 handle2 [handle3 ...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def contests(self, ctx, *args: str):
         """List contests where 2+ of the given users participated, with each
         user's rank. Use +all to only list contests where every listed user
         participated. Sorted newest first."""
-        (strict,), handles = cf_common.filter_flags(args, ['+all'])
+        strict, date_from, date_to, handles = _parse_versus_args(args)
 
         if len(handles) < 2:
             raise VersusCogError('Please provide at least 2 handles.')
@@ -256,6 +282,7 @@ class Versus(commands.Cog):
 
         cache = cf_common.cache2.rating_changes_cache
         all_changes = await _get_all_changes(handles, cache)
+        all_changes = _filter_changes_by_date(all_changes, date_from, date_to)
 
         rows = _list_shared_contests(handles, all_changes, strict=strict)
 
@@ -296,12 +323,12 @@ class Versus(commands.Cog):
 
     @commands.command(brief='Plot placement distribution between users',
                       aliases=['plotvs'],
-                      usage='[+all] handle1 handle2 [handle3 ...]')
+                      usage='[+all] handle1 handle2 [handle3 ...] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
     async def plotversus(self, ctx, *args: str):
         """Plot how often each user placed 1st, 2nd, 3rd, etc. among the group
         across all shared contests. Use ! prefix for Discord users, -c to force CF handle.
         Use +all to only count contests where every listed user participated."""
-        (strict,), handles = cf_common.filter_flags(args, ['+all'])
+        strict, date_from, date_to, handles = _parse_versus_args(args)
 
         if len(handles) < 2:
             raise VersusCogError('Please provide at least 2 handles.')
@@ -311,6 +338,7 @@ class Versus(commands.Cog):
 
         cache = cf_common.cache2.rating_changes_cache
         all_changes = await _get_all_changes(handles, cache)
+        all_changes = _filter_changes_by_date(all_changes, date_from, date_to)
 
         wins, placements, total_shared = _compute_versus_stats(handles, all_changes,
                                                                strict=strict)
