@@ -58,16 +58,14 @@ _AKARI_IMAGE_MARGIN = 20
 _AKARI_IMAGE_ROW_HEIGHT = 36
 _AKARI_IMAGE_HEADER_SPACING = 1.25
 _AKARI_IMAGE_COLUMN_MARGIN = 10
-# Three layouts share the same renderer.  ``_AKARI_RATING_COLS`` and
-# ``_AKARI_PUZZLE_COLS`` are the 5-column shapes for the rating leaderboard
-# and the un-annotated puzzle table respectively.  ``_AKARI_PUZZLE_DELTA_COLS``
-# is the 6-column annotated puzzle table: Result and Time stay separate (it
-# reads better than the merged "100% 1:34" cell did) and a Δ column shows the
-# day's signed rating change for opted-in users.  Widths sum to
-# ``_AKARI_IMAGE_WIDTH − 2 × MARGIN`` (860).
+# Table layouts share the same Cairo renderer.  Akari keeps separate Result
+# and Time columns; Queens omits Result because the day leaderboard is ranked
+# by time only.  Widths sum to ``_AKARI_IMAGE_WIDTH − 2 × MARGIN`` (860).
 _AKARI_RATING_COLS = (54, 300, 260, 150, 96)
 _AKARI_PUZZLE_COLS = (54, 300, 260, 150, 96)
 _AKARI_PUZZLE_DELTA_COLS = (54, 316, 230, 90, 90, 80)
+_QUEENS_RESULTS_COLS = (54, 360, 340, 106)
+_QUEENS_RESULTS_DELTA_COLS = (54, 330, 320, 90, 66)
 
 
 # Per-puzzle table annotation for one opted-in player: pre-puzzle rating and
@@ -629,6 +627,74 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
         displayed_rows, title=title, footer=footer,
         header=header, cols=cols,
         right_align_cols=right_align_cols, row_colors=row_colors)
+
+
+def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
+                               registrants=None, identity_fn=None,
+                               sort_key_fn=None):
+    if identity_fn is None:
+        identity_fn = lambda _g, row: getattr(row, 'user_id', '-')
+    annotated = puzzle_info is not None and registrants is not None
+    result = []
+    for index, row in enumerate(
+            _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn),
+            start=1):
+        name = _safe_user_name(guild, row.user_id)
+        delta_cell = ''
+        if (annotated
+                and row.user_id in registrants
+                and row.user_id in puzzle_info):
+            info = puzzle_info[row.user_id]
+            r = round(info.pre_rating)
+            name = f'{name} ({r} {rank_for_rating(r).title_abbr})'
+            delta_cell = f'{round(info.delta):+d}'
+        cells = [
+            index,
+            name,
+            identity_fn(guild, row),
+            format_duration(row.time_seconds),
+        ]
+        if annotated:
+            cells.append(delta_cell)
+        result.append(tuple(cells))
+    return result
+
+
+def _get_queens_results_table_image_file(guild, rows, title,
+                                         *, puzzle_info=None, registrants=None,
+                                         identity_label='LinkedIn',
+                                         identity_fn=None,
+                                         sort_key_fn=None):
+    rows = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
+    displayed = rows[:_AKARI_IMAGE_MAX_ROWS]
+    displayed_rows = _queens_results_table_rows(
+        guild, displayed, puzzle_info=puzzle_info, registrants=registrants,
+        identity_fn=identity_fn, sort_key_fn=sort_key_fn)
+    annotated = puzzle_info is not None and registrants is not None
+    row_colors = None
+    if annotated:
+        row_colors = [
+            _akari_row_text_color(puzzle_info[row.user_id].pre_rating)
+            if row.user_id in registrants and row.user_id in puzzle_info
+            else _BLACK
+            for row in displayed
+        ]
+    footer = None
+    if len(rows) > len(displayed_rows):
+        footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
+    if annotated:
+        header = ('#', 'Name', identity_label, 'Time', '\N{INCREMENT}')
+        cols = _QUEENS_RESULTS_DELTA_COLS
+        right_align_cols = (0, 3, 4)
+    else:
+        header = ('#', 'Name', identity_label, 'Time')
+        cols = _QUEENS_RESULTS_COLS
+        right_align_cols = None
+    return _get_akari_puzzle_table_image(
+        displayed_rows, title=title, footer=footer,
+        header=header, cols=cols,
+        right_align_cols=right_align_cols, row_colors=row_colors,
+        filename='queens-results.png')
 
 
 def _akari_rating_table_rows(guild, rating_rows, registrants, *,
@@ -1735,7 +1801,7 @@ class Minigames(commands.Cog):
                 if show_all
                 else set(links_by_user)
             )
-        discord_file = _get_akari_puzzle_table_image_file(
+        discord_file = _get_queens_results_table_image_file(
             ctx.guild, rows,
             f'{QUEENS_GAME.display_name} #{puzzle_number} '
             f'{puzzle_date.isoformat()} Results',

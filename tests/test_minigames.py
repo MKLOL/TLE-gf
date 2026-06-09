@@ -1651,7 +1651,7 @@ class TestQueensCommands:
             captured['registrants'] = set(kwargs['registrants'])
             return object()
         monkeypatch.setattr(
-            minigames_module, '_get_akari_puzzle_table_image_file', _capture)
+            minigames_module, '_get_queens_results_table_image_file', _capture)
 
         asyncio.run(Minigames.queens_results.__wrapped__(cog, ctx, '769'))
 
@@ -1660,6 +1660,38 @@ class TestQueensCommands:
         assert set(captured['user_ids']) == {'300', '301'}
         assert set(captured['registrants']) == {'300'}
         assert 'file' in ctx.sent['kwargs']
+
+    def test_queens_results_table_omits_accuracy_result_column(
+            self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            minigames_module, '_get_akari_puzzle_table_image',
+            lambda rows, **kwargs: captured.update(rows=rows, **kwargs) or object())
+        guild = _FakeGuild(100, members=[
+            _FakeDiscordMember(300, 'alice', 'Alice'),
+        ])
+        row = _row(1, 300, '2026-06-08', True, 5, 100, 769)
+
+        minigames_module._get_queens_results_table_image_file(
+            guild, [row], 'Queens Results',
+            identity_fn=lambda _guild, _row: 'Alice LinkedIn')
+
+        assert captured['header'] == ('#', 'Name', 'LinkedIn', 'Time')
+        assert captured['rows'] == [(1, 'Alice', 'Alice LinkedIn', '0:05')]
+
+        minigames_module._get_queens_results_table_image_file(
+            guild, [row], 'Queens Results',
+            puzzle_info={
+                '300': minigames_module._PuzzlePlayerInfo(
+                    pre_rating=1200.0, delta=10.0),
+            },
+            registrants={'300'},
+            identity_fn=lambda _guild, _row: 'Alice LinkedIn')
+
+        assert captured['header'] == (
+            '#', 'Name', 'LinkedIn', 'Time', '\N{INCREMENT}')
+        assert captured['rows'] == [
+            (1, 'Alice (1200 E)', 'Alice LinkedIn', '0:05', '+10')]
 
     def test_queens_stats_keeps_number_args_as_personal_filters(
             self, db, monkeypatch):
