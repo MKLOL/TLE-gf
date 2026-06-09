@@ -1403,9 +1403,8 @@ class TestQueensCommands:
         asyncio.run(Minigames.queens_links.__wrapped__(cog, ctx))
 
         assert pages
-        assert 'Anonymous: `Anonymous`' in pages[0][1].description
+        assert 'Alice: `Anonymous`' in pages[0][1].description
         assert 'Alice LinkedIn' not in pages[0][1].description
-        assert 'Alice:' not in pages[0][1].description
 
     def test_register_anonymous_without_name_uses_private_modal(
             self, db, monkeypatch):
@@ -1525,7 +1524,7 @@ class TestQueensCommands:
 
         assert db.get_minigame_player_link(100, 'queens', bob.id) is None
 
-    def test_register_duplicate_name_hides_anonymous_owner(
+    def test_register_duplicate_name_uses_discord_owner_name(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
@@ -1539,7 +1538,7 @@ class TestQueensCommands:
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
 
-        with pytest.raises(MinigameCogError, match='Anonymous'):
+        with pytest.raises(MinigameCogError, match='already linked to Alice'):
             asyncio.run(Minigames.queens_register.__wrapped__(
                 cog, ctx, 'Alice', linkedin='LinkedIn'))
 
@@ -1673,7 +1672,7 @@ class TestQueensCommands:
         assert set(captured[-1]['user_ids']) == {'300', '301'}
         assert captured[-1]['mark_registered'] is True
 
-    def test_anonymous_registration_hides_results_and_rating_names(
+    def test_anonymous_registration_hides_linkedin_identity_only(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
@@ -1710,7 +1709,7 @@ class TestQueensCommands:
         asyncio.run(Minigames.queens_results.__wrapped__(
             cog, ctx, '2026-06-08'))
 
-        assert captured_results['names'] == ['Anonymous', 'Bob']
+        assert captured_results['names'] == ['Alice', 'Bob']
         assert captured_results['identities'] == ['Anonymous', 'Bob LinkedIn']
 
         captured_ratings = {}
@@ -1727,7 +1726,7 @@ class TestQueensCommands:
 
         asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
 
-        assert captured_ratings['names'][0] == 'Anonymous'
+        assert captured_ratings['names'][0] == 'Alice'
         assert captured_ratings['identities'][0] == 'Anonymous'
 
     def test_queens_rating_performance_and_history_views(
@@ -1783,7 +1782,7 @@ class TestQueensCommands:
         assert '2026-06-09' in pages[0][1].description
         assert '**#' not in pages[0][1].description
 
-    def test_anonymous_registration_hides_graph_and_history_names(
+    def test_anonymous_registration_hides_graph_identity_only(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
@@ -1820,12 +1819,12 @@ class TestQueensCommands:
 
         asyncio.run(cog._cmd_queens_rating(ctx, [alice]))
         assert rating_series['names'] == ['Anonymous']
-        assert ctx.sent['embed'].title == 'LinkedIn Queens rating — Anonymous'
+        assert ctx.sent['embed'].title == 'LinkedIn Queens rating — Alice'
 
         asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
         assert perf_series['names'] == ['Anonymous']
         assert ctx.sent['embed'].title == (
-            'LinkedIn Queens performance — Anonymous')
+            'LinkedIn Queens performance — Alice')
 
         pages = []
         monkeypatch.setattr(
@@ -1834,8 +1833,7 @@ class TestQueensCommands:
         asyncio.run(cog._cmd_queens_history(ctx, alice))
         assert pages
         assert pages[0][1].title.startswith(
-            'LinkedIn Queens rating history — Anonymous')
-        assert 'Alice' not in pages[0][1].title
+            'LinkedIn Queens rating history — Alice')
 
     def test_queens_rating_filters_reject_decay(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2009,9 +2007,8 @@ class TestQueensCommands:
 
         embed = ctx.sent['embed']
         assert embed.title == 'LinkedIn Queens Head to Head'
-        assert '`Anonymous`: **1.5** points, **1** wins' in embed.description
+        assert '`Alice`: **1.5** points, **1** wins' in embed.description
         assert '`Bob`: **0.5** points, **0** wins' in embed.description
-        assert '`Alice`' not in embed.description
         assert 'Ties: **1**' in embed.description
 
     def test_top_counts_fastest_winners(self, db, monkeypatch):
@@ -2042,8 +2039,7 @@ class TestQueensCommands:
         assert len(pages) == 1
         embed = pages[0][1]
         assert embed.title == 'LinkedIn Queens Winners'
-        assert '`Anonymous` — **2** wins' in embed.description
-        assert '`Alice`' not in embed.description
+        assert '`Alice` — **2** wins' in embed.description
         assert '`Bob`' not in embed.description
 
 

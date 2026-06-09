@@ -1448,13 +1448,7 @@ class Minigames(commands.Cog):
         }
 
     def _queens_public_user_name(self, guild, user_id, links_by_user=None):
-        if links_by_user is None:
-            link = cf_common.user_db.get_minigame_player_link(
-                guild.id, QUEENS_GAME.name, user_id)
-        else:
-            link = links_by_user.get(str(user_id))
-        if _is_queens_link_anonymous(link):
-            return _QUEENS_ANONYMOUS_LABEL
+        del links_by_user
         return _safe_user_name(guild, user_id)
 
     def _queens_name_fn(self, links_by_user):
