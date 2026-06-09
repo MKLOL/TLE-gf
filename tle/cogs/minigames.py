@@ -3756,8 +3756,8 @@ class Minigames(commands.Cog):
         if _is_queens_anonymous_modal_request(first, linkedin):
             await ctx.send(
                 embed=discord_common.embed_neutral(
-                    'Click the button below to enter your LinkedIn Queens '
-                    'name privately. Only you can use this prompt, and your '
+                    'Click the button below to enter your LinkedIn name '
+                    'privately. Only you can use this prompt, and your '
                     'LinkedIn name will not be posted in the channel.'),
                 view=_QueensAnonymousRegisterView(self, ctx.author.id))
             return
