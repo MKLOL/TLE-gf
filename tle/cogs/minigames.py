@@ -325,6 +325,16 @@ def _split_queens_anonymous_flag(linkedin_text):
     return ' '.join(name_tokens).strip(), anonymous
 
 
+def _is_queens_anonymous_modal_request(first, rest):
+    text = ' '.join(
+        part for part in (str(first or '').strip(), str(rest or '').strip())
+        if part)
+    if not text:
+        return False
+    name, anonymous = _split_queens_anonymous_flag(text)
+    return anonymous and not name
+
+
 def _clean_queens_linkedin_name(text):
     if _URL_RE.search(text or ''):
         raise MinigameCogError(
@@ -855,6 +865,75 @@ def _format_akari_ban_line(guild, row):
     reason_part = f' \N{MIDDLE DOT} {row.reason}' if row.reason else ''
     return (f'\N{BULLET} **{target}** \N{MIDDLE DOT} banned {date_str} '
             f'by **{banner}**{reason_part}')
+
+
+class _QueensAnonymousRegisterModal(discord.ui.Modal):
+    def __init__(self, cog):
+        super().__init__(title='Register for Queens')
+        self.cog = cog
+        self.linkedin_name = discord.ui.TextInput(
+            label='LinkedIn display name',
+            placeholder='Name as it appears on the Queens leaderboard',
+            required=True,
+            max_length=100,
+        )
+        self.add_item(self.linkedin_name)
+
+    async def on_submit(self, interaction):
+        ctx = type('_QueensModalCtx', (), {
+            'guild': interaction.guild,
+            'author': interaction.user,
+        })()
+        try:
+            claimed = self.cog._cmd_queens_register_link(
+                ctx, interaction.user, self.linkedin_name.value,
+                anonymous=True)
+            link = cf_common.user_db.get_minigame_player_link(
+                interaction.guild.id, QUEENS_GAME.name, interaction.user.id)
+            lines = [
+                f'You are registered for {QUEENS_GAME.display_name} as '
+                f'`{_queens_public_link_name(link)}`.',
+            ]
+            if claimed:
+                lines.append(
+                    f'Claimed {claimed} stored Queens result(s) and '
+                    'recomputed ratings.')
+            lines.append(
+                self.cog._queens_connection_instruction(interaction.guild.id))
+            await interaction.response.send_message(
+                embed=discord_common.embed_success('\n'.join(lines)),
+                ephemeral=True)
+        except MinigameCogError as exc:
+            await interaction.response.send_message(
+                embed=discord_common.embed_alert(str(exc)),
+                ephemeral=True)
+
+
+class _QueensAnonymousRegisterView(discord.ui.View):
+    def __init__(self, cog, requester_id):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.requester_id = int(requester_id)
+        button = discord.ui.Button(
+            label='Enter LinkedIn name',
+            style=discord.ButtonStyle.primary,
+        )
+        button.callback = self._open_modal
+        self.add_item(button)
+
+    async def interaction_check(self, interaction):
+        if int(interaction.user.id) == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            'Only the requester can use this registration prompt.',
+            ephemeral=True)
+        return False
+
+    async def _open_modal(self, interaction):
+        if not await self.interaction_check(interaction):
+            return
+        await interaction.response.send_modal(
+            _QueensAnonymousRegisterModal(self.cog))
 
 
 class Minigames(commands.Cog):
@@ -3680,6 +3759,14 @@ class Minigames(commands.Cog):
     async def queens_register(self, ctx, first: str = None, *,
                               linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        if _is_queens_anonymous_modal_request(first, linkedin):
+            await ctx.send(
+                embed=discord_common.embed_neutral(
+                    'Click the button below to enter your LinkedIn Queens '
+                    'name privately. Only you can use this prompt, and your '
+                    'LinkedIn name will not be posted in the channel.'),
+                view=_QueensAnonymousRegisterView(self, ctx.author.id))
+            return
         member, linkedin_text, anonymous = await self._resolve_queens_registration_args(
             ctx, first, linkedin)
         claimed = self._cmd_queens_register_link(

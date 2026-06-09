@@ -248,8 +248,25 @@ class _StubButton:
         self.emoji = emoji
         self.custom_id = custom_id
         self.label = label
+        self.callback = None
+class _StubModal:
+    def __init__(self, *, title=None):
+        self.title = title
+        self.children = []
+    def add_item(self, item):
+        self.children.append(item)
+class _StubTextInput:
+    def __init__(self, *, label=None, placeholder=None, required=True,
+                 max_length=None):
+        self.label = label
+        self.placeholder = placeholder
+        self.required = required
+        self.max_length = max_length
+        self.value = ''
 _discord_ui.View = _StubView
 _discord_ui.Button = _StubButton
+_discord_ui.Modal = _StubModal
+_discord_ui.TextInput = _StubTextInput
 sys.modules['discord.ui'] = _discord_ui
 _discord_mod.ui = _discord_ui
 
