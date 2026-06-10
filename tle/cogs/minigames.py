@@ -1146,22 +1146,22 @@ class Minigames(commands.Cog):
     async def _resolve_queens_registration_args(self, ctx, first, rest):
         if first is None:
             raise MinigameCogError(
-                'Usage: `;queens register LinkedIn Name [+anon]`.')
+                'Usage: `;queens register [+username DiscordUser] '
+                'LinkedIn Name [+anon]`.')
         first = str(first).strip()
         rest = (rest or '').strip()
         target = ctx.author
         linkedin = first if not rest else f'{first} {rest}'
 
-        looks_like_target = (
-            first.startswith('<@')
-            or first.isdigit()
-        )
-        if looks_like_target:
-            if not rest:
-                raise MinigameCogError('A LinkedIn display name is required.')
-            target = await self._resolve_member(ctx, first)
+        if first.casefold() == '+username':
+            tokens = rest.split(maxsplit=1)
+            if len(tokens) < 2:
+                raise MinigameCogError(
+                    'Usage: `;queens register +username DiscordUser '
+                    'LinkedIn Name [+anon]`.')
+            target = await self._resolve_member(ctx, tokens[0])
             target = self._resolve_registrar_target(ctx, target)
-            linkedin = rest
+            linkedin = tokens[1]
         linkedin, anonymous = _split_queens_anonymous_flag(linkedin)
         if not linkedin:
             raise MinigameCogError('A LinkedIn display name is required.')
@@ -4051,7 +4051,7 @@ class Minigames(commands.Cog):
 
     @queens.command(name='register',
                     brief='Link a Discord user to a LinkedIn Queens name',
-                    usage='LinkedIn Name [+anon]')
+                    usage='[+username DiscordUser] LinkedIn Name [+anon]')
     async def queens_register(self, ctx, first: str = None, *,
                               linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)

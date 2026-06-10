@@ -1372,6 +1372,76 @@ class TestQueensCommands:
         assert 'with the note "GF Queens"' in instruction
         assert 'Linked User' not in instruction
 
+    def test_register_other_accepts_discord_username(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[mod, bob])
+        ctx = self._make_ctx(guild, mod)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, '+username', linkedin='bob Bob LinkedIn'))
+
+        row = db.get_minigame_player_link(100, 'queens', bob.id)
+        assert row.external_name == 'Bob LinkedIn'
+        assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
+        assert '`Bob` is registered for LinkedIn Queens' in (
+            ctx.sent['embed'].description)
+
+    def test_register_plain_username_stays_linkedin_name(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, 'bob', linkedin='Bob LinkedIn'))
+
+        alice_link = db.get_minigame_player_link(100, 'queens', alice.id)
+        assert alice_link.external_name == 'bob Bob LinkedIn'
+        assert db.get_minigame_player_link(100, 'queens', bob.id) is None
+
+    def test_register_non_username_plus_token_stays_linkedin_name(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, '+bob', linkedin='Bob LinkedIn'))
+
+        alice_link = db.get_minigame_player_link(100, 'queens', alice.id)
+        assert alice_link.external_name == '+bob Bob LinkedIn'
+
+    def test_register_plain_mention_stays_linkedin_name(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, '<@301>', linkedin='Bob LinkedIn'))
+
+        alice_link = db.get_minigame_player_link(100, 'queens', alice.id)
+        assert alice_link.external_name == '<@301> Bob LinkedIn'
+        assert db.get_minigame_player_link(100, 'queens', bob.id) is None
+
     def test_register_anonymous_keeps_linkedin_name_private(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -1512,17 +1582,17 @@ class TestQueensCommands:
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
         bob = _FakeDiscordMember(301, 'bob', 'Bob')
         guild = _FakeGuild(100, members=[alice, bob])
-        ctx = self._make_ctx(guild, bob)
+        ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
-            normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
+            100, 'queens', bob.id, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, bob.id)
 
         with pytest.raises(MinigameCogError, match='already linked'):
             asyncio.run(Minigames.queens_register.__wrapped__(
                 cog, ctx, 'alice', linkedin='linkedin'))
 
-        assert db.get_minigame_player_link(100, 'queens', bob.id) is None
+        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
 
     def test_register_duplicate_name_uses_discord_owner_name(
             self, db, monkeypatch):
@@ -1534,13 +1604,13 @@ class TestQueensCommands:
         ctx = self._make_ctx(guild, bob)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
-            normalize_queens_name('Alice LinkedIn'),
+            100, 'queens', alice.id, 'Existing LinkedIn',
+            normalize_queens_name('Existing LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
 
         with pytest.raises(MinigameCogError, match='already linked to Alice'):
             asyncio.run(Minigames.queens_register.__wrapped__(
-                cog, ctx, 'Alice', linkedin='LinkedIn'))
+                cog, ctx, 'Existing', linkedin='LinkedIn'))
 
     def test_queens_link_command_is_not_registered(self):
         assert not hasattr(Minigames, 'queens_link')
