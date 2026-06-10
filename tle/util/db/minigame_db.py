@@ -310,6 +310,16 @@ class MinigameDbMixin:
             (str(guild_id), game, str(guild_id), game)
         ).fetchall()
 
+    def get_live_minigame_results_for_guild(self, guild_id, game):
+        return self.conn.execute(
+            f'''
+            {self._minigame_select('minigame_result')}
+            WHERE guild_id = ? AND game = ?
+            ORDER BY puzzle_date DESC, puzzle_number DESC, message_id DESC
+            ''',
+            (str(guild_id), game)
+        ).fetchall()
+
     def delete_minigame_result_for_user_puzzle(self, guild_id, game, user_id, puzzle_number):
         live_rc = self.conn.execute(
             '''

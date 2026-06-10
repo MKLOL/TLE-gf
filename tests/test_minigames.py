@@ -1553,6 +1553,31 @@ class TestQueensImport:
             ('300', 4),
         ]
 
+    def test_sync_does_not_rewrite_current_materialized_rows(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_minigame_player_link(
+            100, 'queens', 300, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
+        db.save_minigame_unresolved_result(
+            100, 'queens', normalize_queens_name('Alice LinkedIn'),
+            'Alice LinkedIn', 200, _queens_number('2026-06-08'),
+            '2026-06-08', 100, 4, True, 'source')
+        cog = Minigames(bot=None)
+
+        assert cog._sync_queens_materialized_results(100) == 1
+        writes = []
+
+        def record_write(*args, **kwargs):
+            writes.append(args)
+            raise AssertionError('current projection row was rewritten')
+
+        monkeypatch.setattr(db, 'save_minigame_result', record_write)
+
+        assert cog._sync_queens_materialized_results(
+            100, migrate_legacy=False) == 0
+        assert writes == []
+
     def test_generic_recompute_writes_queens_snapshot_only(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.replace_minigame_ratings(

@@ -1115,7 +1115,8 @@ class Minigames(commands.Cog):
 
     def _sync_minigame_results_for_read(self, guild_id, game):
         if game.name == QUEENS_GAME.name:
-            self._sync_queens_materialized_results(guild_id)
+            self._sync_queens_materialized_results(
+                guild_id, migrate_legacy=False)
 
     @staticmethod
     def _ensure_not_minigame_banned(guild_id, game, user_id, member_name):
@@ -1216,7 +1217,8 @@ class Minigames(commands.Cog):
             if rating is None:
                 return
             if game.name == QUEENS_GAME.name:
-                self._sync_queens_materialized_results(guild_id)
+                self._sync_queens_materialized_results(
+                    guild_id, migrate_legacy=False)
             rows = cf_common.user_db.get_minigame_results_for_guild(
                 guild_id, game.name)
             rows = self._filter_minigame_banned_rows(guild_id, game, rows)
@@ -1775,6 +1777,22 @@ class Minigames(commands.Cog):
                     guild_id, QUEENS_GAME.name, link.user_id, puzzle_number)
         return deleted
 
+    @staticmethod
+    def _same_queens_materialized_result(existing, source, link,
+                                         puzzle_number, puzzle_date):
+        if existing is None:
+            return False
+        return (
+            str(existing.channel_id) == str(source.channel_id)
+            and str(existing.user_id) == str(link.user_id)
+            and int(existing.puzzle_number) == int(puzzle_number)
+            and _format_queens_date(existing) == _queens_puzzle_date_text(puzzle_date)
+            and int(existing.accuracy) == int(source.accuracy)
+            and int(existing.time_seconds) == int(source.time_seconds)
+            and int(existing.is_perfect) == int(source.is_perfect)
+            and str(existing.raw_content) == str(source.raw_content)
+        )
+
     def _migrate_legacy_queens_results_to_external(
             self, guild_id, *, delete_migrated=True):
         links_by_user = self._queens_links_by_user(guild_id)
@@ -1831,6 +1849,11 @@ class Minigames(commands.Cog):
             for row in cf_common.user_db.get_minigame_player_links(
                 guild_id, QUEENS_GAME.name)
         }
+        existing_rows = {
+            (str(row.message_id), int(row.puzzle_number)): row
+            for row in cf_common.user_db.get_live_minigame_results_for_guild(
+                guild_id, QUEENS_GAME.name)
+        }
         saved = 0
         for row in cf_common.user_db.get_minigame_unresolved_results_for_guild(
                 guild_id, QUEENS_GAME.name):
@@ -1841,19 +1864,27 @@ class Minigames(commands.Cog):
                     guild_id, QUEENS_GAME.name, link.user_id):
                 continue
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
+            message_id = _queens_result_message_id(
+                guild_id, puzzle_date, link.user_id)
+            puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
+            existing = existing_rows.get((str(message_id), int(puzzle_number)))
+            if self._same_queens_materialized_result(
+                    existing, row, link, puzzle_number, puzzle_date):
+                continue
             cf_common.user_db.save_minigame_result(
-                _queens_result_message_id(guild_id, puzzle_date, link.user_id),
+                message_id,
                 guild_id,
                 QUEENS_GAME.name,
                 row.channel_id,
                 link.user_id,
-                _queens_puzzle_number_for_date(puzzle_date),
+                puzzle_number,
                 _queens_puzzle_date_text(puzzle_date),
                 row.accuracy,
                 row.time_seconds,
                 row.is_perfect,
                 row.raw_content,
             )
+            existing_rows[(str(message_id), int(puzzle_number))] = row
             saved += 1
         return saved
 
@@ -2506,7 +2537,8 @@ class Minigames(commands.Cog):
 
     async def _cmd_queens_streak(self, ctx, *args):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._sync_queens_materialized_results(ctx.guild.id)
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
         filter_args = list(args)
         member = ctx.author
         if filter_args:
@@ -2549,7 +2581,8 @@ class Minigames(commands.Cog):
 
     async def _cmd_queens_stats(self, ctx, *args):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._sync_queens_materialized_results(ctx.guild.id)
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
         filter_args = list(args)
         member = ctx.author
         if filter_args:
@@ -2605,7 +2638,8 @@ class Minigames(commands.Cog):
                                      show_all=False, excluded_ids=None,
                                      included_ids=None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._sync_queens_materialized_results(ctx.guild.id)
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
         puzzle_date = _parse_queens_date_or_number(date_arg)
         puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
         day_start = dt.datetime.combine(puzzle_date, dt.time.min).timestamp()
