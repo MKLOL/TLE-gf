@@ -2110,8 +2110,10 @@ class Minigames(commands.Cog):
         except (FileNotFoundError, asyncio.TimeoutError) as exc:
             return None, f'whoami failed: {exc}'
         stdout_text = stdout.decode('utf-8', errors='replace').strip()
+        stderr_text = stderr.decode('utf-8', errors='replace').strip()
         if not stdout_text:
-            return None, 'whoami produced no output.'
+            tail = stderr_text or '(no stderr either)'
+            return None, f'whoami produced no output. stderr: ```{tail[-600:]}```'
         try:
             payload = json.loads(stdout_text.splitlines()[-1])
         except json.JSONDecodeError as exc:
@@ -4197,9 +4199,9 @@ class Minigames(commands.Cog):
     @queens.command(
         name='login',
         brief='(Mod) Upload a fresh LinkedIn session file',
-        usage='(attach extra/.queens_state.json to the message)')
+        usage='[LinkedIn Name] (attach extra/.queens_state.json to the message)')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_login(self, ctx):
+    async def queens_login(self, ctx, *, linkedin_name: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         attachments = list(getattr(ctx.message, 'attachments', None) or [])
         json_atts = [a for a in attachments
@@ -4244,17 +4246,23 @@ class Minigames(commands.Cog):
 
         lines = [f'Session saved to `{state_path}`.']
 
-        # Auto-link the importer: ask the scraper who we are, then either
-        # adopt an existing minigame_player_link or create one for the
-        # uploading mod.  Refuse if the LinkedIn name is already taken by a
-        # different Discord user.
-        name, err = await self._run_queens_whoami(ctx.guild.id)
+        # Resolve the LinkedIn account name: prefer a manually-passed
+        # ``linkedin_name`` (skips the whoami probe entirely), otherwise
+        # ask the scraper who we are.  The manual path is the escape
+        # hatch when whoami fails — e.g. Chromium can't launch due to
+        # missing system libraries.
+        if linkedin_name and linkedin_name.strip():
+            name, err = linkedin_name.strip(), None
+        else:
+            name, err = await self._run_queens_whoami(ctx.guild.id)
         if name is None:
             lines.append(
-                f'Note: could not detect LinkedIn name automatically '
-                f'({err}). Importer not linked yet — first successful '
-                '`;queens play` may sort this out.')
-            await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
+                f'Could not detect LinkedIn name automatically: {err}\n\n'
+                f'Re-run with the name spelled out, e.g.:\n'
+                f'`;queens login TLE Queens` (with the same file attached). '
+                f'Use the exact display name shown on the bot account\'s '
+                'LinkedIn profile.')
+            await ctx.send(embed=discord_common.embed_alert('\n'.join(lines)))
             return
 
         normalized = normalize_queens_name(name)
