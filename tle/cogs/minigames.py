@@ -88,6 +88,10 @@ _QueensImportSaveResult = namedtuple(
     '_QueensImportSaveResult',
     'resolved unresolved',
 )
+_QueensBackfillResult = namedtuple(
+    '_QueensBackfillResult',
+    'link matched saved skipped malformed',
+)
 _QueensPendingRegistration = namedtuple(
     '_QueensPendingRegistration',
     (
@@ -5119,24 +5123,7 @@ class Minigames(commands.Cog):
         ]
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
 
-    @queens.command(
-        name='backfill',
-        brief='(Mod) Backfill a user\'s historical Queens results',
-        usage='@user (attach queens_history.json)')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_backfill(self, ctx, member: CaseInsensitiveMember):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-
-        # User must already be registered so we know their LinkedIn name
-        # for the match.
-        link = cf_common.user_db.get_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, member.id)
-        if link is None:
-            raise MinigameCogError(
-                f'`{_safe_member_name(member)}` is not registered for '
-                f'{QUEENS_GAME.display_name}. They need to '
-                '`;queens register Their LinkedIn Name` first.')
-
+    async def _read_queens_backfill_entries(self, ctx):
         attachments = list(getattr(ctx.message, 'attachments', None) or [])
         json_atts = [
             a for a in attachments
@@ -5159,7 +5146,9 @@ class Minigames(commands.Cog):
         if not isinstance(data, list):
             raise MinigameCogError(
                 'JSON must be a list of result entries.')
+        return data
 
+    def _save_queens_backfill_for_link(self, ctx, link, data):
         target_normalized = link.normalized_name
         matching = []
         for entry in data:
@@ -5170,15 +5159,15 @@ class Minigames(commands.Cog):
                 continue
             if normalize_queens_name(name) == target_normalized:
                 matching.append(entry)
-        if not matching:
-            raise MinigameCogError(
-                f'No entries in the JSON match '
-                f'`{_safe_member_name(member)}`\'s registered LinkedIn '
-                'account.')
 
         saved = 0
         skipped = 0
         malformed = 0
+        source_puzzles = {
+            int(row.puzzle_number)
+            for row in cf_common.user_db.get_minigame_unresolved_results_for_name(
+                ctx.guild.id, QUEENS_GAME.name, target_normalized)
+        }
         for entry in matching:
             try:
                 puzzle_number = int(entry['puzzle_number'])
@@ -5198,14 +5187,11 @@ class Minigames(commands.Cog):
             # ordinal number) already exists for this user/puzzle.
             existing = None
             for pn in _queens_puzzle_numbers_for_date(puzzle_date):
-                source_rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
-                    ctx.guild.id, QUEENS_GAME.name, target_normalized)
-                existing = next(
-                    (row for row in source_rows if int(row.puzzle_number) == pn),
-                    None)
+                if pn in source_puzzles:
+                    existing = True
                 if existing is None:
                     existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
-                        ctx.guild.id, QUEENS_GAME.name, member.id, pn)
+                        ctx.guild.id, QUEENS_GAME.name, link.user_id, pn)
                 if existing is not None:
                     break
             if existing is not None:
@@ -5216,7 +5202,7 @@ class Minigames(commands.Cog):
                 ctx.guild.id,
                 ctx.channel.id,
                 _QueensResolvedEntry(
-                    user_id=member.id,
+                    user_id=link.user_id,
                     linkedin_name=link.external_name,
                     time_seconds=time_seconds,
                     no_hints=no_hints,
@@ -5226,8 +5212,91 @@ class Minigames(commands.Cog):
                 f'backfill from LinkedIn export '
                 f'({entry.get("sent_at_utc", "")})'
             )
+            source_puzzles.update(_queens_puzzle_numbers_for_date(puzzle_date))
             saved += 1
 
+        return _QueensBackfillResult(
+            link=link,
+            matched=len(matching),
+            saved=saved,
+            skipped=skipped,
+            malformed=malformed,
+        )
+
+    @queens.command(
+        name='backfill', aliases=['backill'],
+        brief='(Mod) Backfill historical Queens results',
+        usage='@user|+all (attach queens_history.json)')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_backfill(self, ctx, target: str = None):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        if target is None:
+            raise MinigameCogError(
+                'Usage: `;queens backfill @user|+all` '
+                '(attach `queens_history.json`).')
+        data = await self._read_queens_backfill_entries(ctx)
+
+        if target.strip().casefold() == '+all':
+            links = [
+                link for link in cf_common.user_db.get_minigame_player_links(
+                    ctx.guild.id, QUEENS_GAME.name)
+                if not cf_common.user_db.is_minigame_banned(
+                    ctx.guild.id, QUEENS_GAME.name, link.user_id)
+            ]
+            if not links:
+                raise MinigameCogError(
+                    f'No registered {QUEENS_GAME.display_name} players found.')
+            results = [
+                self._save_queens_backfill_for_link(ctx, link, data)
+                for link in links
+            ]
+            matched_results = [result for result in results if result.matched]
+            if not matched_results:
+                raise MinigameCogError(
+                    'No entries in the JSON match any registered '
+                    f'{QUEENS_GAME.display_name} LinkedIn account.')
+            saved = sum(result.saved for result in matched_results)
+            skipped = sum(result.skipped for result in matched_results)
+            malformed = sum(result.malformed for result in matched_results)
+            matched = sum(result.matched for result in matched_results)
+            if saved:
+                self._sync_queens_materialized_results(ctx.guild.id)
+                self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+            lines = [
+                f'Backfilled **{saved}** result(s) across '
+                f'**{len(matched_results)}** registered '
+                f'{QUEENS_GAME.display_name} player(s).',
+                f'- Matched **{matched}** JSON result(s).',
+            ]
+            if skipped:
+                lines.append(
+                    f'- Skipped **{skipped}** already-saved result(s).')
+            if malformed:
+                lines.append(
+                    f'- Ignored **{malformed}** malformed entry/entries.')
+            await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
+            return
+
+        member = await self._resolve_member(ctx, target)
+        # User must already be registered so we know their LinkedIn name
+        # for the match.
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        if link is None:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not registered for '
+                f'{QUEENS_GAME.display_name}. They need to '
+                '`;queens register Their LinkedIn Name` first.')
+
+        result = self._save_queens_backfill_for_link(ctx, link, data)
+        if not result.matched:
+            raise MinigameCogError(
+                f'No entries in the JSON match '
+                f'`{_safe_member_name(member)}`\'s registered LinkedIn '
+                'account.')
+        saved = result.saved
+        skipped = result.skipped
+        malformed = result.malformed
         if saved:
             self._sync_queens_materialized_results(ctx.guild.id)
             self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)

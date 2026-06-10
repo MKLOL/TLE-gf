@@ -1,6 +1,7 @@
 """Tests for the minigames system (Daily Akari, etc.)."""
 import asyncio
 import datetime as dt
+import json
 import sqlite3
 import time
 from collections import namedtuple
@@ -943,6 +944,17 @@ class _FakeChannel:
     def __init__(self, channel_id):
         self.id = channel_id
         self.mention = f'<#{channel_id}>'
+
+
+class _FakeAttachment:
+    def __init__(self, filename, payload):
+        self.filename = filename
+        self._payload = (
+            payload if isinstance(payload, bytes) else payload.encode('utf-8'))
+        self.size = len(self._payload)
+
+    async def read(self):
+        return self._payload
 
 
 class _FakeAuthor:
@@ -2300,6 +2312,132 @@ class TestQueensCommands:
         instruction = cog._queens_connection_instruction(100)
         assert 'https://www.linkedin.com/in/linked/' in instruction
         assert 'Linked User' not in instruction
+
+    def test_backfill_single_user_from_attachment(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[mod, alice])
+        ctx = self._make_ctx(guild, mod)
+        ctx.message = SimpleNamespace(attachments=[
+            _FakeAttachment('queens_history.json', json.dumps([
+                {
+                    'linkedin_name': 'Alice LinkedIn',
+                    'puzzle_number': _queens_number('2026-06-08'),
+                    'puzzle_date': '2026-06-08',
+                    'time_seconds': 5,
+                    'no_hints': True,
+                    'no_mistakes': True,
+                },
+            ])),
+        ])
+        cog = Minigames(bot=None)
+        db.set_minigame_player_link(
+            100, 'queens', alice.id, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, mod.id)
+
+        asyncio.run(Minigames.queens_backfill.__wrapped__(
+            cog, ctx, 'alice'))
+
+        row = db.get_minigame_result_for_user_puzzle(
+            100, 'queens', alice.id, _queens_number('2026-06-08'))
+        assert row is not None
+        assert row.time_seconds == 5
+        assert 'Backfilled **1** result(s) for `Alice`' in (
+            ctx.sent['embed'].description)
+
+    def test_backfill_all_registered_users_from_attachment(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        cara = _FakeDiscordMember(302, 'cara', 'Cara')
+        guild = _FakeGuild(100, members=[mod, alice, bob, cara])
+        ctx = self._make_ctx(guild, mod)
+        ctx.message = SimpleNamespace(attachments=[
+            _FakeAttachment('queens_history.json', json.dumps([
+                {
+                    'linkedin_name': 'Alice LinkedIn',
+                    'puzzle_number': _queens_number('2026-06-08'),
+                    'puzzle_date': '2026-06-08',
+                    'time_seconds': 8,
+                    'no_hints': True,
+                    'no_mistakes': True,
+                },
+                {
+                    'linkedin_name': 'Alice LinkedIn',
+                    'puzzle_number': _queens_number('2026-06-09'),
+                    'puzzle_date': '2026-06-09',
+                    'time_seconds': 4,
+                    'no_hints': True,
+                    'no_mistakes': True,
+                },
+                {
+                    'linkedin_name': 'Bob LinkedIn',
+                    'puzzle_number': _queens_number('2026-06-09'),
+                    'puzzle_date': '2026-06-09',
+                    'time_seconds': 7,
+                    'no_hints': True,
+                    'no_mistakes': False,
+                },
+                {
+                    'linkedin_name': 'Cara LinkedIn',
+                    'puzzle_number': 'bad',
+                    'time_seconds': 10,
+                },
+                {
+                    'linkedin_name': 'Unknown LinkedIn',
+                    'puzzle_number': _queens_number('2026-06-09'),
+                    'puzzle_date': '2026-06-09',
+                    'time_seconds': 3,
+                    'no_hints': True,
+                    'no_mistakes': True,
+                },
+            ])),
+        ])
+        cog = Minigames(bot=None)
+        for member, name in (
+                (alice, 'Alice LinkedIn'),
+                (bob, 'Bob LinkedIn'),
+                (cara, 'Cara LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'queens', member.id, name, normalize_queens_name(name),
+                None, 1.0, mod.id)
+        db.save_minigame_unresolved_result(
+            100, 'queens', normalize_queens_name('Alice LinkedIn'),
+            'Alice LinkedIn', 200, _queens_number('2026-06-08'),
+            '2026-06-08', 100, 8, True, 'existing')
+
+        asyncio.run(Minigames.queens_backfill.__wrapped__(
+            cog, ctx, '+all'))
+
+        alice_saved = db.get_minigame_result_for_user_puzzle(
+            100, 'queens', alice.id, _queens_number('2026-06-09'))
+        bob_saved = db.get_minigame_result_for_user_puzzle(
+            100, 'queens', bob.id, _queens_number('2026-06-09'))
+        assert alice_saved.time_seconds == 4
+        assert bob_saved.time_seconds == 7
+        assert bob_saved.accuracy == 0
+        assert db.get_minigame_result_for_user_puzzle(
+            100, 'queens', cara.id, _queens_number('2026-06-09')) is None
+        description = ctx.sent['embed'].description
+        assert 'Backfilled **2** result(s)' in description
+        assert '**3** registered LinkedIn Queens player(s)' in description
+        assert 'Matched **4** JSON result(s)' in description
+        assert 'Skipped **1** already-saved result(s)' in description
+        assert 'Ignored **1** malformed entry/entries' in description
 
     def test_register_rejects_url_input(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
