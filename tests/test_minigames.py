@@ -1756,6 +1756,56 @@ class TestQueensCommands:
         assert '`Bob` is registered for LinkedIn Queens as `Bob LinkedIn`' in (
             mod_ctx.sent['embed'].description)
 
+    def test_set_accepts_anonymous_flag(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[mod, bob])
+        ctx = self._make_ctx(guild, mod)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_set.__wrapped__(
+            cog, ctx, 'bob', linkedin='Bob LinkedIn +anon'))
+
+        row = db.get_minigame_player_link(100, 'queens', bob.id)
+        assert row.external_name == 'Bob LinkedIn'
+        assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
+        assert row.external_url == minigames_module._QUEENS_ANONYMOUS_LINK_MARKER
+        assert '`Bob` is registered for LinkedIn Queens as `Anonymous`' in (
+            ctx.sent['embed'].description)
+        assert 'Bob LinkedIn' not in ctx.sent['embed'].description
+
+    def test_set_accepts_prefix_anonymous_flag(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[mod, bob])
+        ctx = self._make_ctx(guild, mod)
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_set.__wrapped__(
+            cog, ctx, '+anon', linkedin='bob Bob LinkedIn'))
+
+        row = db.get_minigame_player_link(100, 'queens', bob.id)
+        assert row.external_name == 'Bob LinkedIn'
+        assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
+        assert row.external_url == minigames_module._QUEENS_ANONYMOUS_LINK_MARKER
+        assert '`Bob` is registered for LinkedIn Queens as `Anonymous`' in (
+            ctx.sent['embed'].description)
+        assert 'Bob LinkedIn' not in ctx.sent['embed'].description
+
     def test_pending_register_expires_after_linkedin_scan_without_match(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

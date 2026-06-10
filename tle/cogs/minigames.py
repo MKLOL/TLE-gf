@@ -1431,10 +1431,12 @@ class Minigames(commands.Cog):
                 ctx.guild.id, normalized_name=normalized)
         return claimed
 
-    async def _cmd_queens_set(self, ctx, member, linkedin_text):
+    async def _cmd_queens_set(self, ctx, member, linkedin_text,
+                              anonymous=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         claimed = self._cmd_queens_register_link(
-            ctx, member, linkedin_text, ignore_pending=True)
+            ctx, member, linkedin_text, anonymous=anonymous,
+            ignore_pending=True)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
         display_name = self._queens_public_user_name(
@@ -4696,16 +4698,33 @@ class Minigames(commands.Cog):
 
     @queens.command(name='set',
                     brief='(Mod) Link a Discord user without LinkedIn verification',
-                    usage='DiscordUser LinkedIn Name')
+                    usage='[+anon] DiscordUser LinkedIn Name [+anon]')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_set(self, ctx, member: str = None, *,
                          linkedin: str = None):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         if member is None or not (linkedin or '').strip():
             raise MinigameCogError(
-                'Usage: `;queens set DiscordUser LinkedIn Name`.')
-        target = await self._resolve_member(ctx, member)
-        await self._cmd_queens_set(ctx, target, linkedin)
+                'Usage: `;queens set [+anon] DiscordUser LinkedIn Name [+anon]`.')
+        prefix_anonymous = False
+        member_text = member
+        linkedin_arg = linkedin.strip()
+        if str(member).casefold() in _QUEENS_ANONYMOUS_FLAGS:
+            prefix_anonymous = True
+            tokens = linkedin_arg.split(maxsplit=1)
+            if len(tokens) < 2:
+                raise MinigameCogError(
+                    'Usage: `;queens set [+anon] DiscordUser LinkedIn Name [+anon]`.')
+            member_text, linkedin_arg = tokens
+        target = await self._resolve_member(ctx, member_text)
+        linkedin_text, suffix_anonymous = _split_queens_anonymous_flag(
+            linkedin_arg)
+        anonymous = prefix_anonymous or suffix_anonymous
+        if not linkedin_text:
+            raise MinigameCogError(
+                'Usage: `;queens set [+anon] DiscordUser LinkedIn Name [+anon]`.')
+        await self._cmd_queens_set(
+            ctx, target, linkedin_text, anonymous=anonymous)
 
     @queens.command(name='unregister',
                     brief='Remove a user LinkedIn Queens link',
@@ -5921,11 +5940,13 @@ class Minigames(commands.Cog):
     @queens_slash.command(name='set', description='Set a Queens LinkedIn name without verification')
     @app_commands.describe(
         member='Discord member to set',
-        linkedin_name='LinkedIn display name')
+        linkedin_name='LinkedIn display name',
+        anonymous='Hide the LinkedIn name in public bot output')
     async def slash_queens_set(
         self, interaction: discord.Interaction,
         member: discord.Member,
         linkedin_name: str,
+        anonymous: bool = False,
     ):
         await interaction.response.defer()
         if not self._has_mod_role(interaction):
@@ -5933,7 +5954,8 @@ class Minigames(commands.Cog):
                 interaction, self._mod_role_error_message())
         try:
             await self._cmd_queens_set(
-                _SlashCtx(interaction), member, linkedin_name)
+                _SlashCtx(interaction), member, linkedin_name,
+                anonymous=anonymous)
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
         except Exception:
