@@ -4089,8 +4089,8 @@ class Minigames(commands.Cog):
 
     @queens.command(
         name='install',
-        brief='(Admin) Install Playwright + Chromium for the scraper')
-    @commands.has_role(constants.TLE_ADMIN)
+        brief='(Mod) Install Playwright + Chromium for the scraper')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_install(self, ctx):
         """Install Playwright and the Chromium browser into the bot's Python
         environment, without needing shell access to the host.
