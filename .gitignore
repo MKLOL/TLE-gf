@@ -119,3 +119,13 @@ pip-wheel-metadata/
 
 # temp frames
 tmp_frames/
+
+# Queens scraper local artifacts
+# - .queens_state.json: LinkedIn session cookies — auth material, never commit
+# - .queens-venv/: local Playwright venv for testing the scraper standalone
+# - queens-debug.*: screenshot + page text dumps from `queens_scrape.py fetch --debug`
+extra/.queens_state.json
+extra/.queens-venv/
+queens-debug.png
+queens-debug.txt
+queens-solve-debug.png
