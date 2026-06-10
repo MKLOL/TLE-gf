@@ -2116,6 +2116,47 @@ class TestQueensCommands:
         assert 'Alice: `Anonymous`' in pages[0][1].description
         assert 'Alice LinkedIn' not in pages[0][1].description
 
+    def test_anonymous_modal_response_shows_private_name_without_context_object(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_neutral',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        class Response:
+            async def send_message(self, content=None, *, embed=None,
+                                   ephemeral=False, **kwargs):
+                sent.append({
+                    'content': content,
+                    'embed': embed,
+                    'ephemeral': ephemeral,
+                    'kwargs': kwargs,
+                })
+
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=alice,
+            channel_id=200,
+            response=Response(),
+        )
+        cog = Minigames(bot=None)
+        modal = minigames_module._QueensAnonymousRegisterModal(cog)
+        modal.linkedin_name.value = 'Alice LinkedIn'
+
+        asyncio.run(modal.on_submit(interaction))
+
+        assert len(sent) == 1
+        assert sent[0]['content'] is None
+        assert sent[0]['ephemeral'] is True
+        assert 'registration is pending as `Alice LinkedIn`' in (
+            sent[0]['embed'].description)
+        assert '_QueensModalCtx object' not in sent[0]['embed'].description
+        assert cog._queens_pending_registrations[('100', '300')].anonymous is True
+
     def test_anonymous_pending_expiry_hides_linkedin_name(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2230,9 +2271,10 @@ class TestQueensCommands:
         assert row is None
         assert cog._queens_pending_registrations[('100', '300')].name == (
             'Alice LinkedIn')
+        assert captured['content'] is None
         assert captured['ephemeral'] is True
-        assert 'Anonymous' in captured['embed'].description
-        assert 'Alice LinkedIn' not in captured['embed'].description
+        assert 'registration is pending as `Alice LinkedIn`' in (
+            captured['embed'].description)
 
     def test_connection_set_requires_and_stores_profile_url(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

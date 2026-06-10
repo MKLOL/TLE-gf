@@ -12,6 +12,7 @@ import statistics
 import sys
 import time
 from collections import namedtuple
+from types import SimpleNamespace
 from typing import Optional
 
 import cairo
@@ -947,16 +948,13 @@ class _QueensAnonymousRegisterModal(discord.ui.Modal):
             await interaction.response.send_message(
                 content=content, embed=embed, ephemeral=True, **kwargs)
 
-        ctx = type('_QueensModalCtx', (), {
-            'guild': interaction.guild,
-            'author': interaction.user,
-            'channel': type(
-                '_QueensModalChannel',
-                (),
-                {'id': getattr(interaction, 'channel_id', None)},
-            )(),
-            'send': send,
-        })()
+        ctx = SimpleNamespace(
+            guild=interaction.guild,
+            author=interaction.user,
+            channel=SimpleNamespace(id=getattr(interaction, 'channel_id', None)),
+            send=send,
+            reveal_queens_anonymous_name=True,
+        )
         try:
             await self.cog._cmd_queens_register(
                 ctx, interaction.user, self.linkedin_name.value,
@@ -1464,7 +1462,9 @@ class Minigames(commands.Cog):
         display_name = self._queens_public_user_name(
             ctx.guild, member.id)
         who = 'Your' if member.id == ctx.author.id else f'`{display_name}`\'s'
-        link_name = _QUEENS_ANONYMOUS_LABEL if anonymous else pending.name
+        link_name = pending.name
+        if anonymous and not getattr(ctx, 'reveal_queens_anonymous_name', False):
+            link_name = _QUEENS_ANONYMOUS_LABEL
         await ctx.send(embed=discord_common.embed_neutral('\n'.join([
             f'{who} {QUEENS_GAME.display_name} registration is pending as '
             f'`{link_name}`.',
