@@ -137,6 +137,9 @@ _QUEENS_PLAYWRIGHT_PLATFORM = 'ubuntu24.04-x64'
 # LinkedIn are ~10-30KiB; this gives generous headroom without inviting
 # someone to upload a giant attachment.
 _QUEENS_STATE_MAX_BYTES = 256 * 1024
+# Backfill JSON files can be much larger (years of history × many
+# players).  10 MiB covers any realistic LinkedIn export.
+_QUEENS_BACKFILL_MAX_BYTES = 10 * 1024 * 1024
 # tle/cogs/minigames.py → repo root → extra/queens_scrape.py
 _QUEENS_SCRAPER_SCRIPT = (
     pathlib.Path(__file__).resolve().parent.parent.parent
@@ -395,14 +398,24 @@ def _split_queens_connection_account_text(text):
     return name, urls[0]
 
 
-def _format_queens_result(entry):
+def _format_queens_result(entry, *, name_override=None):
+    """Format a single leaderboard entry as ``<name> — M:SS (badges)``.
+
+    ``name_override`` short-circuits the entry's stored LinkedIn name —
+    pass ``_queens_public_link_name(link)`` for resolved entries so an
+    anonymously-registered user's real LinkedIn name never appears in
+    a public embed.  When omitted, ``entry.linkedin_name`` is used (safe
+    for unresolved entries — by definition, no Discord user is claiming
+    that name yet, so there's no privacy expectation to honour).
+    """
     badges = []
     if entry.no_hints:
         badges.append('no hints')
     if entry.no_mistakes:
         badges.append('no mistakes')
     suffix = f' ({", ".join(badges)})' if badges else ''
-    return f'{entry.linkedin_name} — {format_duration(entry.time_seconds)}{suffix}'
+    name = entry.linkedin_name if name_override is None else name_override
+    return f'{name} — {format_duration(entry.time_seconds)}{suffix}'
 
 
 def _queens_best_results_by_date(rows):
@@ -1437,17 +1450,20 @@ class Minigames(commands.Cog):
         if preview.resolved:
             for index, entry in enumerate(
                     sorted(preview.resolved, key=lambda e: e.time_seconds), start=1):
-                name = self._queens_public_user_name(
+                discord_name = self._queens_public_user_name(
                     ctx.guild, entry.user_id, links_by_user)
+                link = links_by_user.get(str(entry.user_id))
+                li_display = (_queens_public_link_name(link)
+                              if link else entry.linkedin_name)
                 lines.append(
-                    f'{index}. {name} — {_format_queens_result(entry)}')
+                    f'{index}. {discord_name} — '
+                    f'{_format_queens_result(entry, name_override=li_display)}')
         else:
             lines.append('- none yet')
         if preview.unresolved:
             lines += ['', 'Stored unresolved LinkedIn names:']
             for entry in sorted(preview.unresolved, key=lambda e: e.time_seconds)[:20]:
-                lines.append(
-                    f'- {entry.linkedin_name} — {_format_queens_result(entry)}')
+                lines.append(f'- {_format_queens_result(entry)}')
             if len(preview.unresolved) > 20:
                 lines.append(f'- ... and {len(preview.unresolved) - 20} more')
         lines += [
@@ -2207,7 +2223,12 @@ class Minigames(commands.Cog):
             ctx, preview, source_label, today_iso))
 
     def _format_queens_save_embed(self, ctx, preview, source_label, today_iso):
-        """Build the success embed listing every entry that was added."""
+        """Build the success embed listing every entry that was added.
+
+        Resolved entries use the *public* link name (``Anonymous`` for
+        anonymously-registered users); unresolved entries show the raw
+        scraped name (no Discord user is claiming it).
+        """
         links_by_user = self._queens_links_by_user(ctx.guild.id)
         lines = [
             f'{source_label} of {QUEENS_GAME.display_name} '
@@ -2219,10 +2240,14 @@ class Minigames(commands.Cog):
             for index, entry in enumerate(
                     sorted(preview.resolved, key=lambda e: e.time_seconds),
                     start=1):
-                name = self._queens_public_user_name(
+                discord_name = self._queens_public_user_name(
                     ctx.guild, entry.user_id, links_by_user)
+                link = links_by_user.get(str(entry.user_id))
+                li_display = (_queens_public_link_name(link)
+                              if link else entry.linkedin_name)
                 lines.append(
-                    f'{index}. {name} — {_format_queens_result(entry)}')
+                    f'{index}. {discord_name} — '
+                    f'{_format_queens_result(entry, name_override=li_display)}')
         if preview.unresolved:
             lines.append('')
             lines.append(
@@ -2230,8 +2255,7 @@ class Minigames(commands.Cog):
                 'LinkedIn name(s):')
             for entry in sorted(
                     preview.unresolved, key=lambda e: e.time_seconds)[:20]:
-                lines.append(
-                    f'- {entry.linkedin_name} — {_format_queens_result(entry)}')
+                lines.append(f'- {_format_queens_result(entry)}')
             if len(preview.unresolved) > 20:
                 lines.append(
                     f'- ... and {len(preview.unresolved) - 20} more')
@@ -4406,6 +4430,121 @@ class Minigames(commands.Cog):
             f'`{_QUEENS_UPDATE_THROTTLE_SECONDS}s`',
         ]
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
+
+    @queens.command(
+        name='backfill',
+        brief='(Mod) Backfill a user\'s historical Queens results',
+        usage='@user (attach queens_history.json)')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_backfill(self, ctx, member: CaseInsensitiveMember):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+
+        # User must already be registered so we know their LinkedIn name
+        # for the match.
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        if link is None:
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is not registered for '
+                f'{QUEENS_GAME.display_name}. They need to '
+                '`;queens register Their LinkedIn Name` first.')
+
+        attachments = list(getattr(ctx.message, 'attachments', None) or [])
+        json_atts = [
+            a for a in attachments
+            if getattr(a, 'filename', '').lower().endswith('.json')]
+        if not json_atts:
+            raise MinigameCogError(
+                'Attach a `queens_history.json` file (generated by '
+                '`extra/queens_parse_messages.py`).')
+        attachment = json_atts[0]
+        size = int(getattr(attachment, 'size', 0) or 0)
+        if size and size > _QUEENS_BACKFILL_MAX_BYTES:
+            raise MinigameCogError(
+                f'Attachment is {size} bytes — refusing anything over '
+                f'{_QUEENS_BACKFILL_MAX_BYTES} bytes.')
+        raw = await attachment.read()
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MinigameCogError(f'Attachment is not valid JSON: {exc}.')
+        if not isinstance(data, list):
+            raise MinigameCogError(
+                'JSON must be a list of result entries.')
+
+        target_normalized = link.normalized_name
+        matching = []
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('linkedin_name', '')
+            if not isinstance(name, str):
+                continue
+            if normalize_queens_name(name) == target_normalized:
+                matching.append(entry)
+        if not matching:
+            raise MinigameCogError(
+                f'No entries in the JSON match '
+                f'`{_safe_member_name(member)}`\'s registered LinkedIn '
+                'account.')
+
+        saved = 0
+        skipped = 0
+        malformed = 0
+        for entry in matching:
+            try:
+                puzzle_number = int(entry['puzzle_number'])
+                time_seconds = int(entry['time_seconds'])
+                no_hints = bool(entry.get('no_hints', False))
+                no_mistakes = bool(entry.get('no_mistakes', False))
+                puzzle_date_iso = entry.get('puzzle_date')
+                if puzzle_date_iso:
+                    puzzle_date = dt.date.fromisoformat(puzzle_date_iso)
+                else:
+                    puzzle_date = _queens_date_for_puzzle_number(puzzle_number)
+            except (KeyError, TypeError, ValueError):
+                malformed += 1
+                continue
+
+            # Additive: skip if any matching row (anchor or legacy
+            # ordinal number) already exists for this user/puzzle.
+            existing = None
+            for pn in _queens_puzzle_numbers_for_date(puzzle_date):
+                existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
+                    ctx.guild.id, QUEENS_GAME.name, member.id, pn)
+                if existing is not None:
+                    break
+            if existing is not None:
+                skipped += 1
+                continue
+
+            cf_common.user_db.save_minigame_result(
+                _queens_result_message_id(
+                    ctx.guild.id, puzzle_date, member.id),
+                ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, member.id,
+                puzzle_number, _queens_puzzle_date_text(puzzle_date),
+                100 if no_mistakes else 0, time_seconds,
+                no_hints and no_mistakes,
+                f'backfill from LinkedIn export '
+                f'({entry.get("sent_at_utc", "")})'
+            )
+            saved += 1
+
+        if saved:
+            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+
+        lines = [
+            f'Backfilled **{saved}** result(s) for '
+            f'`{_safe_member_name(member)}` '
+            f'(LinkedIn: `{_queens_public_link_name(link)}`).',
+        ]
+        if skipped:
+            lines.append(
+                f'- Skipped **{skipped}** already-saved result(s).')
+        if malformed:
+            lines.append(
+                f'- Ignored **{malformed}** malformed entry/entries.')
+        await ctx.send(embed=discord_common.embed_success('\n'.join(lines)))
 
     @queens.command(
         name='state-path', aliases=['statepath'],
