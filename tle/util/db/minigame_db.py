@@ -327,6 +327,24 @@ class MinigameDbMixin:
         self.conn.commit()
         return live_rc + imported_rc
 
+    def delete_minigame_results_for_game(self, guild_id, game):
+        live_rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_result
+            WHERE guild_id = ? AND game = ?
+            ''',
+            (str(guild_id), game)
+        ).rowcount
+        imported_rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_import_result
+            WHERE guild_id = ? AND game = ?
+            ''',
+            (str(guild_id), game)
+        ).rowcount
+        self.conn.commit()
+        return live_rc + imported_rc
+
     # ── Unresolved external-account imports ───────────────────────────
 
     def save_minigame_unresolved_result(
@@ -378,6 +396,20 @@ class MinigameDbMixin:
             (str(guild_id), game, int(puzzle_number))
         ).fetchall()
 
+    def get_minigame_unresolved_results_for_guild(self, guild_id, game):
+        return self.conn.execute(
+            '''
+            SELECT guild_id, game, normalized_name, external_name, channel_id,
+                   puzzle_number, puzzle_date, accuracy, time_seconds,
+                   is_perfect, raw_content
+            FROM minigame_unresolved_result
+            WHERE guild_id = ? AND game = ?
+            ORDER BY puzzle_date DESC, puzzle_number DESC, time_seconds ASC,
+                     normalized_name ASC
+            ''',
+            (str(guild_id), game)
+        ).fetchall()
+
     def delete_minigame_unresolved_results_for_name(
             self, guild_id, game, normalized_name):
         rc = self.conn.execute(
@@ -386,6 +418,19 @@ class MinigameDbMixin:
             WHERE guild_id = ? AND game = ? AND normalized_name = ?
             ''',
             (str(guild_id), game, str(normalized_name))
+        ).rowcount
+        self.conn.commit()
+        return rc
+
+    def delete_minigame_unresolved_result_for_name_puzzle(
+            self, guild_id, game, normalized_name, puzzle_number):
+        rc = self.conn.execute(
+            '''
+            DELETE FROM minigame_unresolved_result
+            WHERE guild_id = ? AND game = ? AND normalized_name = ?
+              AND puzzle_number = ?
+            ''',
+            (str(guild_id), game, str(normalized_name), int(puzzle_number))
         ).rowcount
         self.conn.commit()
         return rc

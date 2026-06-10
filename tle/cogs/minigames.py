@@ -1211,6 +1211,8 @@ class Minigames(commands.Cog):
             rating = game.rating
             if rating is None:
                 return
+            if game.name == QUEENS_GAME.name:
+                self._sync_queens_materialized_results(guild_id)
             rows = cf_common.user_db.get_minigame_results_for_guild(
                 guild_id, game.name)
             rows = self._filter_minigame_banned_rows(guild_id, game, rows)
@@ -1384,13 +1386,13 @@ class Minigames(commands.Cog):
 
     def _save_queens_registration_link(self, guild_id, member_id, name,
                                        normalized_name, external_url, linked_by):
+        self._migrate_legacy_queens_results_to_external(guild_id)
         cf_common.user_db.set_minigame_player_link(
             guild_id, QUEENS_GAME.name, member_id, name, normalized_name,
             external_url, time.time(), linked_by)
         claimed = self._claim_queens_unresolved_results(
             guild_id, member_id, normalized_name)
-        if claimed:
-            self._recompute_minigame_ratings(guild_id, QUEENS_GAME)
+        self._recompute_minigame_ratings(guild_id, QUEENS_GAME)
         return claimed
 
     def _cmd_queens_register_link(self, ctx, member, linkedin_text,
@@ -1642,35 +1644,104 @@ class Minigames(commands.Cog):
         target = self._resolve_registrar_target(ctx, member)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, target.id)
+        self._migrate_legacy_queens_results_to_external(ctx.guild.id)
         removed = cf_common.user_db.delete_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, target.id)
         if not removed:
             raise MinigameCogError(
                 f'`{_safe_member_name(target)}` is not registered for '
                 f'{QUEENS_GAME.display_name}.')
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         await ctx.send(embed=discord_common.embed_success(
             f'Removed {QUEENS_GAME.display_name} link for '
             f'`{self._queens_public_user_name(ctx.guild, target.id, {str(target.id): link})}`.'))
+
+    @staticmethod
+    def _save_queens_external_result(guild_id, channel_id, entry, puzzle_date,
+                                     raw_content):
+        puzzle_date = normalize_puzzle_date(puzzle_date)
+        cf_common.user_db.save_minigame_unresolved_result(
+            guild_id,
+            QUEENS_GAME.name,
+            normalize_queens_name(entry.linkedin_name),
+            entry.linkedin_name,
+            channel_id,
+            _queens_puzzle_number_for_date(puzzle_date),
+            _queens_puzzle_date_text(puzzle_date),
+            100 if entry.no_mistakes else 0,
+            entry.time_seconds,
+            entry.no_hints and entry.no_mistakes,
+            raw_content,
+        )
+
+    def _migrate_legacy_queens_results_to_external(self, guild_id):
+        links_by_user = self._queens_links_by_user(guild_id)
+        if not links_by_user:
+            return 0
+        migrated = 0
+        for row in cf_common.user_db.get_minigame_results_for_guild(
+                guild_id, QUEENS_GAME.name):
+            link = links_by_user.get(str(row.user_id))
+            if link is None:
+                continue
+            entry = _QueensResolvedEntry(
+                user_id=row.user_id,
+                linkedin_name=link.external_name,
+                time_seconds=int(row.time_seconds),
+                no_hints=bool(row.is_perfect),
+                no_mistakes=int(row.accuracy) == 100,
+            )
+            self._save_queens_external_result(
+                guild_id, row.channel_id, entry,
+                normalize_puzzle_date(row.puzzle_date), row.raw_content)
+            migrated += 1
+        return migrated
+
+    def _sync_queens_materialized_results(self, guild_id, *,
+                                          migrate_legacy=True):
+        if migrate_legacy:
+            self._migrate_legacy_queens_results_to_external(guild_id)
+        cf_common.user_db.delete_minigame_results_for_game(
+            guild_id, QUEENS_GAME.name)
+        links_by_name = {
+            row.normalized_name: row
+            for row in cf_common.user_db.get_minigame_player_links(
+                guild_id, QUEENS_GAME.name)
+        }
+        saved = 0
+        for row in cf_common.user_db.get_minigame_unresolved_results_for_guild(
+                guild_id, QUEENS_GAME.name):
+            link = links_by_name.get(row.normalized_name)
+            if link is None:
+                continue
+            if cf_common.user_db.is_minigame_banned(
+                    guild_id, QUEENS_GAME.name, link.user_id):
+                continue
+            puzzle_date = normalize_puzzle_date(row.puzzle_date)
+            cf_common.user_db.save_minigame_result(
+                _queens_result_message_id(guild_id, puzzle_date, link.user_id),
+                guild_id,
+                QUEENS_GAME.name,
+                row.channel_id,
+                link.user_id,
+                _queens_puzzle_number_for_date(puzzle_date),
+                _queens_puzzle_date_text(puzzle_date),
+                row.accuracy,
+                row.time_seconds,
+                row.is_perfect,
+                row.raw_content,
+            )
+            saved += 1
+        return saved
 
     def _claim_queens_unresolved_results(self, guild_id, user_id,
                                          normalized_name):
         rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
             guild_id, QUEENS_GAME.name, normalized_name)
-        if not rows:
-            return 0
-        for row in rows:
-            puzzle_date = normalize_puzzle_date(row.puzzle_date)
-            puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
-            for existing_number in _queens_puzzle_numbers_for_date(puzzle_date):
-                cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                    guild_id, QUEENS_GAME.name, user_id, existing_number)
-            cf_common.user_db.save_minigame_result(
-                _queens_result_message_id(guild_id, puzzle_date, user_id),
-                guild_id, QUEENS_GAME.name, row.channel_id, user_id,
-                puzzle_number, row.puzzle_date, row.accuracy,
-                row.time_seconds, row.is_perfect, row.raw_content)
-        cf_common.user_db.delete_minigame_unresolved_results_for_name(
-            guild_id, QUEENS_GAME.name, normalized_name)
+        del user_id
+        self._sync_queens_materialized_results(guild_id, migrate_legacy=False)
         return len(rows)
 
     def _resolve_queens_leaderboard(self, ctx, leaderboard, *,
@@ -1794,29 +1865,19 @@ class Minigames(commands.Cog):
         overwrites a previously-saved row, only adds new ones.  Returns
         ``(new_resolved, new_unresolved)`` lists.
         """
-        new_resolved = []
-        for entry in preview.resolved:
-            already_saved = False
-            for puzzle_number in _queens_puzzle_numbers_for_date(
-                    preview.puzzle_date):
-                existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
-                    guild_id, QUEENS_GAME.name, entry.user_id, puzzle_number)
-                if existing is not None:
-                    already_saved = True
-                    break
-            if not already_saved:
-                new_resolved.append(entry)
-
-        existing_unresolved_names = set()
+        existing_names = set()
         for puzzle_number in _queens_puzzle_numbers_for_date(
                 preview.puzzle_date):
             for row in cf_common.user_db.get_minigame_unresolved_results_for_puzzle(
                     guild_id, QUEENS_GAME.name, puzzle_number):
-                existing_unresolved_names.add(row.normalized_name)
+                existing_names.add(row.normalized_name)
+        new_resolved = [
+            entry for entry in preview.resolved
+            if normalize_queens_name(entry.linkedin_name) not in existing_names]
         new_unresolved = [
             entry for entry in preview.unresolved
             if normalize_queens_name(entry.linkedin_name)
-            not in existing_unresolved_names]
+            not in existing_names]
 
         return new_resolved, new_unresolved
 
@@ -1828,31 +1889,14 @@ class Minigames(commands.Cog):
                 cf_common.user_db.delete_minigame_unresolved_results_for_puzzle(
                     ctx.guild.id, QUEENS_GAME.name, puzzle_number)
         for entry in preview.resolved:
-            cf_common.user_db.save_minigame_result(
-                _queens_result_message_id(
-                    ctx.guild.id, preview.puzzle_date, entry.user_id),
-                ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, entry.user_id,
-                preview.puzzle_number,
-                _queens_puzzle_date_text(preview.puzzle_date),
-                100 if entry.no_mistakes else 0,
-                entry.time_seconds,
-                entry.no_hints and entry.no_mistakes,
-                preview.raw_content,
-            )
+            self._save_queens_external_result(
+                ctx.guild.id, ctx.channel.id, entry, preview.puzzle_date,
+                preview.raw_content)
         for entry in preview.unresolved:
-            cf_common.user_db.save_minigame_unresolved_result(
-                ctx.guild.id,
-                QUEENS_GAME.name,
-                normalize_queens_name(entry.linkedin_name),
-                entry.linkedin_name,
-                ctx.channel.id,
-                preview.puzzle_number,
-                _queens_puzzle_date_text(preview.puzzle_date),
-                100 if entry.no_mistakes else 0,
-                entry.time_seconds,
-                entry.no_hints and entry.no_mistakes,
-                preview.raw_content,
-            )
+            self._save_queens_external_result(
+                ctx.guild.id, ctx.channel.id, entry, preview.puzzle_date,
+                preview.raw_content)
+        self._sync_queens_materialized_results(ctx.guild.id)
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         return _QueensImportSaveResult(
             resolved=len(preview.resolved),
@@ -1995,15 +2039,22 @@ class Minigames(commands.Cog):
         no_hints, no_mistakes, _status_text = queens_status_flags(status)
         time_seconds = parse_queens_time(time_text)
         for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+            cf_common.user_db.delete_minigame_unresolved_result_for_name_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, linked.normalized_name,
+                puzzle_number)
             cf_common.user_db.delete_minigame_result_for_user_puzzle(
                 ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
-        cf_common.user_db.save_minigame_result(
-            _queens_result_message_id(ctx.guild.id, parsed_date, user_id),
-            ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, user_id,
-            parsed_number, _queens_puzzle_date_text(parsed_date),
-            100 if no_mistakes else 0, time_seconds, no_hints and no_mistakes,
-            f'{linked.external_name}\n{status}\n{time_text}',
+        entry = _QueensResolvedEntry(
+            user_id=user_id,
+            linkedin_name=linked.external_name,
+            time_seconds=time_seconds,
+            no_hints=no_hints,
+            no_mistakes=no_mistakes,
         )
+        self._save_queens_external_result(
+            ctx.guild.id, ctx.channel.id, entry, parsed_date,
+            f'{linked.external_name}\n{status}\n{time_text}')
+        self._sync_queens_materialized_results(ctx.guild.id)
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         await ctx.send(embed=discord_common.embed_success(
             f'Added {QUEENS_GAME.display_name} result for '
@@ -2013,16 +2064,20 @@ class Minigames(commands.Cog):
     async def _cmd_queens_remove(self, ctx, args):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         player_text, parsed_date = self._parse_queens_remove_args(args)
-        user_id, label, _linked = await self._resolve_queens_linked_player(
+        user_id, label, linked = await self._resolve_queens_linked_player(
             ctx, player_text)
         rc = 0
         for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+            rc += cf_common.user_db.delete_minigame_unresolved_result_for_name_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, linked.normalized_name,
+                puzzle_number)
             rc += cf_common.user_db.delete_minigame_result_for_user_puzzle(
                 ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
         if not rc:
             raise MinigameCogError(
                 f'No {QUEENS_GAME.display_name} result found for '
                 f'`{label}` on {parsed_date.isoformat()}.')
+        self._sync_queens_materialized_results(ctx.guild.id)
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         await ctx.send(embed=discord_common.embed_success(
             f'Removed {QUEENS_GAME.display_name} result for '
@@ -2055,6 +2110,7 @@ class Minigames(commands.Cog):
 
     async def _cmd_queens_ratings_recompute(self, ctx):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        self._sync_queens_materialized_results(ctx.guild.id)
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         await ctx.send(embed=discord_common.embed_success(
             f'{QUEENS_GAME.display_name} ratings recomputed.'))
@@ -2300,7 +2356,7 @@ class Minigames(commands.Cog):
         enabled = self._is_enabled(ctx.guild.id, QUEENS_GAME.feature_flag)
         links = cf_common.user_db.get_minigame_player_links(
             ctx.guild.id, QUEENS_GAME.name)
-        rows = cf_common.user_db.get_minigame_results_for_guild(
+        rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
             ctx.guild.id, QUEENS_GAME.name)
         dates = {_format_queens_date(row) for row in rows}
         account = self._get_queens_connection_account(ctx.guild.id)
@@ -4952,27 +5008,38 @@ class Minigames(commands.Cog):
             # ordinal number) already exists for this user/puzzle.
             existing = None
             for pn in _queens_puzzle_numbers_for_date(puzzle_date):
-                existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
-                    ctx.guild.id, QUEENS_GAME.name, member.id, pn)
+                source_rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
+                    ctx.guild.id, QUEENS_GAME.name, target_normalized)
+                existing = next(
+                    (row for row in source_rows if int(row.puzzle_number) == pn),
+                    None)
+                if existing is None:
+                    existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
+                        ctx.guild.id, QUEENS_GAME.name, member.id, pn)
                 if existing is not None:
                     break
             if existing is not None:
                 skipped += 1
                 continue
 
-            cf_common.user_db.save_minigame_result(
-                _queens_result_message_id(
-                    ctx.guild.id, puzzle_date, member.id),
-                ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, member.id,
-                puzzle_number, _queens_puzzle_date_text(puzzle_date),
-                100 if no_mistakes else 0, time_seconds,
-                no_hints and no_mistakes,
+            self._save_queens_external_result(
+                ctx.guild.id,
+                ctx.channel.id,
+                _QueensResolvedEntry(
+                    user_id=member.id,
+                    linkedin_name=link.external_name,
+                    time_seconds=time_seconds,
+                    no_hints=no_hints,
+                    no_mistakes=no_mistakes,
+                ),
+                puzzle_date,
                 f'backfill from LinkedIn export '
                 f'({entry.get("sent_at_utc", "")})'
             )
             saved += 1
 
         if saved:
+            self._sync_queens_materialized_results(ctx.guild.id)
             self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
 
         lines = [
@@ -5028,8 +5095,11 @@ class Minigames(commands.Cog):
             raise MinigameCogError(
                 f'`{display_name}` is already banned from '
                 f'{QUEENS_GAME.display_name}.')
+        self._migrate_legacy_queens_results_to_external(ctx.guild.id)
         cf_common.user_db.delete_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         lines = [
             f'`{display_name}` is now banned from '

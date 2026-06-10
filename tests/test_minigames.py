@@ -1083,6 +1083,8 @@ class TestQueensImport:
         unresolved = db.get_minigame_unresolved_results_for_puzzle(
             100, 'queens', _queens_number('2026-06-08'))
         assert [(row.external_name, row.time_seconds) for row in unresolved] == [
+            ('Ali Farhat', 4),
+            ('Robert Kocharyan', 6),
             ('Unknown Person', 7),
         ]
         assert {row.puzzle_number for row in rows} == {_queens_number('2026-06-08')}
@@ -1101,8 +1103,11 @@ class TestQueensImport:
         assert saved.unresolved == 0
         rows = db.get_minigame_results_for_guild(100, 'queens')
         assert [(row.user_id, row.time_seconds) for row in rows] == [('301', 5)]
-        assert db.get_minigame_unresolved_results_for_puzzle(
-            100, 'queens', _queens_number('2026-06-08')) == []
+        source_rows = db.get_minigame_unresolved_results_for_puzzle(
+            100, 'queens', _queens_number('2026-06-08'))
+        assert [(row.external_name, row.time_seconds) for row in source_rows] == [
+            ('Robert Kocharyan', 5),
+        ]
         ratings = db.get_minigame_ratings(100, 'queens')
         assert [row.user_id for row in ratings] == ['301']
         assert ratings[0].games == 0
@@ -1162,12 +1167,72 @@ class TestQueensImport:
             100, 'queens', alice.id, _queens_number('2026-06-08'))
         assert claimed is not None
         assert claimed.time_seconds == 4
-        assert db.get_minigame_unresolved_results_for_name(
-            100, 'queens', normalize_queens_name('Alice LinkedIn')) == []
+        assert [
+            row.time_seconds for row in db.get_minigame_unresolved_results_for_name(
+                100, 'queens', normalize_queens_name('Alice LinkedIn'))
+        ] == [4]
         assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == [
             '301', '300',
         ]
         assert claimed_count == 1
+
+    def test_linkedin_source_result_moves_when_name_is_reclaimed(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[mod, alice, bob])
+        cog = Minigames(bot=None)
+
+        db.save_minigame_unresolved_result(
+            100, 'queens', normalize_queens_name('Shared LinkedIn'),
+            'Shared LinkedIn', 200, _queens_number('2026-06-08'),
+            '2026-06-08', 100, 4, True, 'source')
+
+        sent = {}
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent['content'] = content
+            sent['embed'] = embed
+            sent['kwargs'] = kwargs
+
+        alice_ctx = SimpleNamespace(
+            guild=guild,
+            author=alice,
+            channel=_FakeChannel(200),
+            send=send,
+            sent=sent,
+        )
+        cog._cmd_queens_register_link(alice_ctx, alice, 'Shared LinkedIn')
+        assert db.get_minigame_result_for_user_puzzle(
+            100, 'queens', alice.id, _queens_number('2026-06-08')) is not None
+
+        asyncio.run(cog._cmd_queens_unregister(alice_ctx, alice))
+        assert db.get_minigame_result_for_user_puzzle(
+            100, 'queens', alice.id, _queens_number('2026-06-08')) is None
+        assert db.get_minigame_unresolved_results_for_name(
+            100, 'queens', normalize_queens_name('Shared LinkedIn'))
+
+        mod_ctx = SimpleNamespace(
+            guild=guild,
+            author=mod,
+            channel=_FakeChannel(200),
+            send=send,
+            sent=sent,
+        )
+        asyncio.run(Minigames.queens_set.__wrapped__(
+            cog, mod_ctx, 'bob', linkedin='Shared LinkedIn'))
+        moved = db.get_minigame_result_for_user_puzzle(
+            100, 'queens', bob.id, _queens_number('2026-06-08'))
+        assert moved is not None
+        assert moved.time_seconds == 4
 
     def test_register_normalizes_legacy_unresolved_puzzle_number(
             self, db, monkeypatch):
@@ -1242,6 +1307,13 @@ class TestQueensImport:
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.replace_minigame_ratings(
             100, 'akari', [RatingState('999', 1500, 1, 1500, 0)], 1.0)
+        for user_id, name in (
+                (300, 'Alice LinkedIn'),
+                (301, 'Bob LinkedIn'),
+                (302, 'Cara LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'queens', user_id, name, normalize_queens_name(name),
+                None, 1.0, user_id)
         db.save_minigame_result(
             1, 100, 'queens', 200, 300, _queens_number('2026-06-08'), '2026-06-08',
             0, 8, False, 'fast no badges')
@@ -1270,6 +1342,13 @@ class TestQueensImport:
 
     def test_queens_rating_does_not_decay_absent_players(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
+        for user_id, name in (
+                (300, 'Alice LinkedIn'),
+                (301, 'Bob LinkedIn'),
+                (302, 'Cara LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'queens', user_id, name, normalize_queens_name(name),
+                None, 1.0, user_id)
         db.save_minigame_result(
             1, 100, 'queens', 200, 300, _queens_number('2026-06-08'), '2026-06-08',
             100, 5, True, 'alice fast')
@@ -1879,6 +1958,10 @@ class TestQueensCommands:
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
 
+        for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'queens', member.id, name, normalize_queens_name(name),
+                None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 6)
         self._save_queens_result(db, 3, alice.id, '2026-06-09', 4)
@@ -1943,7 +2026,7 @@ class TestQueensCommands:
         assert 'file' in ctx.sent['kwargs']
 
         asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
-        assert set(captured[-1]['user_ids']) == {'300', '301'}
+        assert set(captured[-1]['user_ids']) == {'300'}
         assert captured[-1]['mark_registered'] is True
 
     def test_anonymous_registration_hides_linkedin_identity_only(
@@ -2222,6 +2305,9 @@ class TestQueensCommands:
         db.set_minigame_player_link(
             100, 'queens', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, mod.id)
+        db.set_minigame_player_link(
+            100, 'queens', bob.id, 'Bob LinkedIn',
+            normalize_queens_name('Bob LinkedIn'), None, 1.0, mod.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 6)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
