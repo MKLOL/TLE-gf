@@ -2,6 +2,7 @@
 import asyncio
 import datetime as dt
 import sqlite3
+import time
 from collections import namedtuple
 from types import SimpleNamespace
 
@@ -1441,6 +1442,105 @@ class TestQueensCommands:
         alice_link = db.get_minigame_player_link(100, 'queens', alice.id)
         assert alice_link.external_name == '<@301> Bob LinkedIn'
         assert db.get_minigame_player_link(100, 'queens', bob.id) is None
+
+    def test_slash_register_self(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        interaction = SimpleNamespace(
+            id=999,
+            guild=guild,
+            user=alice,
+            channel_id=200,
+            client=None,
+            response=_FakeResponse(),
+            followup=_FakeFollowup(),
+        )
+        cog = Minigames(bot=None)
+
+        asyncio.run(cog.slash_queens_register(
+            interaction, 'Alice LinkedIn'))
+
+        row = db.get_minigame_player_link(100, 'queens', alice.id)
+        assert row.external_name == 'Alice LinkedIn'
+        assert interaction.response.deferred is True
+        assert 'You are registered for LinkedIn Queens' in (
+            interaction.followup.sent[0]['embed'].description)
+
+    def test_update_sends_slow_notice_when_not_rate_limited(
+            self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.kvs_get = lambda _key: None
+        kvs_updates = []
+        db.kvs_set = lambda key, value: kvs_updates.append((key, value))
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent.append({'content': content, 'embed': embed, 'kwargs': kwargs})
+
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=alice,
+            channel=_FakeChannel(200),
+            send=send,
+        )
+        state_path = tmp_path / 'queens_state.json'
+        state_path.write_text('{}')
+        cog = Minigames(bot=None)
+        monkeypatch.setattr(cog, '_queens_state_path', lambda _guild_id: state_path)
+
+        async def fake_scraper(_guild_id, *, auto_play):
+            assert auto_play is False
+            return {'status': 'ok', 'raw_text': ''}, None
+
+        imports = []
+
+        async def fake_import(_ctx, payload, *, source_label):
+            imports.append((payload, source_label))
+
+        monkeypatch.setattr(cog, '_run_queens_scraper', fake_scraper)
+        monkeypatch.setattr(cog, '_do_queens_import', fake_import)
+
+        asyncio.run(Minigames.queens_update.__wrapped__(cog, ctx))
+
+        assert sent[0]['content'] == 'This will take a while'
+        assert len(kvs_updates) == 1
+        assert imports == [({'status': 'ok', 'raw_text': ''}, 'Update')]
+
+    def test_update_rate_limit_skips_slow_notice(self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.kvs_get = lambda _key: str(time.time())
+        db.kvs_set = lambda _key, _value: None
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent.append({'content': content, 'embed': embed, 'kwargs': kwargs})
+
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=alice,
+            channel=_FakeChannel(200),
+            send=send,
+        )
+        state_path = tmp_path / 'queens_state.json'
+        state_path.write_text('{}')
+        cog = Minigames(bot=None)
+        monkeypatch.setattr(cog, '_queens_state_path', lambda _guild_id: state_path)
+
+        with pytest.raises(MinigameCogError, match='rate-limited'):
+            asyncio.run(Minigames.queens_update.__wrapped__(cog, ctx))
+
+        assert sent == []
 
     def test_register_anonymous_keeps_linkedin_name_private(
             self, db, monkeypatch):

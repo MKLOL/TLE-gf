@@ -1337,6 +1337,45 @@ class Minigames(commands.Cog):
             self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         return claimed
 
+    async def _cmd_queens_register(self, ctx, member, linkedin_text,
+                                   anonymous=False):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        claimed = self._cmd_queens_register_link(
+            ctx, member, linkedin_text, anonymous=anonymous)
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
+        display_name = self._queens_public_user_name(
+            ctx.guild, member.id, {str(member.id): link})
+        who = (
+            'You are'
+            if member.id == ctx.author.id
+            else f'`{display_name}` is'
+        )
+        await ctx.send(embed=discord_common.embed_success('\n'.join([
+            f'{who} registered for {QUEENS_GAME.display_name} as '
+            f'`{_queens_public_link_name(link)}`.',
+            *(
+                [f'Claimed {claimed} stored Queens result(s) and recomputed ratings.']
+                if claimed else []
+            ),
+            self._queens_connection_instruction(ctx.guild.id),
+        ])))
+
+    async def _cmd_queens_unregister(self, ctx, member):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        target = self._resolve_registrar_target(ctx, member)
+        link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, target.id)
+        removed = cf_common.user_db.delete_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, target.id)
+        if not removed:
+            raise MinigameCogError(
+                f'`{_safe_member_name(target)}` is not registered for '
+                f'{QUEENS_GAME.display_name}.')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed {QUEENS_GAME.display_name} link for '
+            f'`{self._queens_public_user_name(ctx.guild, target.id, {str(target.id): link})}`.'))
+
     def _claim_queens_unresolved_results(self, guild_id, user_id,
                                          normalized_name):
         rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
@@ -1660,6 +1699,82 @@ class Minigames(commands.Cog):
                 'Usage: `;queens remove <@user|LinkedIn Name> DATE/#`.') from exc
         player_text = ' '.join(tokens[:-1]).strip()
         return player_text, parsed_date
+
+    async def _cmd_queens_add(self, ctx, args):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        player_text, parsed_date, time_text, status = (
+            self._parse_queens_add_args(args))
+        user_id, label, linked = await self._resolve_queens_linked_player(
+            ctx, player_text)
+        self._ensure_not_minigame_banned(
+            ctx.guild.id, QUEENS_GAME, user_id, label)
+        parsed_number = _queens_puzzle_number_for_date(parsed_date)
+        no_hints, no_mistakes, _status_text = queens_status_flags(status)
+        time_seconds = parse_queens_time(time_text)
+        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+            cf_common.user_db.delete_minigame_result_for_user_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
+        cf_common.user_db.save_minigame_result(
+            _queens_result_message_id(ctx.guild.id, parsed_date, user_id),
+            ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, user_id,
+            parsed_number, _queens_puzzle_date_text(parsed_date),
+            100 if no_mistakes else 0, time_seconds, no_hints and no_mistakes,
+            f'{linked.external_name}\n{status}\n{time_text}',
+        )
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Added {QUEENS_GAME.display_name} result for '
+            f'`{label}` on #{parsed_number} {parsed_date.isoformat()}: '
+            f'**{format_duration(time_seconds)}**.'))
+
+    async def _cmd_queens_remove(self, ctx, args):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        player_text, parsed_date = self._parse_queens_remove_args(args)
+        user_id, label, _linked = await self._resolve_queens_linked_player(
+            ctx, player_text)
+        rc = 0
+        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+            rc += cf_common.user_db.delete_minigame_result_for_user_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
+        if not rc:
+            raise MinigameCogError(
+                f'No {QUEENS_GAME.display_name} result found for '
+                f'`{label}` on {parsed_date.isoformat()}.')
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed {QUEENS_GAME.display_name} result for '
+            f'`{label}` on #{_queens_puzzle_number_for_date(parsed_date)} '
+            f'{parsed_date.isoformat()}.'))
+
+    async def _cmd_queens_clear(self, ctx, puzzle_date):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        if puzzle_date is None:
+            raise MinigameCogError('Usage: `;queens clear DATE/#`.')
+        parsed_date = _parse_queens_date_or_number(puzzle_date)
+        parsed_number = _queens_puzzle_number_for_date(parsed_date)
+        deleted = 0
+        unresolved_deleted = 0
+        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+            deleted += cf_common.user_db.delete_minigame_results_for_puzzle(
+                ctx.guild.id, QUEENS_GAME.name, puzzle_number)
+            unresolved_deleted += (
+                cf_common.user_db.delete_minigame_unresolved_results_for_puzzle(
+                    ctx.guild.id, QUEENS_GAME.name, puzzle_number))
+        if not deleted and not unresolved_deleted:
+            raise MinigameCogError(
+                f'No {QUEENS_GAME.display_name} results found for '
+                f'{parsed_date.isoformat()}.')
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed {deleted} registered and {unresolved_deleted} unresolved '
+            f'{QUEENS_GAME.display_name} result(s) for '
+            f'#{parsed_number} {parsed_date.isoformat()}.'))
+
+    async def _cmd_queens_ratings_recompute(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        await ctx.send(embed=discord_common.embed_success(
+            f'{QUEENS_GAME.display_name} ratings recomputed.'))
 
     async def _extract_queens_rating_filters(self, ctx, args):
         (remaining, include_decay, excluded_ids, included_ids,
@@ -2260,6 +2375,42 @@ class Minigames(commands.Cog):
                 lines.append(
                     f'- ... and {len(preview.unresolved) - 20} more')
         return discord_common.embed_success('\n'.join(lines))
+
+    async def _cmd_queens_update(self, ctx):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        kvs_key = f'{_QUEENS_UPDATE_THROTTLE_PREFIX}{ctx.guild.id}'
+        last = cf_common.user_db.kvs_get(kvs_key)
+        if last:
+            try:
+                elapsed = time.time() - float(last)
+            except (TypeError, ValueError):
+                elapsed = _QUEENS_UPDATE_THROTTLE_SECONDS
+            if elapsed < _QUEENS_UPDATE_THROTTLE_SECONDS:
+                wait = int(_QUEENS_UPDATE_THROTTLE_SECONDS - elapsed) + 1
+                raise MinigameCogError(
+                    f'`;queens update` is rate-limited. Try again in {wait}s.')
+
+        state_path = self._queens_state_path(ctx.guild.id)
+        if not state_path.exists():
+            raise MinigameCogError(
+                f'No LinkedIn session at `{state_path}`. A mod needs to '
+                'run `;queens login` first.')
+        await ctx.send('This will take a while')
+        # Set the throttle BEFORE the slow subprocess so concurrent users
+        # don't both pass the gate.
+        cf_common.user_db.kvs_set(kvs_key, str(time.time()))
+
+        payload, error = await self._run_queens_scraper(
+            ctx.guild.id, auto_play=False)
+        if error is not None:
+            raise MinigameCogError(error)
+        status = payload.get('status')
+        if status == 'not_played':
+            raise MinigameCogError(self._queens_status_message(status))
+        if status != 'ok':
+            raise MinigameCogError(self._queens_status_message(status))
+        await self._do_queens_import(
+            ctx, payload, source_label='Update')
 
     # ── Listeners ───────────────────────────────────────────────────────
 
@@ -4065,26 +4216,8 @@ class Minigames(commands.Cog):
             return
         member, linkedin_text, anonymous = await self._resolve_queens_registration_args(
             ctx, first, linkedin)
-        claimed = self._cmd_queens_register_link(
+        await self._cmd_queens_register(
             ctx, member, linkedin_text, anonymous=anonymous)
-        link = cf_common.user_db.get_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, member.id)
-        display_name = self._queens_public_user_name(
-            ctx.guild, member.id, {str(member.id): link})
-        who = (
-            'You are'
-            if member.id == ctx.author.id
-            else f'`{display_name}` is'
-        )
-        await ctx.send(embed=discord_common.embed_success('\n'.join([
-            f'{who} registered for {QUEENS_GAME.display_name} as '
-            f'`{_queens_public_link_name(link)}`.',
-            *(
-                [f'Claimed {claimed} stored Queens result(s) and recomputed ratings.']
-                if claimed else []
-            ),
-            self._queens_connection_instruction(ctx.guild.id),
-        ])))
 
     @queens.command(name='unregister',
                     brief='Remove a user LinkedIn Queens link',
@@ -4095,18 +4228,7 @@ class Minigames(commands.Cog):
             target = ctx.author
         else:
             target = await self._resolve_member(ctx, member)
-            target = self._resolve_registrar_target(ctx, target)
-        link = cf_common.user_db.get_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, target.id)
-        removed = cf_common.user_db.delete_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, target.id)
-        if not removed:
-            raise MinigameCogError(
-                f'`{_safe_member_name(target)}` is not registered for '
-                f'{QUEENS_GAME.display_name}.')
-        await ctx.send(embed=discord_common.embed_success(
-            f'Removed {QUEENS_GAME.display_name} link for '
-            f'`{self._queens_public_user_name(ctx.guild, target.id, {str(target.id): link})}`.'))
+        await self._cmd_queens_unregister(ctx, target)
 
     @queens.command(name='links', brief='List registered LinkedIn Queens names')
     async def queens_links(self, ctx):
@@ -4365,39 +4487,7 @@ class Minigames(commands.Cog):
         brief='Refresh the LinkedIn Queens leaderboard '
               f'(rate-limited to once per {_QUEENS_UPDATE_THROTTLE_SECONDS}s)')
     async def queens_update(self, ctx):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        kvs_key = f'{_QUEENS_UPDATE_THROTTLE_PREFIX}{ctx.guild.id}'
-        last = cf_common.user_db.kvs_get(kvs_key)
-        if last:
-            try:
-                elapsed = time.time() - float(last)
-            except (TypeError, ValueError):
-                elapsed = _QUEENS_UPDATE_THROTTLE_SECONDS
-            if elapsed < _QUEENS_UPDATE_THROTTLE_SECONDS:
-                wait = int(_QUEENS_UPDATE_THROTTLE_SECONDS - elapsed) + 1
-                raise MinigameCogError(
-                    f'`;queens update` is rate-limited. Try again in {wait}s.')
-
-        state_path = self._queens_state_path(ctx.guild.id)
-        if not state_path.exists():
-            raise MinigameCogError(
-                f'No LinkedIn session at `{state_path}`. A mod needs to '
-                'run `;queens login` first.')
-        # Set the throttle BEFORE the slow subprocess so concurrent users
-        # don't both pass the gate.
-        cf_common.user_db.kvs_set(kvs_key, str(time.time()))
-
-        payload, error = await self._run_queens_scraper(
-            ctx.guild.id, auto_play=False)
-        if error is not None:
-            raise MinigameCogError(error)
-        status = payload.get('status')
-        if status == 'not_played':
-            raise MinigameCogError(self._queens_status_message(status))
-        if status != 'ok':
-            raise MinigameCogError(self._queens_status_message(status))
-        await self._do_queens_import(
-            ctx, payload, source_label='Update')
+        await self._cmd_queens_update(ctx)
 
     @queens.command(
         name='settings',
@@ -4732,81 +4822,20 @@ class Minigames(commands.Cog):
                     usage='<@user|LinkedIn Name> date|number time [status...]')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_add(self, ctx, *, args: str = None):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        player_text, parsed_date, time_text, status = (
-            self._parse_queens_add_args(args))
-        user_id, label, linked = await self._resolve_queens_linked_player(
-            ctx, player_text)
-        self._ensure_not_minigame_banned(
-            ctx.guild.id, QUEENS_GAME, user_id, label)
-        parsed_number = _queens_puzzle_number_for_date(parsed_date)
-        no_hints, no_mistakes, _status_text = queens_status_flags(status)
-        time_seconds = parse_queens_time(time_text)
-        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
-            cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
-        cf_common.user_db.save_minigame_result(
-            _queens_result_message_id(ctx.guild.id, parsed_date, user_id),
-            ctx.guild.id, QUEENS_GAME.name, ctx.channel.id, user_id,
-            parsed_number, _queens_puzzle_date_text(parsed_date),
-            100 if no_mistakes else 0, time_seconds, no_hints and no_mistakes,
-            f'{linked.external_name}\n{status}\n{time_text}',
-        )
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Added {QUEENS_GAME.display_name} result for '
-            f'`{label}` on #{parsed_number} {parsed_date.isoformat()}: '
-            f'**{format_duration(time_seconds)}**.'))
+        await self._cmd_queens_add(ctx, args)
 
     @queens.command(name='remove', brief='Remove a Queens result',
                     usage='<@user|LinkedIn Name> date|number')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_remove(self, ctx, *, args: str = None):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        player_text, parsed_date = self._parse_queens_remove_args(args)
-        user_id, label, _linked = await self._resolve_queens_linked_player(
-            ctx, player_text)
-        rc = 0
-        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
-            rc += cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                ctx.guild.id, QUEENS_GAME.name, user_id, puzzle_number)
-        if not rc:
-            raise MinigameCogError(
-                f'No {QUEENS_GAME.display_name} result found for '
-                f'`{label}` on {parsed_date.isoformat()}.')
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Removed {QUEENS_GAME.display_name} result for '
-            f'`{label}` on #{_queens_puzzle_number_for_date(parsed_date)} '
-            f'{parsed_date.isoformat()}.'))
+        await self._cmd_queens_remove(ctx, args)
 
     @queens.command(name='clear', aliases=['delete'],
                     brief='(Mod) Remove all Queens results for a date',
                     usage='date|number')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_clear(self, ctx, puzzle_date: str = None):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        if puzzle_date is None:
-            raise MinigameCogError('Usage: `;queens clear DATE/#`.')
-        parsed_date = _parse_queens_date_or_number(puzzle_date)
-        parsed_number = _queens_puzzle_number_for_date(parsed_date)
-        deleted = 0
-        unresolved_deleted = 0
-        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
-            deleted += cf_common.user_db.delete_minigame_results_for_puzzle(
-                ctx.guild.id, QUEENS_GAME.name, puzzle_number)
-            unresolved_deleted += (
-                cf_common.user_db.delete_minigame_unresolved_results_for_puzzle(
-                    ctx.guild.id, QUEENS_GAME.name, puzzle_number))
-        if not deleted and not unresolved_deleted:
-            raise MinigameCogError(
-                f'No {QUEENS_GAME.display_name} results found for '
-                f'{parsed_date.isoformat()}.')
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Removed {deleted} registered and {unresolved_deleted} unresolved '
-            f'{QUEENS_GAME.display_name} result(s) for '
-            f'#{parsed_number} {parsed_date.isoformat()}.'))
+        await self._cmd_queens_clear(ctx, puzzle_date)
 
     @queens.group(name='ratings', brief='Show Queens rating leaderboard',
                   usage='[+exclude=…] [+include=…]',
@@ -4900,10 +4929,7 @@ class Minigames(commands.Cog):
                             brief='(Mod) Rebuild the Queens rating snapshot')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_ratings_recompute(self, ctx):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
-        await ctx.send(embed=discord_common.embed_success(
-            f'{QUEENS_GAME.display_name} ratings recomputed.'))
+        await self._cmd_queens_ratings_recompute(ctx)
 
     @queens_ratings.command(name='debug', aliases=['all'],
                             brief='(Mod) Leaderboard including unregistered rated users',
@@ -5007,10 +5033,16 @@ class Minigames(commands.Cog):
 
     akari_slash = app_commands.Group(
         name='akari', description='Daily Akari commands', guild_only=True)
+    queens_slash = app_commands.Group(
+        name='queens', description='LinkedIn Queens commands', guild_only=True)
 
     def _has_mod_role(self, interaction):
         allowed = {constants.TLE_ADMIN, constants.TLE_MODERATOR}
         return any(r.name in allowed for r in interaction.user.roles)
+
+    @staticmethod
+    def _slash_choice_args(*choices):
+        return [choice.value for choice in choices if choice]
 
     async def _slash_send_error(self, interaction, error):
         try:
@@ -5342,6 +5374,312 @@ class Minigames(commands.Cog):
                 f'`{constants.TLE_MODERATOR}` role.')
         try:
             await self._cmd_import_clear(_SlashCtx(interaction), AKARI_GAME)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    # ── Slash commands: /queens ────────────────────────────────────────
+
+    @queens_slash.command(name='show', description='Show LinkedIn Queens settings')
+    async def slash_queens_show(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_show(_SlashCtx(interaction))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='register', description='Link a Discord user to a LinkedIn Queens name')
+    @app_commands.describe(
+        linkedin_name='LinkedIn display name',
+        member='Discord member to register (mods only when not yourself)',
+        anonymous='Hide the LinkedIn name in public bot output')
+    async def slash_queens_register(
+        self, interaction: discord.Interaction,
+        linkedin_name: str,
+        member: Optional[discord.Member] = None,
+        anonymous: bool = False,
+    ):
+        await interaction.response.defer()
+        ctx = _SlashCtx(interaction)
+        try:
+            target = self._resolve_registrar_target(ctx, member)
+            await self._cmd_queens_register(
+                ctx, target, linkedin_name, anonymous=anonymous)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='unregister', description='Remove a LinkedIn Queens link')
+    @app_commands.describe(member='Discord member to unregister (mods only when not yourself)')
+    async def slash_queens_unregister(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        ctx = _SlashCtx(interaction)
+        try:
+            await self._cmd_queens_unregister(ctx, member)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='update', description='Refresh the LinkedIn Queens leaderboard')
+    async def slash_queens_update(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_update(_SlashCtx(interaction))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='vs', description='Head-to-head comparison')
+    @app_commands.describe(
+        member1='First player', member2='Second player',
+        timeframe='Time period filter', mode='Scoring mode')
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
+    async def slash_queens_vs(
+        self, interaction: discord.Interaction,
+        member1: discord.Member, member2: discord.Member,
+        timeframe: Optional[app_commands.Choice[str]] = None,
+        mode: Optional[app_commands.Choice[str]] = None,
+    ):
+        await interaction.response.defer()
+        try:
+            await self._cmd_vs(
+                _SlashCtx(interaction), QUEENS_GAME, member1, member2,
+                *self._slash_choice_args(timeframe, mode))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='top', description='Show fastest-result winners')
+    @app_commands.describe(timeframe='Time period filter', mode='Scoring mode')
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
+    async def slash_queens_top(
+        self, interaction: discord.Interaction,
+        timeframe: Optional[app_commands.Choice[str]] = None,
+        mode: Optional[app_commands.Choice[str]] = None,
+    ):
+        await interaction.response.defer()
+        try:
+            await self._cmd_top(
+                _SlashCtx(interaction), QUEENS_GAME,
+                *self._slash_choice_args(timeframe, mode))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='streak', description='Show current clean streak')
+    @app_commands.describe(member='Player to check', timeframe='Time period filter')
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def slash_queens_streak(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+        timeframe: Optional[app_commands.Choice[str]] = None,
+    ):
+        await interaction.response.defer()
+        ctx = _SlashCtx(interaction)
+        if member:
+            ctx.author = member
+        try:
+            await self._cmd_queens_streak(
+                ctx, *self._slash_choice_args(timeframe))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='stats', description='Show personal Queens stats')
+    @app_commands.describe(member='Player to check', timeframe='Time period filter')
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def slash_queens_stats(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+        timeframe: Optional[app_commands.Choice[str]] = None,
+    ):
+        await interaction.response.defer()
+        ctx = _SlashCtx(interaction)
+        if member:
+            ctx.author = member
+        try:
+            await self._cmd_queens_stats(
+                ctx, *self._slash_choice_args(timeframe))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='results', description='Show a Queens date leaderboard')
+    @app_commands.describe(date='Date or puzzle number (defaults to today)')
+    async def slash_queens_results(
+        self, interaction: discord.Interaction,
+        date: Optional[str] = None,
+    ):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_stats_date(
+                _SlashCtx(interaction), date or dt.date.today().isoformat())
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='ratings', description='Show Queens rating leaderboard')
+    async def slash_queens_ratings(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_ratings(_SlashCtx(interaction))
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='rating', description="Show a user's Queens rating graph")
+    @app_commands.describe(member='Player (defaults to you)')
+    async def slash_queens_rating(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        target = member or interaction.user
+        try:
+            await self._cmd_queens_rating(_SlashCtx(interaction), [target])
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='performance', description="Show a user's Queens performance graph")
+    @app_commands.describe(member='Player (defaults to you)')
+    async def slash_queens_performance(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        target = member or interaction.user
+        try:
+            await self._cmd_queens_performance(_SlashCtx(interaction), [target])
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='history', description="Show a user's Queens rating delta log")
+    @app_commands.describe(member='Player (defaults to you)')
+    async def slash_queens_history(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        target = member or interaction.user
+        try:
+            await self._cmd_queens_history(_SlashCtx(interaction), target)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='add', description='Manually add a Queens result')
+    @app_commands.describe(
+        member='Player', date='Date or puzzle number',
+        time='Time as M:SS or H:MM:SS',
+        status='Status text, defaults to no hints and no mistakes')
+    async def slash_queens_add(
+        self, interaction: discord.Interaction,
+        member: discord.Member, date: str, time: str,
+        status: Optional[str] = None,
+    ):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction,
+                f'You need the `{constants.TLE_ADMIN}` or '
+                f'`{constants.TLE_MODERATOR}` role.')
+        try:
+            status = status or 'No hints & no mistakes'
+            await self._cmd_queens_add(
+                _SlashCtx(interaction),
+                f'{member.id} {date} {time} {status}')
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='remove', description='Remove a Queens result')
+    @app_commands.describe(member='Player', date='Date or puzzle number')
+    async def slash_queens_remove(
+        self, interaction: discord.Interaction,
+        member: discord.Member, date: str,
+    ):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction,
+                f'You need the `{constants.TLE_ADMIN}` or '
+                f'`{constants.TLE_MODERATOR}` role.')
+        try:
+            await self._cmd_queens_remove(
+                _SlashCtx(interaction), f'{member.id} {date}')
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='clear', description='Remove all Queens results for a date')
+    @app_commands.describe(date='Date or puzzle number')
+    async def slash_queens_clear(
+        self, interaction: discord.Interaction, date: str,
+    ):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction,
+                f'You need the `{constants.TLE_ADMIN}` or '
+                f'`{constants.TLE_MODERATOR}` role.')
+        try:
+            await self._cmd_queens_clear(_SlashCtx(interaction), date)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
+    @queens_slash.command(name='ratings-recompute', description='Rebuild the Queens rating snapshot')
+    async def slash_queens_ratings_recompute(
+        self, interaction: discord.Interaction,
+    ):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction,
+                f'You need the `{constants.TLE_ADMIN}` or '
+                f'`{constants.TLE_MODERATOR}` role.')
+        try:
+            await self._cmd_queens_ratings_recompute(_SlashCtx(interaction))
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
         except Exception:
