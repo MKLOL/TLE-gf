@@ -1355,17 +1355,23 @@ class Minigames(commands.Cog):
     def _queens_pending_registration_key(guild_id, user_id):
         return str(guild_id), str(user_id)
 
+    @staticmethod
+    def _queens_pending_public_link_name(pending):
+        return _QUEENS_ANONYMOUS_LABEL if pending.anonymous else pending.name
+
     def _ensure_queens_link_available(self, guild, member, name,
                                       normalized_name, *,
+                                      anonymous=False,
                                       ignore_pending_key=None,
                                       ignore_pending=False):
+        public_name = _QUEENS_ANONYMOUS_LABEL if anonymous else name
         existing = cf_common.user_db.get_minigame_player_link_by_name(
             guild.id, QUEENS_GAME.name, normalized_name)
         if existing is not None and str(existing.user_id) != str(member.id):
             existing_label = self._queens_public_user_name(
                 guild, existing.user_id, {str(existing.user_id): existing})
             raise MinigameCogError(
-                f'LinkedIn name `{name}` is already linked to '
+                f'LinkedIn name `{public_name}` is already linked to '
                 f'{existing_label}.')
         if ignore_pending:
             return
@@ -1382,7 +1388,7 @@ class Minigames(commands.Cog):
             pending_label = self._queens_public_user_name(
                 guild, pending.member.id)
             raise MinigameCogError(
-                f'LinkedIn name `{name}` is already pending verification for '
+                f'LinkedIn name `{public_name}` is already pending verification for '
                 f'{pending_label}.')
 
     def _prepare_queens_registration_link(self, guild, member, linkedin_text,
@@ -1395,6 +1401,7 @@ class Minigames(commands.Cog):
         normalized = normalize_queens_name(name)
         self._ensure_queens_link_available(
             guild, member, name, normalized,
+            anonymous=anonymous,
             ignore_pending_key=ignore_pending_key,
             ignore_pending=ignore_pending)
         return name, normalized, _QUEENS_ANONYMOUS_LINK_MARKER if anonymous else None
@@ -1566,11 +1573,12 @@ class Minigames(commands.Cog):
                 await self._complete_queens_pending_registration(item)
             else:
                 self._queens_pending_registrations.pop(key, None)
+                link_name = self._queens_pending_public_link_name(item)
                 await self._send_queens_pending_message(
                     item,
                     discord_common.embed_alert(
                         f'I did not find a received LinkedIn connection '
-                        f'request for `{item.name}`, so this '
+                        f'request for `{link_name}`, so this '
                         f'{QUEENS_GAME.display_name} registration expired. '
                         'If you are already connected but not registered, '
                         'disconnect on LinkedIn and send the connection request '

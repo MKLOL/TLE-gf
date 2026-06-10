@@ -1987,6 +1987,66 @@ class TestQueensCommands:
         assert 'Alice: `Anonymous`' in pages[0][1].description
         assert 'Alice LinkedIn' not in pages[0][1].description
 
+    def test_anonymous_pending_expiry_hides_linkedin_name(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_neutral',
+            lambda desc: SimpleNamespace(description=desc))
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_alert',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        class Channel:
+            async def send(self, *, embed=None, **kwargs):
+                sent.append(embed)
+
+        class Bot:
+            def get_channel(self, channel_id):
+                assert channel_id == 200
+                return Channel()
+
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=Bot())
+
+        asyncio.run(Minigames.queens_register.__wrapped__(
+            cog, ctx, '+anon', linkedin='Alice LinkedIn'))
+        pending = list(cog._queens_pending_registrations.values())
+
+        async def fake_connect(_guild_id, _names):
+            return {'status': 'ok', 'accepted': [], 'accepted_normalized': []}, None
+
+        monkeypatch.setattr(cog, '_run_queens_connect', fake_connect)
+        asyncio.run(cog._process_queens_pending_registrations(100, pending))
+
+        assert sent
+        assert 'Anonymous' in sent[-1].description
+        assert 'Alice LinkedIn' not in sent[-1].description
+
+    def test_anonymous_duplicate_registration_hides_linkedin_name(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+        db.set_minigame_player_link(
+            100, 'queens', bob.id, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, bob.id)
+
+        with pytest.raises(MinigameCogError) as exc_info:
+            asyncio.run(Minigames.queens_register.__wrapped__(
+                cog, ctx, '+anon', linkedin='Alice LinkedIn'))
+
+        assert 'Anonymous' in str(exc_info.value)
+        assert 'Alice LinkedIn' not in str(exc_info.value)
+
     def test_register_anonymous_without_name_uses_private_modal(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
