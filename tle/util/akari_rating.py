@@ -246,6 +246,24 @@ def compute_round(ratings, ranks, damping=None, needs=None):
     return {user: damping * deltas[user] for user in users}
 
 
+def _last_place_decay_delta(day_ratings, day_ranks, user_id, rating, damping):
+    """Damped delta the absent ``user_id`` would get for a last-place finish.
+
+    Inserts the absentee (alone — multiple absentees are independent
+    hypotheticals) into the day's real field at strictly-last rank and runs
+    the normal Codeforces round.  The real players' actual deltas are *not*
+    affected; this round exists only to read off the absentee's loss.
+    Clamped to ≤ 0 defensively — the CF corrections make a strictly-last
+    finish lose for any rating, so the clamp should never bind.
+    """
+    hyp_ratings = dict(day_ratings)
+    hyp_ratings[user_id] = rating
+    hyp_ranks = dict(day_ranks)
+    hyp_ranks[user_id] = len(day_ratings) + 1
+    deltas = compute_round(hyp_ratings, hyp_ranks, damping=damping)
+    return min(0.0, deltas[user_id])
+
+
 def _decay_rate(skip_streak, decay_base, decay_max, decay_grace):
     """Fraction of the gap-to-default to close on a skipped day.
 
@@ -263,7 +281,8 @@ def compute_ratings(rows, start_rating=None, damping=None,
                     decay_base=None, decay_max=None, decay_grace=None,
                     max_puzzle=None, histories=None,
                     include_decay_in_history=False,
-                    current_puzzle_number=None, rank_fn=None):
+                    current_puzzle_number=None, rank_fn=None,
+                    first_skip_last_place=False):
     """Replay every minigame day in order and return ``{user_id: RatingState}``.
 
     ``rows`` is any iterable of result rows, each exposing ``user_id``,
@@ -314,6 +333,16 @@ def compute_ratings(rows, start_rating=None, damping=None,
 
     ``rank_fn`` optionally replaces the default Akari-style
     perfect/accuracy/time ranking with another minigame's per-day ranker.
+
+    ``first_skip_last_place`` (experimental, the ``+test`` command flag):
+    an above-default player's *first* absent day costs what a virtual
+    last-place finish against that day's real field would have cost
+    (:func:`_last_place_decay_delta`), never dropping past ``start_rating``.
+    Requires at least two real players that day — solo days, sub-default
+    absentees, and every later day of the same streak fall through to the
+    percentage rule unchanged (callers wanting a flat non-ramping rate pin
+    ``decay_max`` to ``decay_base``).  The lost points feed the same
+    zero-sum transfer pool.
     """
     if rank_fn is None:
         rank_fn = rank_participants
@@ -364,7 +393,11 @@ def compute_ratings(rows, start_rating=None, damping=None,
                 last_puzzle[user_id] = puzzle_number
 
         # Contest among the day's players (needs at least two to be a contest).
+        # day_ratings/ranks stay None on solo days; the first-skip last-place
+        # decay below keys off that to fall back to the percentage rule.
         performances = {}
+        day_ratings = None
+        ranks = None
         if len(day_rows) >= 2:
             day_ratings = {user_id: ratings[user_id] for user_id in day_rows}
             ranks = rank_fn(day_rows.values())
@@ -419,9 +452,18 @@ def compute_ratings(rows, start_rating=None, damping=None,
                 if user_id in day_rows:
                     continue
                 skip_streak[user_id] += 1
-                raw = (start_rating - ratings[user_id]) * _decay_rate(
-                    skip_streak[user_id], decay_base, decay_max, decay_grace)
-                delta = min(0.0, raw)  # clamp out the sub-default drift-up
+                if (first_skip_last_place
+                        and skip_streak[user_id] == 1
+                        and ratings[user_id] > start_rating
+                        and day_ratings is not None):
+                    delta = _last_place_decay_delta(
+                        day_ratings, ranks, user_id, ratings[user_id], damping)
+                    # Decay pulls toward the default but never past it.
+                    delta = max(delta, start_rating - ratings[user_id])
+                else:
+                    raw = (start_rating - ratings[user_id]) * _decay_rate(
+                        skip_streak[user_id], decay_base, decay_max, decay_grace)
+                    delta = min(0.0, raw)  # clamp out the sub-default drift-up
                 ratings[user_id] += delta
                 last_delta[user_id] = delta
                 absent_records.append((user_id, delta))

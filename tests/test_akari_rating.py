@@ -266,6 +266,119 @@ class TestDecay:
         assert states['b'].skip_streak == 0
 
 
+class TestFirstSkipLastPlaceDecay:
+    """Experimental `+test` decay (``first_skip_last_place=True``):
+    an above-default player's first absent day costs a virtual last-place
+    finish against that day's real field; later absent days (and solo days,
+    and sub-default absentees) fall back to the percentage rule."""
+
+    _DAY4 = [('b', True, 100, 40), ('c', False, 50, 200)]
+
+    @classmethod
+    def _base_rows(cls):
+        # 'a' beats 'b' on days 1-3 (a climbs above 1200), then sits out
+        # day 4 while 'b' and 'c' play.
+        rows = []
+        for puzzle in range(1, 4):
+            rows += _day(puzzle, [('a', True, 100, 30), ('b', False, 60, 200)])
+        rows += _day(4, cls._DAY4)
+        return rows
+
+    def test_first_skip_costs_the_last_place_delta(self):
+        rows = self._base_rows()
+        pre = compute_ratings(rows[:6])  # replay days 1-3 only
+        a_pre = pre['a'].rating
+        assert a_pre > 1200
+
+        # Hand-build the engine's hypothetical: 'a' inserted strictly last
+        # into day 4's real field at its pre-day-4 ratings ('c' seeds 1200).
+        day_ratings = {'b': pre['b'].rating, 'c': 1200.0}
+        ranks = rank_participants(_day(4, self._DAY4))
+        hyp = compute_round({**day_ratings, 'a': a_pre}, {**ranks, 'a': 3})
+        expected_delta = max(min(0.0, hyp['a']), 1200.0 - a_pre)
+
+        states = compute_ratings(rows, first_skip_last_place=True)
+        assert abs(states['a'].rating - (a_pre + expected_delta)) < 1e-9
+
+    def test_first_skip_is_zero_sum(self):
+        # The absence is on the final day, so both decay variants run the
+        # exact same contests and redistribute their (different) pools fully
+        # — total guild rating must come out identical.
+        rows = self._base_rows()
+        default_total = sum(
+            s.rating for s in compute_ratings(rows).values())
+        test_total = sum(
+            s.rating
+            for s in compute_ratings(rows, first_skip_last_place=True).values())
+        assert abs(default_total - test_total) < 1e-9
+
+    def test_sub_default_first_skip_freezes(self):
+        # 'd' sinks below 1200, then misses a day: the last-place rule only
+        # applies above the default, so 'd' falls through to the percentage
+        # rule, whose clamp freezes sub-default absentees.
+        rows = []
+        for puzzle in range(1, 6):
+            rows += _day(puzzle, [('d', False, 10, 300), ('e', True, 100, 20)])
+        low = compute_ratings(rows, first_skip_last_place=True)['d'].rating
+        assert low < 1200
+        rows += _day(6, [('e', True, 100, 20), ('f', False, 40, 200)])
+        frozen = compute_ratings(rows, first_skip_last_place=True)['d'].rating
+        assert frozen == low
+
+    def test_solo_day_falls_back_to_percentage_rule(self):
+        # A 1-player day has no field to finish last in, so the flag is a
+        # no-op: identical result with and without it.
+        rows = []
+        for puzzle in range(1, 4):
+            rows += _day(puzzle, [('a', True, 100, 30), ('b', False, 60, 200)])
+        rows += _day(4, [('b', True, 100, 40)])
+        with_flag = compute_ratings(
+            rows, first_skip_last_place=True)['a'].rating
+        without = compute_ratings(rows)['a'].rating
+        assert abs(with_flag - without) < 1e-9
+
+    def test_later_skips_use_flat_percentage_when_max_pinned(self):
+        # The cog pins decay_max to decay_base for `+test`, killing the ramp:
+        # the second absent day loses exactly base-rate of the remaining gap.
+        rows = self._base_rows()
+        kwargs = dict(first_skip_last_place=True,
+                      decay_max=constants.AKARI_DECAY_BASE)
+        after_one = compute_ratings(rows, **kwargs)['a'].rating
+        rows += _day(5, [('b', True, 100, 40), ('c', False, 50, 200)])
+        after_two = compute_ratings(rows, **kwargs)['a'].rating
+        expected = after_one + (1200.0 - after_one) * constants.AKARI_DECAY_BASE
+        assert abs(after_two - expected) < 1e-9
+
+    def test_first_skip_never_drops_below_default(self):
+        # Sink 'b' and 'c' far below 1200, let 'a' creep just above it with
+        # one expected win, then have 'a' skip a 'b'-vs-'c' day.  The virtual
+        # last-place loss against the sunken field exceeds 'a's tiny gap, so
+        # the floor must bind and 'a' lands exactly on the default.
+        rows = []
+        for puzzle in range(1, 31):
+            rows += _day(puzzle, [
+                ('z', True, 100, 20),
+                ('b', False, 30, 300),
+                ('c', False, 20, 300),
+            ])
+        rows += _day(31, [
+            ('a', True, 100, 30), ('b', False, 60, 200), ('c', False, 50, 250)])
+        pre = compute_ratings(rows, first_skip_last_place=True)
+        a_pre = pre['a'].rating
+        assert a_pre > 1200
+
+        day32 = [('b', False, 60, 200), ('c', False, 50, 250)]
+        hyp = compute_round(
+            {'b': pre['b'].rating, 'c': pre['c'].rating, 'a': a_pre},
+            {**rank_participants(_day(32, day32)), 'a': 3})
+        # Precondition: this scenario's loss really is bigger than the gap.
+        assert hyp['a'] < 1200.0 - a_pre
+
+        rows += _day(32, day32)
+        states = compute_ratings(rows, first_skip_last_place=True)
+        assert abs(states['a'].rating - 1200.0) < 1e-9
+
+
 class TestHistoryDecayCapture:
     @staticmethod
     def _winner_then_absent_rows(absent_days):

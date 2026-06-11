@@ -4556,7 +4556,8 @@ class TestAkariExcludeFilter:
         async def _go():
             return await cog._extract_akari_filters(
                 ctx, ['+decay', '+exclude=alice,cara', 'remaining'])
-        remaining, include_decay, excluded, included, _inactive = asyncio.run(_go())
+        (remaining, include_decay, excluded, included, _inactive,
+         _test) = asyncio.run(_go())
         assert include_decay is True
         assert excluded == {'101', '303'}
         assert included == set()
@@ -4577,7 +4578,7 @@ class TestAkariExcludeFilter:
             return await cog._extract_akari_filters(
                 ctx, ['+exclude=alice,,bob,'])
         (_remaining, _include_decay, excluded, _included,
-         _inactive) = asyncio.run(_go())
+         _inactive, _test) = asyncio.run(_go())
         assert excluded == {'101', '202'}
 
     def test_extract_filters_parses_include(self):
@@ -4594,7 +4595,7 @@ class TestAkariExcludeFilter:
             return await cog._extract_akari_filters(
                 ctx, ['+include=alice,bob'])
         (_remaining, _include_decay, excluded, included,
-         _inactive) = asyncio.run(_go())
+         _inactive, _test) = asyncio.run(_go())
         assert excluded == set()
         assert included == {'101', '202'}
 
@@ -4613,7 +4614,7 @@ class TestAkariExcludeFilter:
             return await cog._extract_akari_filters(
                 ctx, ['+include=alice,bob,cara', '+exclude=cara'])
         (_remaining, _include_decay, excluded, included,
-         _inactive) = asyncio.run(_go())
+         _inactive, _test) = asyncio.run(_go())
         assert excluded == {'303'}
         assert included == {'101', '202', '303'}
 
@@ -4778,7 +4779,7 @@ class TestAkariMultiMember:
         cara = _FakeDiscordMember(303, 'cara')
         ctx = self._ctx([alice, bob, cara])
         (members, include_decay, excluded, included,
-         _inactive) = asyncio.run(
+         _inactive, _test) = asyncio.run(
             cog._parse_akari_rating_args(ctx, ['alice', 'bob']))
         assert [m.id for m in members] == [101, 202]
         assert include_decay is False
@@ -4792,7 +4793,7 @@ class TestAkariMultiMember:
         cara = _FakeDiscordMember(303, 'cara')
         ctx = self._ctx([alice, bob, cara])
         (members, include_decay, excluded, included,
-         _inactive) = asyncio.run(
+         _inactive, _test) = asyncio.run(
             cog._parse_akari_rating_args(
                 ctx, ['alice', '+decay', 'bob', '+exclude=cara',
                       '+include=alice,bob,cara']))
@@ -4805,7 +4806,7 @@ class TestAkariMultiMember:
         cog = Minigames(bot=None)
         author = _FakeDiscordMember(999, 'author')
         ctx = self._ctx([author])
-        members, _decay, _excl, _incl, _inactive = asyncio.run(
+        members, _decay, _excl, _incl, _inactive, _test = asyncio.run(
             cog._parse_akari_rating_args(ctx, []))
         assert members == [author]
 
@@ -5233,25 +5234,35 @@ class TestExtractAkariFiltersInactive:
         return asyncio.run(cog._extract_akari_filters(self._ctx_stub(), args))
 
     def test_default_false(self):
-        remaining, include_decay, ex, inc, include_inactive = self._run(())
+        (remaining, include_decay, ex, inc, include_inactive,
+         test_decay) = self._run(())
         assert include_inactive is False
         assert remaining == []
         assert include_decay is False
         assert ex == set()
         assert inc == set()
+        assert test_decay is False
 
     def test_flag_sets_true(self):
-        remaining, _decay, _ex, _inc, include_inactive = self._run(('+inactive',))
+        (remaining, _decay, _ex, _inc, include_inactive,
+         _test) = self._run(('+inactive',))
         assert include_inactive is True
+
+    def test_test_flag_sets_test_decay(self):
+        (remaining, _decay, _ex, _inc, _inactive,
+         test_decay) = self._run(('+test',))
+        assert test_decay is True
+        assert remaining == []
         assert remaining == []  # the flag is consumed, not passed through
 
     def test_flag_composes_with_decay(self):
-        remaining, decay, _ex, _inc, inactive = self._run(
+        remaining, decay, _ex, _inc, inactive, _test = self._run(
             ('+inactive', '+decay'))
         assert decay is True
         assert inactive is True
         assert remaining == []
 
     def test_unknown_flag_passes_through(self):
-        remaining, _decay, _ex, _inc, _inactive = self._run(('+inactive', 'foo'))
+        (remaining, _decay, _ex, _inc, _inactive,
+         _test) = self._run(('+inactive', 'foo'))
         assert remaining == ['foo']
