@@ -929,9 +929,13 @@ class TestDbMixin:
 
 
 class _FakeGuild:
-    def __init__(self, guild_id, members=None):
+    def __init__(self, guild_id, members=None, channels=None):
         self.id = guild_id
         self.members = members or []
+        self.channels = {
+            int(channel.id): channel
+            for channel in (channels or [])
+        }
 
     def get_member(self, user_id):
         for member in self.members:
@@ -939,11 +943,22 @@ class _FakeGuild:
                 return member
         return None
 
+    def get_channel(self, channel_id):
+        return self.channels.get(int(channel_id))
+
 
 class _FakeChannel:
     def __init__(self, channel_id):
         self.id = channel_id
         self.mention = f'<#{channel_id}>'
+        self.sent = []
+
+    async def send(self, content=None, *, embed=None, **kwargs):
+        self.sent.append({'content': content, 'embed': embed, 'kwargs': kwargs})
+        return SimpleNamespace(
+            id=len(self.sent),
+            created_at=dt.datetime(2026, 6, 13, tzinfo=dt.timezone.utc),
+        )
 
 
 class _FakeAttachment:
@@ -2052,14 +2067,15 @@ class TestQueensCommands:
         cog = Minigames(bot=None)
         monkeypatch.setattr(cog, '_queens_state_path', lambda _guild_id: state_path)
 
-        async def fake_scraper(_guild_id, *, auto_play):
+        async def fake_scraper(_guild_id, *, auto_play, results_day='today'):
             assert auto_play is False
+            assert results_day == 'today'
             return {'status': 'ok', 'raw_text': ''}, None
 
         imports = []
 
-        async def fake_import(_ctx, payload, *, source_label):
-            imports.append((payload, source_label))
+        async def fake_import(_ctx, payload, *, source_label, results_day='today'):
+            imports.append((payload, source_label, results_day))
 
         monkeypatch.setattr(cog, '_run_queens_scraper', fake_scraper)
         monkeypatch.setattr(cog, '_do_queens_import', fake_import)
@@ -2068,7 +2084,52 @@ class TestQueensCommands:
 
         assert sent[0]['content'] == 'This will take a while'
         assert len(kvs_updates) == 1
-        assert imports == [({'status': 'ok', 'raw_text': ''}, 'Update')]
+        assert imports == [({'status': 'ok', 'raw_text': ''}, 'Update', 'today')]
+
+    def test_update_yesterday_passes_scraper_day_and_label(
+            self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.kvs_get = lambda _key: None
+        db.kvs_set = lambda _key, _value: None
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent.append({'content': content, 'embed': embed, 'kwargs': kwargs})
+
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=alice,
+            channel=_FakeChannel(200),
+            send=send,
+        )
+        state_path = tmp_path / 'queens_state.json'
+        state_path.write_text('{}')
+        cog = Minigames(bot=None)
+        monkeypatch.setattr(cog, '_queens_state_path', lambda _guild_id: state_path)
+
+        async def fake_scraper(_guild_id, *, auto_play, results_day='today'):
+            assert auto_play is False
+            assert results_day == 'yesterday'
+            return {'status': 'ok', 'raw_text': ''}, None
+
+        imports = []
+
+        async def fake_import(_ctx, payload, *, source_label, results_day='today'):
+            imports.append((payload, source_label, results_day))
+
+        monkeypatch.setattr(cog, '_run_queens_scraper', fake_scraper)
+        monkeypatch.setattr(cog, '_do_queens_import', fake_import)
+
+        asyncio.run(Minigames.queens_update.__wrapped__(
+            cog, ctx, '+yesterday'))
+
+        assert sent[0]['content'] == 'This will take a while'
+        assert imports == [
+            ({'status': 'ok', 'raw_text': ''}, 'Yesterday update', 'yesterday'),
+        ]
 
     def test_update_rate_limit_skips_slow_notice(self, db, monkeypatch, tmp_path):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2097,6 +2158,59 @@ class TestQueensCommands:
             asyncio.run(Minigames.queens_update.__wrapped__(cog, ctx))
 
         assert sent == []
+
+    def test_queens_here_sets_channel(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        channel = _FakeChannel(777)
+        sent = {}
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent['content'] = content
+            sent['embed'] = embed
+            sent['kwargs'] = kwargs
+
+        ctx = SimpleNamespace(
+            guild=_FakeGuild(100, members=[alice], channels=[channel]),
+            author=alice,
+            channel=channel,
+            send=send,
+        )
+        cog = Minigames(bot=None)
+
+        asyncio.run(Minigames.queens_here.__wrapped__(cog, ctx))
+
+        assert db.get_minigame_channel(100, 'queens') == '777'
+        assert 'LinkedIn Queens channel set to <#777>' in sent['embed'].description
+
+    def test_daily_queens_update_runs_once_after_target_time(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.set_minigame_channel(100, 'queens', 777)
+        guild = _FakeGuild(100, channels=[_FakeChannel(777)])
+        cog = Minigames(bot=SimpleNamespace(guilds=[guild]))
+        calls = []
+
+        async def fake_send(send_guild):
+            calls.append(send_guild.id)
+            return True
+
+        monkeypatch.setattr(cog, '_send_queens_daily_update', fake_send)
+        now = dt.datetime(
+            2026, 6, 13, 12, 6,
+            tzinfo=minigames_module.ZoneInfo('US/Pacific'))
+
+        asyncio.run(cog._check_queens_daily_update_guild(
+            guild, now, '2026-06-13'))
+        asyncio.run(cog._check_queens_daily_update_guild(
+            guild, now, '2026-06-13'))
+
+        assert calls == [100]
+        assert db.kvs_get('queens_daily_update_last:100') == '2026-06-13'
 
     def test_register_anonymous_keeps_linkedin_name_private(
             self, db, monkeypatch):

@@ -119,6 +119,7 @@ _MAX_SEE_MORE_CLICKS = 50
 
 _SEE_FULL_RE = re.compile(r'see\s+full\s+leaderboard', re.IGNORECASE)
 _SEE_MORE_RE = re.compile(r'^(see|show)\s+more', re.IGNORECASE)
+_YESTERDAY_RE = re.compile(r'^yesterday$', re.IGNORECASE)
 
 
 async def _prompt(message):
@@ -879,6 +880,51 @@ async def _expand_to_full_leaderboard(page):
         pass
 
 
+async def _switch_results_day(page, day):
+    """Switch the results page to a non-default day tab if requested."""
+    if day != 'yesterday':
+        return False
+    await _dismiss_consent_banner(page)
+    clicked = await _click_first(
+        page,
+        ('tab', _YESTERDAY_RE),
+        ('button', _YESTERDAY_RE),
+        ('link', _YESTERDAY_RE),
+        timeout=4000,
+    )
+    if not clicked:
+        clicked = await page.evaluate(r"""
+        () => {
+          const re = /^yesterday$/i;
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0
+              && cs.visibility !== 'hidden'
+              && cs.display !== 'none';
+          };
+          for (const el of document.querySelectorAll('button,a,[role="tab"],[role="button"]')) {
+            const label = (
+              el.innerText
+              || el.getAttribute('aria-label')
+              || ''
+            ).replace(/\s+/g, ' ').trim();
+            if (visible(el) && re.test(label)) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """)
+    if clicked:
+        try:
+            await page.wait_for_timeout(1200)
+        except Exception:
+            pass
+    return bool(clicked)
+
+
 async def _click_see_more_until_done(page):
     """Repeatedly click "See more" until it's gone, hidden, or the count stops growing.
 
@@ -1250,12 +1296,12 @@ async def _extract_leaderboard_text(page):
     return None, _crop_to_leaderboard(body_text)
 
 
-# Match "2 connections played today", "1 connection played today",
+# Match "2 connections played today", "1 connection played yesterday",
 # "10 connections played today", etc.  This line marks where the friend
 # leaderboard begins; everything above it is the user's own scorecard +
 # encouragement banners.
 _LEADERBOARD_START_RE = re.compile(
-    r'connection(?:s)?\s+played\s+today', re.IGNORECASE)
+    r'connection(?:s)?\s+played\s+(?:today|yesterday)', re.IGNORECASE)
 
 # URL fragments that mean "LinkedIn bounced us to re-authenticate".  If the
 # page lands on one of these after navigating to /games/queens/results/, the
@@ -1307,7 +1353,8 @@ def _looks_like_leaderboard(text):
     return bool(re.search(r'\b\d{1,2}:\d{2}\b', text))
 
 
-async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow):
+async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow,
+                    day='today'):
     if not state_path.exists():
         msg = f'No saved session at {state_path}. Run `login` first.'
         if json_out:
@@ -1398,6 +1445,29 @@ async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow):
         except Exception:
             pass  # Fall through — debug mode will show what's actually there.
 
+        if day == 'yesterday':
+            switched = await _switch_results_day(page, day)
+            if not switched:
+                try:
+                    body_text = await page.locator('body').inner_text(timeout=3000)
+                except Exception:
+                    body_text = ''
+                if not re.search(
+                        r'connection(?:s)?\s+played\s+yesterday',
+                        body_text, re.IGNORECASE):
+                    msg = 'Could not switch to the Yesterday results tab.'
+                    if json_out:
+                        print(json.dumps({'status': 'error', 'error': msg}))
+                    else:
+                        print(msg, file=sys.stderr)
+                    await browser.close()
+                    return 1
+            try:
+                await page.wait_for_selector(
+                    'text=/\\d{1,2}:\\d{2}/', timeout=10000)
+            except Exception:
+                pass
+
         # /results/ shows only the top 3 connections.  The "See full
         # leaderboard" link navigates to the full friend ranking at
         # /results/leaderboard/connections/?gameUrn=... (the URN is bound to
@@ -1454,6 +1524,7 @@ async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow):
             'status': status,
             'raw_text': text,
             'matched_selector': selector,
+            'day': day,
         }
         if entries is not None:
             payload['entries'] = [
@@ -1522,6 +1593,9 @@ def main(argv=None):
     fetch_p.add_argument(
         '--no-slow', dest='slow', action='store_false', default=True,
         help='Disable human-pacing delays during auto-play (testing only).')
+    fetch_p.add_argument(
+        '--day', choices=('today', 'yesterday'), default='today',
+        help='Which results tab to fetch (default: today).')
 
     connect_p = sub.add_parser(
         'connect',
@@ -1577,7 +1651,8 @@ def main(argv=None):
     if args.cmd == 'fetch':
         return asyncio.run(cmd_fetch(
             state_path, headless=not args.headed, debug=args.debug,
-            json_out=args.json_out, auto_play=args.auto_play, slow=args.slow))
+            json_out=args.json_out, auto_play=args.auto_play, slow=args.slow,
+            day=args.day))
     if args.cmd == 'connect':
         return asyncio.run(cmd_connect(
             state_path, args.names, headless=not args.headed,

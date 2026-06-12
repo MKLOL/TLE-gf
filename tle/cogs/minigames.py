@@ -14,6 +14,7 @@ import time
 from collections import namedtuple
 from types import SimpleNamespace
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import cairo
 import discord
@@ -29,6 +30,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
 from tle.util import table
+from tle.util import tasks
 
 from tle.cogs._minigame_common import (
     compute_vs, compute_vs_matchups, compute_streak, compute_longest_streak, compute_top,
@@ -160,6 +162,11 @@ _QUEENS_LINKEDIN_NAME_KEY = 'queens_linkedin_name'  # display only
 _QUEENS_STATE_PATH_KEY = 'queens_state_path'
 _QUEENS_UPDATE_THROTTLE_PREFIX = 'queens_update_throttle:'
 _QUEENS_UPDATE_THROTTLE_SECONDS = 60
+_QUEENS_DAILY_UPDATE_LAST_PREFIX = 'queens_daily_update_last:'
+_QUEENS_DAILY_UPDATE_CHECK_INTERVAL = 60
+_QUEENS_DAILY_UPDATE_PRECISE_WINDOW = 300
+_QUEENS_DAILY_UPDATE_TIME = '12:05'
+_QUEENS_DAILY_UPDATE_TZ = 'US/Pacific'
 _QUEENS_SCRAPER_TIMEOUT = 240  # seconds — playwright start + slow auto-play
 _QUEENS_WHOAMI_TIMEOUT = 60    # seconds — quick /in/me/ visit only
 # Bleeding-edge Ubuntu (26.04+) isn't in Playwright's platform support
@@ -299,6 +306,20 @@ class _SlashCtx:
         pass
 
 
+class _ScheduledCtx:
+    """Minimal ctx for scheduled jobs that send into a configured channel."""
+
+    def __init__(self, bot, guild, channel):
+        self.bot = bot
+        self.guild = guild
+        self.channel = channel
+        self.author = getattr(guild, 'me', None) or getattr(bot, 'user', None)
+        self.message = type('_Msg', (), {'id': f'scheduled:{guild.id}:{channel.id}'})()
+
+    async def send(self, content=None, *, embed=None, **kw):
+        return await self.channel.send(content, embed=embed, **kw)
+
+
 def _safe_user_name(guild, user_id):
     member = guild.get_member(int(user_id))
     if member is not None:
@@ -420,6 +441,32 @@ def _format_queens_weekday_filter(weekdays):
 def _queens_weekday_filter_suffix(weekdays):
     label = _format_queens_weekday_filter(weekdays)
     return f' ({label})' if label else ''
+
+
+def _queens_update_target_date(results_day):
+    today = dt.datetime.now(ZoneInfo(_QUEENS_DAILY_UPDATE_TZ)).date()
+    if results_day == 'yesterday':
+        return today - dt.timedelta(days=1)
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
+def _queens_daily_update_target_datetime(now):
+    hour, minute = map(int, _QUEENS_DAILY_UPDATE_TIME.split(':'))
+    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _parse_queens_update_args(args):
+    results_day = 'today'
+    for arg in args:
+        text = str(arg).strip().casefold()
+        if text in ('+today', 'today'):
+            results_day = 'today'
+        elif text in ('+yesterday', '+yday', '+yestrday', 'yesterday'):
+            results_day = 'yesterday'
+        else:
+            raise MinigameCogError(
+                'Usage: `;queens update [+yesterday]`.')
+    return results_day
 
 
 def _queens_puzzle_numbers_for_date(puzzle_date):
@@ -1104,6 +1151,7 @@ class Minigames(commands.Cog):
         self._queens_pending_imports = {}  # (guild_id, user_id) -> _QueensImportPreview
         self._queens_pending_registrations = {}
         self._queens_connect_tasks = {}
+        self._queens_update_timers = {}
 
     async def cog_load(self):
         # ;akari and ;queens are canonical top-level groups; mirror them under
@@ -1131,6 +1179,16 @@ class Minigames(commands.Cog):
             task.cancel()
         if connect_tasks:
             await asyncio.gather(*connect_tasks, return_exceptions=True)
+        update_timers = list(self._queens_update_timers.values())
+        for task in update_timers:
+            task.cancel()
+        if update_timers:
+            await asyncio.gather(*update_timers, return_exceptions=True)
+
+    @commands.Cog.listener()
+    @discord_common.once
+    async def on_ready(self):
+        self._queens_daily_update_check.start()
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1161,6 +1219,100 @@ class Minigames(commands.Cog):
                 f'{game.display_name} is not enabled. '
                 f'An admin can enable it with `;meta config enable {game.feature_flag}`.'
             )
+
+    # ── Scheduled Queens update ─────────────────────────────────────────
+
+    @tasks.task_spec(name='QueensDailyUpdateCheck',
+                     waiter=tasks.Waiter.fixed_delay(
+                         _QUEENS_DAILY_UPDATE_CHECK_INTERVAL))
+    async def _queens_daily_update_check(self, _):
+        if cf_common.user_db is None:
+            return
+        now = dt.datetime.now(ZoneInfo(_QUEENS_DAILY_UPDATE_TZ))
+        today = now.strftime('%Y-%m-%d')
+        for guild in self.bot.guilds:
+            try:
+                await self._check_queens_daily_update_guild(guild, now, today)
+            except Exception:
+                logger.warning(
+                    'Queens daily update check failed for guild=%s',
+                    getattr(guild, 'id', None), exc_info=True)
+
+    async def _check_queens_daily_update_guild(self, guild, now, today):
+        if not self._is_enabled(guild.id, QUEENS_GAME.feature_flag):
+            return
+        channel_id = self._get_channel(guild.id, QUEENS_GAME.name)
+        if channel_id is None:
+            return
+        kvs_key = f'{_QUEENS_DAILY_UPDATE_LAST_PREFIX}{guild.id}'
+        if cf_common.user_db.kvs_get(kvs_key) == today:
+            return
+
+        target = _queens_daily_update_target_datetime(now)
+        seconds_until = (target - now).total_seconds()
+        pending = self._queens_update_timers.get(guild.id)
+        if seconds_until <= 0:
+            if pending is not None and not pending.done():
+                return
+            if await self._send_queens_daily_update(guild):
+                cf_common.user_db.kvs_set(kvs_key, today)
+        elif seconds_until <= _QUEENS_DAILY_UPDATE_PRECISE_WINDOW:
+            if pending is None or pending.done():
+                logger.info(
+                    'Scheduling precise Queens daily update for guild=%s in %.0fs',
+                    guild.id, seconds_until)
+                self._queens_update_timers[guild.id] = asyncio.create_task(
+                    self._precise_queens_daily_update(guild, seconds_until))
+
+    async def _precise_queens_daily_update(self, guild, delay):
+        try:
+            await asyncio.sleep(delay)
+            current_today = dt.datetime.now(
+                ZoneInfo(_QUEENS_DAILY_UPDATE_TZ)).strftime('%Y-%m-%d')
+            kvs_key = f'{_QUEENS_DAILY_UPDATE_LAST_PREFIX}{guild.id}'
+            if cf_common.user_db.kvs_get(kvs_key) == current_today:
+                return
+            if await self._send_queens_daily_update(guild):
+                cf_common.user_db.kvs_set(kvs_key, current_today)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                'Precise Queens daily update failed for guild=%s',
+                guild.id, exc_info=True)
+        finally:
+            self._queens_update_timers.pop(guild.id, None)
+
+    async def _send_queens_daily_update(self, guild):
+        channel_id = self._get_channel(guild.id, QUEENS_GAME.name)
+        if channel_id is None:
+            return False
+        try:
+            channel = await self._resolve_channel(int(channel_id))
+        except Exception:
+            logger.warning(
+                'Queens daily update channel missing for guild=%s channel=%s',
+                guild.id, channel_id, exc_info=True)
+            return False
+
+        ctx = _ScheduledCtx(self.bot, guild, channel)
+        try:
+            await self._cmd_queens_update(ctx, results_day='yesterday')
+            return True
+        except MinigameCogError as exc:
+            message = str(exc)
+            if 'rate-limited' in message:
+                logger.info(
+                    'Queens daily update deferred by rate limit for guild=%s: %s',
+                    guild.id, message)
+                return False
+            try:
+                await channel.send(embed=discord_common.embed_alert(message))
+            except Exception:
+                logger.warning(
+                    'Failed to send Queens daily update error for guild=%s',
+                    guild.id, exc_info=True)
+            return True
 
     async def _resolve_member(self, ctx, member_text):
         try:
@@ -2905,7 +3057,8 @@ class Minigames(commands.Cog):
             return pathlib.Path(raw).expanduser()
         return _QUEENS_DEFAULT_STATE_PATH
 
-    async def _run_queens_scraper(self, guild_id, *, auto_play):
+    async def _run_queens_scraper(self, guild_id, *, auto_play,
+                                  results_day='today'):
         """Spawn the scraper's ``fetch`` subprocess.
 
         ``auto_play=True`` makes the scraper solve today's puzzle if the
@@ -2922,7 +3075,8 @@ class Minigames(commands.Cog):
                 f'Scraper script missing at `{_QUEENS_SCRAPER_SCRIPT}`.')
         state_path = self._queens_state_path(guild_id)
         cmd = [sys.executable, str(_QUEENS_SCRAPER_SCRIPT),
-               '--state', str(state_path), 'fetch', '--json']
+               '--state', str(state_path), 'fetch', '--json',
+               '--day', results_day]
         if auto_play:
             cmd.append('--auto-play')
         try:
@@ -3062,7 +3216,8 @@ class Minigames(commands.Cog):
                 'Ask a mod to run `;queens play`.'),
         }.get(status, f'Unexpected scraper status: `{status}`')
 
-    async def _do_queens_import(self, ctx, payload, *, source_label):
+    async def _do_queens_import(self, ctx, payload, *, source_label,
+                                results_day='today'):
         """Apply a scraper payload's ``raw_text`` to the DB additively.
 
         Used by both ``;queens play`` and ``;queens update``.  Neither
@@ -3074,7 +3229,7 @@ class Minigames(commands.Cog):
         resolved and unresolved).
         """
         raw_text = payload.get('raw_text') or ''
-        today_iso = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        today_iso = _queens_update_target_date(results_day).isoformat()
         preview = self._make_queens_import_preview(
             ctx, today_iso, raw_text, skip_importer=True)
 
@@ -3133,7 +3288,7 @@ class Minigames(commands.Cog):
                     f'- ... and {len(preview.unresolved) - 20} more')
         return discord_common.embed_success('\n'.join(lines))
 
-    async def _cmd_queens_update(self, ctx):
+    async def _cmd_queens_update(self, ctx, *, results_day='today'):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         kvs_key = f'{_QUEENS_UPDATE_THROTTLE_PREFIX}{ctx.guild.id}'
         last = cf_common.user_db.kvs_get(kvs_key)
@@ -3158,16 +3313,23 @@ class Minigames(commands.Cog):
         cf_common.user_db.kvs_set(kvs_key, str(time.time()))
 
         payload, error = await self._run_queens_scraper(
-            ctx.guild.id, auto_play=False)
+            ctx.guild.id, auto_play=False, results_day=results_day)
         if error is not None:
             raise MinigameCogError(error)
         status = payload.get('status')
         if status == 'not_played':
             raise MinigameCogError(self._queens_status_message(status))
         if status != 'ok':
-            raise MinigameCogError(self._queens_status_message(status))
+            message = (
+                payload.get('error')
+                if status == 'error'
+                else self._queens_status_message(status)
+            )
+            raise MinigameCogError(message)
+        source_label = (
+            'Yesterday update' if results_day == 'yesterday' else 'Update')
         await self._do_queens_import(
-            ctx, payload, source_label='Update')
+            ctx, payload, source_label=source_label, results_day=results_day)
 
     # ── Listeners ───────────────────────────────────────────────────────
 
@@ -5057,6 +5219,11 @@ class Minigames(commands.Cog):
     async def queens_show(self, ctx):
         await self._cmd_queens_show(ctx)
 
+    @queens.command(name='here', brief='Set the LinkedIn Queens channel to the current channel')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_here(self, ctx):
+        await self._cmd_here(ctx, QUEENS_GAME)
+
     @queens.command(name='register',
                     brief='Link a Discord user to a LinkedIn Queens name',
                     usage='[+username DiscordUser] LinkedIn Name [+anon]')
@@ -5366,15 +5533,22 @@ class Minigames(commands.Cog):
             raise MinigameCogError(error)
         status = payload.get('status')
         if status != 'ok':
-            raise MinigameCogError(self._queens_status_message(status))
+            message = (
+                payload.get('error')
+                if status == 'error'
+                else self._queens_status_message(status)
+            )
+            raise MinigameCogError(message)
         await self._do_queens_import(ctx, payload, source_label='Play')
 
     @queens.command(
         name='update',
         brief='Refresh the LinkedIn Queens leaderboard '
-              f'(rate-limited to once per {_QUEENS_UPDATE_THROTTLE_SECONDS}s)')
-    async def queens_update(self, ctx):
-        await self._cmd_queens_update(ctx)
+              f'(rate-limited to once per {_QUEENS_UPDATE_THROTTLE_SECONDS}s)',
+        usage='[+yesterday]')
+    async def queens_update(self, ctx, *args):
+        results_day = _parse_queens_update_args(args)
+        await self._cmd_queens_update(ctx, results_day=results_day)
 
     @queens.command(
         name='settings',
@@ -5386,6 +5560,8 @@ class Minigames(commands.Cog):
         state_exists = state_path.exists()
         li_name = cf_common.user_db.get_guild_config(
             ctx.guild.id, _QUEENS_LINKEDIN_NAME_KEY)
+        channel_id = self._get_channel(ctx.guild.id, QUEENS_GAME.name)
+        channel = f'<#{channel_id}>' if channel_id else 'not set'
         last_update = cf_common.user_db.kvs_get(
             f'{_QUEENS_UPDATE_THROTTLE_PREFIX}{ctx.guild.id}')
         last_text = 'never'
@@ -5399,6 +5575,9 @@ class Minigames(commands.Cog):
         lines = [
             (f'LinkedIn account: `{li_name}`' if li_name
              else 'LinkedIn account: `unknown` (run `;queens login`)'),
+            f'channel: {channel}',
+            (f'daily update: `{_QUEENS_DAILY_UPDATE_TIME}` '
+             f'{_QUEENS_DAILY_UPDATE_TZ} (`;queens update +yesterday`)'),
             f'state file: `{state_path}`'
             + ('' if not path_default else ' (default)')
             + ('' if state_exists else ' — **missing!**'),
@@ -6477,6 +6656,20 @@ class Minigames(commands.Cog):
             logger.exception('Unhandled error in slash command')
             await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
+    @queens_slash.command(name='here', description='Set the LinkedIn Queens channel')
+    async def slash_queens_here(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if not self._has_mod_role(interaction):
+            return await self._slash_send_error(
+                interaction, self._mod_role_error_message())
+        try:
+            await self._cmd_here(_SlashCtx(interaction), QUEENS_GAME)
+        except MinigameCogError as e:
+            await self._slash_send_error(interaction, e)
+        except Exception:
+            logger.exception('Unhandled error in slash command')
+            await self._slash_send_error(interaction, 'An unexpected error occurred.')
+
     @queens_slash.command(name='register', description='Link a Discord user to a LinkedIn Queens name')
     @app_commands.describe(
         linkedin_name='LinkedIn display name',
@@ -6542,10 +6735,16 @@ class Minigames(commands.Cog):
             await self._slash_send_error(interaction, 'An unexpected error occurred.')
 
     @queens_slash.command(name='update', description='Refresh the LinkedIn Queens leaderboard')
-    async def slash_queens_update(self, interaction: discord.Interaction):
+    @app_commands.describe(yesterday='Fetch the Yesterday results tab')
+    async def slash_queens_update(
+        self, interaction: discord.Interaction,
+        yesterday: bool = False,
+    ):
         await interaction.response.defer()
         try:
-            await self._cmd_queens_update(_SlashCtx(interaction))
+            await self._cmd_queens_update(
+                _SlashCtx(interaction),
+                results_day='yesterday' if yesterday else 'today')
         except MinigameCogError as e:
             await self._slash_send_error(interaction, e)
         except Exception:
