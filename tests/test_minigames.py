@@ -1111,18 +1111,23 @@ class TestQueensImport:
             '0:05\n'
         ))
         saved = cog._save_queens_import(ctx, reimport)
-        assert saved.resolved == 1
+        assert saved.resolved == 0
         assert saved.unresolved == 0
         rows = db.get_minigame_results_for_guild(100, 'queens')
-        assert [(row.user_id, row.time_seconds) for row in rows] == [('301', 5)]
+        assert sorted((row.user_id, row.time_seconds) for row in rows) == [
+            ('300', 4),
+            ('301', 6),
+        ]
         source_rows = db.get_minigame_unresolved_results_for_puzzle(
             100, 'queens', _queens_number('2026-06-08'))
         assert [(row.external_name, row.time_seconds) for row in source_rows] == [
-            ('Robert Kocharyan', 5),
+            ('Ali Farhat', 4),
+            ('Robert Kocharyan', 6),
+            ('Unknown Person', 7),
         ]
         ratings = db.get_minigame_ratings(100, 'queens')
-        assert [row.user_id for row in ratings] == ['301']
-        assert ratings[0].games == 1
+        assert [row.user_id for row in ratings] == ['300', '301']
+        assert ratings[0].rating > ratings[1].rating
 
     def test_register_claims_previously_unresolved_import_rows(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -1716,11 +1721,23 @@ class TestQueensCommands:
         filtered = ctx.sent['embed']
         assert 'Queens days: **2**' in filtered.description
 
+        asyncio.run(cog._cmd_queens_stats(ctx, '+dow=mon,wed'))
+        weekday_filtered = ctx.sent['embed']
+        assert weekday_filtered.title == 'LinkedIn Queens Stats (Mon/Wed)'
+        assert 'Queens days: **2**' in weekday_filtered.description
+        assert 'Clean: **2**' in weekday_filtered.description
+        assert 'Latest: **2026-06-10**' in weekday_filtered.description
+
         asyncio.run(cog._cmd_queens_streak(ctx))
         streak = ctx.sent['embed']
         assert streak.title == 'LinkedIn Queens Streak'
         assert '**2** consecutive clean day(s)' in streak.description
         assert 'Latest result: **2026-06-11**' in streak.description
+
+        asyncio.run(cog._cmd_queens_streak(ctx, '+dow=wed,thu'))
+        weekday_streak = ctx.sent['embed']
+        assert weekday_streak.title == 'LinkedIn Queens Streak (Wed/Thu)'
+        assert '**2** consecutive clean day(s)' in weekday_streak.description
 
     def test_register_self_queues_connection_check(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2612,6 +2629,47 @@ class TestQueensCommands:
             ctx.sent['embed'].description)
         assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['300']
 
+    def test_clean_removes_queens_date_range(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+
+        for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'queens', member.id, name, normalize_queens_name(name),
+                None, 1.0, alice.id)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
+        self._save_queens_result(db, 2, bob.id, '2026-06-09', 6)
+        self._save_queens_result(db, 3, alice.id, '2026-06-10', 4)
+        db.save_imported_minigame_result(
+            4, 100, 'queens', 200, bob.id, _queens_number('2026-06-09'),
+            '2026-06-09', 100, 7, True, 'imported')
+        db.save_minigame_unresolved_result(
+            100, 'queens', normalize_queens_name('Unknown Person'),
+            'Unknown Person', 200, _queens_number('2026-06-09'),
+            '2026-06-09', 100, 9, True, 'raw')
+
+        asyncio.run(Minigames.queens_clean.__wrapped__(
+            cog, ctx, '2026-06-08', '2026-06-09'))
+
+        remaining = db.get_minigame_results_for_guild(100, 'queens')
+        assert sorted((row.user_id, row.puzzle_date) for row in remaining) == [
+            ('300', '2026-06-10'),
+        ]
+        assert db.get_minigame_unresolved_results_for_puzzle(
+            100, 'queens', _queens_number('2026-06-09')) == []
+        assert ('Removed 3 registered and 1 unresolved LinkedIn Queens result(s) '
+                'from 2026-06-08 to 2026-06-09 (2 day(s))') in (
+            ctx.sent['embed'].description)
+        assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['300']
+
     def test_ratings_use_image_and_default_to_registered_players(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2748,6 +2806,10 @@ class TestQueensCommands:
 
         def _rating(series):
             rating_series['names'] = [name for _history, name in series]
+            rating_series['dates'] = [
+                [str(point.puzzle_date) for point in history]
+                for history, _name in series
+            ]
             return fake_file
 
         def _performance(series):
@@ -2761,6 +2823,9 @@ class TestQueensCommands:
         assert rating_series['names'] == ['Alice LinkedIn', 'Bob LinkedIn']
         assert ctx.sent['embed'].title == 'LinkedIn Queens ratings — 2 players'
         assert ctx.sent['kwargs']['file'] is fake_file
+
+        asyncio.run(cog._cmd_queens_rating(ctx, [alice], weekdays={0, 2}))
+        assert rating_series['dates'] == [['2026-06-08', '2026-06-10']]
 
         asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
         assert perf_series['names'] == ['Alice LinkedIn']
@@ -2863,6 +2928,17 @@ class TestQueensCommands:
 
         with pytest.raises(MinigameCogError, match='do not use decay'):
             asyncio.run(cog._extract_queens_rating_filters(ctx, ['+decay']))
+
+        remaining, excluded_ids, included_ids, weekdays = asyncio.run(
+            cog._extract_queens_rating_filters(
+                ctx, ['+dow=mon,wed', '+include=alice']))
+        assert remaining == []
+        assert excluded_ids == set()
+        assert included_ids == {'300'}
+        assert weekdays == {0, 2}
+
+        with pytest.raises(MinigameCogError, match='Unknown Queens weekday'):
+            asyncio.run(cog._extract_queens_rating_filters(ctx, ['+dow=funday']))
 
     def test_queens_results_renders_date_results_image(
             self, db, monkeypatch):
