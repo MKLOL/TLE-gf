@@ -2127,6 +2127,60 @@ class TestQueensCommands:
         assert len(kvs_updates) == 1
         assert imports == [({'status': 'ok', 'raw_text': ''}, 'Update', 'today')]
 
+    def test_queens_play_waits_before_auto_play_and_imports(
+            self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_neutral',
+            lambda desc: SimpleNamespace(description=desc))
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        guild = _FakeGuild(100, members=[alice])
+        sent = []
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent.append({'content': content, 'embed': embed, 'kwargs': kwargs})
+
+        ctx = SimpleNamespace(
+            guild=guild,
+            author=alice,
+            channel=_FakeChannel(200),
+            send=send,
+        )
+        state_path = tmp_path / 'queens_state.json'
+        state_path.write_text('{}')
+        cog = Minigames(bot=None)
+        monkeypatch.setattr(cog, '_queens_state_path', lambda _guild_id: state_path)
+        scraper_calls = []
+
+        async def fake_scraper(
+                _guild_id, *, auto_play, results_day='today',
+                min_play_seconds=0):
+            scraper_calls.append({
+                'auto_play': auto_play,
+                'results_day': results_day,
+                'min_play_seconds': min_play_seconds,
+            })
+            return {'status': 'ok', 'raw_text': ''}, None
+
+        imports = []
+
+        async def fake_import(_ctx, payload, *, source_label, results_day='today'):
+            imports.append((payload, source_label, results_day))
+
+        monkeypatch.setattr(cog, '_run_queens_scraper', fake_scraper)
+        monkeypatch.setattr(cog, '_do_queens_import', fake_import)
+
+        asyncio.run(Minigames.queens_play.__wrapped__(cog, ctx))
+
+        assert scraper_calls == [{
+            'auto_play': True,
+            'results_day': 'today',
+            'min_play_seconds': minigames_module._QUEENS_AUTO_PLAY_MIN_SECONDS,
+        }]
+        assert '180s' in sent[0]['embed'].description
+        assert imports == [({'status': 'ok', 'raw_text': ''}, 'Play', 'today')]
+
     def test_update_yesterday_passes_scraper_day_and_label(
             self, db, monkeypatch, tmp_path):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2252,6 +2306,45 @@ class TestQueensCommands:
 
         assert calls == [100]
         assert db.kvs_get('queens_daily_update_last:100') == '2026-06-13'
+
+    def test_daily_queens_update_plays_before_yesterday_update(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        db.set_minigame_channel(100, 'queens', 777)
+        channel = _FakeChannel(777)
+        guild = _FakeGuild(100, channels=[channel])
+
+        async def fetch_channel(channel_id):
+            return guild.get_channel(channel_id)
+
+        bot = SimpleNamespace(
+            guilds=[guild],
+            user=SimpleNamespace(id=999),
+            get_channel=lambda channel_id: guild.get_channel(channel_id),
+            fetch_channel=fetch_channel,
+        )
+        cog = Minigames(bot=bot)
+        calls = []
+
+        async def fake_play(ctx, *, import_results=True, send_notice=True):
+            calls.append((
+                'play', ctx.channel.id, import_results, send_notice))
+            return {'status': 'ok'}
+
+        async def fake_update(ctx, *, results_day='today'):
+            calls.append(('update', ctx.channel.id, results_day))
+
+        monkeypatch.setattr(cog, '_cmd_queens_play', fake_play)
+        monkeypatch.setattr(cog, '_cmd_queens_update', fake_update)
+
+        result = asyncio.run(cog._send_queens_daily_update(guild))
+
+        assert result is True
+        assert calls == [
+            ('play', 777, False, False),
+            ('update', 777, 'yesterday'),
+        ]
 
     def test_register_anonymous_keeps_linkedin_name_private(
             self, db, monkeypatch):

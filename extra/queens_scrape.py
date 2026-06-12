@@ -780,7 +780,8 @@ async def _puzzle_appears_already_played(page):
     return bool(_LEADERBOARD_START_RE.search(text))
 
 
-async def play_queens_puzzle(page, *, slow=True, log=None):
+async def play_queens_puzzle(page, *, slow=True, log=None,
+                             min_play_seconds=0):
     """Read, solve, and place queens on today's puzzle.
 
     Assumes ``page`` is (or will be navigated to) the puzzle URL.  Returns a
@@ -797,6 +798,7 @@ async def play_queens_puzzle(page, *, slow=True, log=None):
         except Exception as exc:
             return {'ok': False, 'stage': 'navigate', 'error': str(exc)}
 
+    opened_at = time.monotonic()
     await _dismiss_consent_banner(page)
     # Give the grid a moment to render.  We anchor on the aria-label pattern
     # since the React-y class names are unstable.
@@ -843,6 +845,10 @@ async def play_queens_puzzle(page, *, slow=True, log=None):
             return {'ok': False, 'stage': 'read_after_reset',
                     'error': grid['error']}
 
+    remaining = max(0, int(min_play_seconds) - (time.monotonic() - opened_at))
+    if remaining:
+        log(f'waiting {remaining:.0f}s before placing queens')
+        await asyncio.sleep(remaining)
     await _place_queens(page, grid, sol, slow=slow, log=log)
     completed = await _wait_for_completion(page, timeout_seconds=20)
     return {'ok': True, 'stage': 'placed', 'n': n, 'solution': sol,
@@ -1354,7 +1360,7 @@ def _looks_like_leaderboard(text):
 
 
 async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow,
-                    day='today'):
+                    day='today', min_play_seconds=0):
     if not state_path.exists():
         msg = f'No saved session at {state_path}. Run `login` first.'
         if json_out:
@@ -1415,7 +1421,9 @@ async def cmd_fetch(state_path, *, headless, debug, json_out, auto_play, slow,
         if auto_play and not await _puzzle_appears_already_played(page):
             log_fn = (lambda *_a: None) if json_out else print
             log_fn('Leaderboard not yet visible — solving today\'s puzzle.')
-            play_result = await play_queens_puzzle(page, slow=slow, log=log_fn)
+            play_result = await play_queens_puzzle(
+                page, slow=slow, log=log_fn,
+                min_play_seconds=min_play_seconds)
             if not play_result.get('ok'):
                 msg = (f'Auto-play failed at stage='
                        f'{play_result.get("stage")}: {play_result.get("error")}')
@@ -1591,6 +1599,10 @@ def main(argv=None):
         help="If the puzzle hasn't been played today, solve and place "
              'queens automatically before fetching the leaderboard.')
     fetch_p.add_argument(
+        '--min-play-seconds', type=int, default=0,
+        help='When auto-playing an unplayed puzzle, wait until at least this '
+             'many seconds have elapsed on the game page before finishing.')
+    fetch_p.add_argument(
         '--no-slow', dest='slow', action='store_false', default=True,
         help='Disable human-pacing delays during auto-play (testing only).')
     fetch_p.add_argument(
@@ -1652,7 +1664,7 @@ def main(argv=None):
         return asyncio.run(cmd_fetch(
             state_path, headless=not args.headed, debug=args.debug,
             json_out=args.json_out, auto_play=args.auto_play, slow=args.slow,
-            day=args.day))
+            day=args.day, min_play_seconds=args.min_play_seconds))
     if args.cmd == 'connect':
         return asyncio.run(cmd_connect(
             state_path, args.names, headless=not args.headed,

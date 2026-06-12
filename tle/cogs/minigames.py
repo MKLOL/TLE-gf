@@ -166,7 +166,8 @@ _QUEENS_DAILY_UPDATE_CHECK_INTERVAL = 60
 _QUEENS_DAILY_UPDATE_PRECISE_WINDOW = 300
 _QUEENS_DAILY_UPDATE_TIME = '12:05'
 _QUEENS_DAILY_UPDATE_TZ = 'US/Pacific'
-_QUEENS_SCRAPER_TIMEOUT = 240  # seconds — playwright start + slow auto-play
+_QUEENS_AUTO_PLAY_MIN_SECONDS = 180
+_QUEENS_SCRAPER_TIMEOUT = 480  # seconds — playwright start + delayed auto-play
 _QUEENS_WHOAMI_TIMEOUT = 60    # seconds — quick /in/me/ visit only
 # Bleeding-edge Ubuntu (26.04+) isn't in Playwright's platform support
 # matrix yet, so ``playwright install chromium`` refuses with
@@ -1388,6 +1389,8 @@ class Minigames(commands.Cog):
 
         ctx = _ScheduledCtx(self.bot, guild, channel)
         try:
+            await self._cmd_queens_play(
+                ctx, import_results=False, send_notice=False)
             await self._cmd_queens_update(ctx, results_day='yesterday')
             return True
         except MinigameCogError as exc:
@@ -3179,7 +3182,8 @@ class Minigames(commands.Cog):
         return _QUEENS_DEFAULT_STATE_PATH
 
     async def _run_queens_scraper(self, guild_id, *, auto_play,
-                                  results_day='today'):
+                                  results_day='today',
+                                  min_play_seconds=0):
         """Spawn the scraper's ``fetch`` subprocess.
 
         ``auto_play=True`` makes the scraper solve today's puzzle if the
@@ -3200,6 +3204,8 @@ class Minigames(commands.Cog):
                '--day', results_day]
         if auto_play:
             cmd.append('--auto-play')
+            if min_play_seconds:
+                cmd.extend(['--min-play-seconds', str(min_play_seconds)])
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -3408,6 +3414,38 @@ class Minigames(commands.Cog):
                 lines.append(
                     f'- ... and {len(preview.unresolved) - 20} more')
         return discord_common.embed_success('\n'.join(lines))
+
+    async def _cmd_queens_play(self, ctx, *, import_results=True,
+                               send_notice=True):
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        state_path = self._queens_state_path(ctx.guild.id)
+        if not state_path.exists():
+            raise MinigameCogError(
+                f'No LinkedIn session at `{state_path}`. A mod needs to '
+                'run `;queens login` (with the state file attached) first.')
+
+        if send_notice:
+            await ctx.send(embed=discord_common.embed_neutral(
+                'Running the scraper now. If today has not been played yet, '
+                f'it waits at least {_QUEENS_AUTO_PLAY_MIN_SECONDS}s before '
+                'finishing the puzzle.'))
+        payload, error = await self._run_queens_scraper(
+            ctx.guild.id,
+            auto_play=True,
+            min_play_seconds=_QUEENS_AUTO_PLAY_MIN_SECONDS)
+        if error is not None:
+            raise MinigameCogError(error)
+        status = payload.get('status')
+        if status != 'ok':
+            message = (
+                payload.get('error')
+                if status == 'error'
+                else self._queens_status_message(status)
+            )
+            raise MinigameCogError(message)
+        if import_results:
+            await self._do_queens_import(ctx, payload, source_label='Play')
+        return payload
 
     async def _cmd_queens_update(self, ctx, *, results_day='today'):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
@@ -5638,29 +5676,7 @@ class Minigames(commands.Cog):
         brief='(Mod) Solve today\'s puzzle + refresh the leaderboard')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_play(self, ctx):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        state_path = self._queens_state_path(ctx.guild.id)
-        if not state_path.exists():
-            raise MinigameCogError(
-                f'No LinkedIn session at `{state_path}`. A mod needs to '
-                'run `;queens login` (with the state file attached) first.')
-
-        await ctx.send(embed=discord_common.embed_neutral(
-            'Running the scraper now — this can take up to '
-            f'{_QUEENS_SCRAPER_TIMEOUT}s while the puzzle solves.'))
-        payload, error = await self._run_queens_scraper(
-            ctx.guild.id, auto_play=True)
-        if error is not None:
-            raise MinigameCogError(error)
-        status = payload.get('status')
-        if status != 'ok':
-            message = (
-                payload.get('error')
-                if status == 'error'
-                else self._queens_status_message(status)
-            )
-            raise MinigameCogError(message)
-        await self._do_queens_import(ctx, payload, source_label='Play')
+        await self._cmd_queens_play(ctx)
 
     @queens.command(
         name='update',
