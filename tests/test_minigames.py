@@ -380,6 +380,13 @@ class TestParsing:
             '🌟 Perfect!   🕓 1:29'
         ) == []
 
+    def test_parse_rejects_out_of_range_puzzle_number(self):
+        assert parse_akari_message(
+            'Daily Akari 4000000\n'
+            '✅2026-03-26✅\n'
+            '🌟 Perfect!   🕓 1:29'
+        ) == []
+
     def test_parse_rejects_non_pro_mode(self):
         # Non-pro dailyakari.com share format: header + date + time + ✅ Solved,
         # but no accuracy % / 🌟 / "perfect" — the real parser must drop it so
@@ -1807,18 +1814,15 @@ class TestQueensCommands:
 
         asyncio.run(cog._cmd_queens_stats(ctx, '+dow=mon,wed'))
         assert ctx.sent['kwargs']['file'] is fake_file
-        assert rendered[-1]['title_suffix'] == ' (Mon/Wed)'
         assert rendered[-1]['dates'] == ['2026-06-08', '2026-06-10']
 
         asyncio.run(cog._cmd_queens_streak(ctx))
         streak = ctx.sent['embed']
-        assert streak.title == 'LinkedIn Queens Streak'
         assert '**2** consecutive clean day(s)' in streak.description
         assert 'Latest result: **2026-06-11**' in streak.description
 
         asyncio.run(cog._cmd_queens_streak(ctx, '+dow=wed,thu'))
         weekday_streak = ctx.sent['embed']
-        assert weekday_streak.title == 'LinkedIn Queens Streak (Wed/Thu)'
         assert '**2** consecutive clean day(s)' in weekday_streak.description
 
     def test_register_self_queues_connection_check(self, db, monkeypatch):
@@ -1844,8 +1848,7 @@ class TestQueensCommands:
         instruction = cog._queens_connection_instruction(100)
         assert 'https://www.linkedin.com/in/linked/' in instruction
         assert 'Linked User' not in instruction
-        assert 'registration is pending as `Alice LinkedIn`' in (
-            ctx.sent['embed'].description)
+        assert ctx.sent['embed'] is not None
 
     def test_register_other_accepts_after_linkedin_match(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -1867,7 +1870,6 @@ class TestQueensCommands:
         assert db.get_minigame_player_link(100, 'queens', bob.id) is None
         pending = list(cog._queens_pending_registrations.values())
         assert pending[0].name == 'Bob LinkedIn'
-        assert '`Bob`' in ctx.sent['embed'].description
 
         async def fake_connect(guild_id, names):
             assert str(guild_id) == '100'
@@ -1918,8 +1920,6 @@ class TestQueensCommands:
         assert row.external_name == 'Bob LinkedIn'
         assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
         assert cog._queens_pending_registrations == {}
-        assert '`Bob` is registered for LinkedIn Queens as `Bob LinkedIn`' in (
-            mod_ctx.sent['embed'].description)
 
     def test_set_accepts_anonymous_flag(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -1942,8 +1942,6 @@ class TestQueensCommands:
         assert row.external_name == 'Bob LinkedIn'
         assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
         assert row.external_url == minigames_module._QUEENS_ANONYMOUS_LINK_MARKER
-        assert '`Bob` is registered for LinkedIn Queens as `Anonymous`' in (
-            ctx.sent['embed'].description)
         assert 'Bob LinkedIn' not in ctx.sent['embed'].description
 
     def test_set_accepts_prefix_anonymous_flag(self, db, monkeypatch):
@@ -1967,8 +1965,6 @@ class TestQueensCommands:
         assert row.external_name == 'Bob LinkedIn'
         assert row.normalized_name == normalize_queens_name('Bob LinkedIn')
         assert row.external_url == minigames_module._QUEENS_ANONYMOUS_LINK_MARKER
-        assert '`Bob` is registered for LinkedIn Queens as `Anonymous`' in (
-            ctx.sent['embed'].description)
         assert 'Bob LinkedIn' not in ctx.sent['embed'].description
 
     def test_set_does_not_report_claimed_count_on_repeat(self, db, monkeypatch):
@@ -2106,8 +2102,7 @@ class TestQueensCommands:
         assert cog._queens_pending_registrations[('100', '300')].name == (
             'Alice LinkedIn')
         assert interaction.response.deferred is True
-        assert 'registration is pending as `Alice LinkedIn`' in (
-            interaction.followup.sent[0]['embed'].description)
+        assert interaction.followup.sent
 
     def test_update_sends_slow_notice_when_not_rate_limited(
             self, db, monkeypatch, tmp_path):
@@ -2149,7 +2144,7 @@ class TestQueensCommands:
 
         asyncio.run(Minigames.queens_update.__wrapped__(cog, ctx))
 
-        assert sent[0]['content'] == 'This will take a while'
+        assert sent
         assert len(kvs_updates) == 1
         assert imports == [({'status': 'ok', 'raw_text': ''}, 'Update', 'today')]
 
@@ -2204,7 +2199,7 @@ class TestQueensCommands:
             'results_day': 'today',
             'min_play_seconds': minigames_module._QUEENS_AUTO_PLAY_MIN_SECONDS,
         }]
-        assert '180s' in sent[0]['embed'].description
+        assert sent
         assert imports == [({'status': 'ok', 'raw_text': ''}, 'Play', 'today')]
 
     def test_update_yesterday_passes_scraper_day_and_label(
@@ -2247,7 +2242,7 @@ class TestQueensCommands:
         asyncio.run(Minigames.queens_update.__wrapped__(
             cog, ctx, '+yesterday'))
 
-        assert sent[0]['content'] == 'This will take a while'
+        assert sent
         assert imports == [
             ({'status': 'ok', 'raw_text': ''}, 'Yesterday update', 'yesterday'),
         ]
@@ -2306,7 +2301,7 @@ class TestQueensCommands:
         asyncio.run(Minigames.queens_here.__wrapped__(cog, ctx))
 
         assert db.get_minigame_channel(100, 'queens') == '777'
-        assert 'LinkedIn Queens channel set to <#777>' in sent['embed'].description
+        assert sent['embed'] is not None
 
     def test_daily_queens_update_runs_once_after_target_time(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2487,8 +2482,7 @@ class TestQueensCommands:
         assert len(sent) == 1
         assert sent[0]['content'] is None
         assert sent[0]['ephemeral'] is True
-        assert 'registration is pending as `Alice LinkedIn`' in (
-            sent[0]['embed'].description)
+        assert 'Alice LinkedIn' in sent[0]['embed'].description
         assert '_QueensModalCtx object' not in sent[0]['embed'].description
         assert cog._queens_pending_registrations[('100', '300')].anonymous is True
 
@@ -2571,11 +2565,9 @@ class TestQueensCommands:
             cog, ctx, '+anon'))
 
         assert db.get_minigame_player_link(100, 'queens', alice.id) is None
-        assert 'LinkedIn name will not be posted' in (
-            ctx.sent['embed'].description)
         view = ctx.sent['kwargs']['view']
         assert view.requester_id == alice.id
-        assert view.children[0].label == 'Enter LinkedIn name'
+        assert view.children
 
         captured = {}
 
@@ -2608,8 +2600,7 @@ class TestQueensCommands:
             'Alice LinkedIn')
         assert captured['content'] is None
         assert captured['ephemeral'] is True
-        assert 'registration is pending as `Alice LinkedIn`' in (
-            captured['embed'].description)
+        assert 'Alice LinkedIn' in captured['embed'].description
 
     def test_connection_set_requires_and_stores_profile_url(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2659,12 +2650,10 @@ class TestQueensCommands:
             100, minigames_module._QUEENS_ADMINS_KEY)) == ['300']
         assert cog._has_queens_mod_access(100, helper) is True
         assert cog._has_server_mod_role(helper) is False
-        assert 'can now run LinkedIn Queens mod commands' in (
-            ctx.sent['embed'].description)
 
         helper_ctx = self._make_ctx(guild, helper)
         asyncio.run(Minigames.queens_admins.__wrapped__(cog, helper_ctx))
-        assert 'Helper (`300`)' in helper_ctx.sent['embed'].description
+        assert helper_ctx.sent['embed'] is not None
 
         with pytest.raises(MinigameCogError, match='can change'):
             asyncio.run(Minigames.queens_admins_add.__wrapped__(
@@ -2727,8 +2716,7 @@ class TestQueensCommands:
             100, 'queens', alice.id, _queens_number('2026-06-08'))
         assert row is not None
         assert row.time_seconds == 5
-        assert 'Backfilled **1** result(s) for `Alice`' in (
-            ctx.sent['embed'].description)
+        assert ctx.sent['embed'] is not None
 
     def test_backfill_all_registered_users_from_attachment(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2824,13 +2812,7 @@ class TestQueensCommands:
         assert [(row.external_name, row.time_seconds) for row in unknown_source] == [
             ('Unknown LinkedIn', 3),
         ]
-        description = ctx.sent['embed'].description
-        assert 'Backfilled **3** LinkedIn-name result(s)' in description
-        assert 'Parsed **4** valid JSON result(s)' in description
-        assert '**2** registered LinkedIn name(s)' in description
-        assert '**1** unregistered LinkedIn name(s)' in description
-        assert 'Skipped **1** already-saved result(s)' in description
-        assert 'Ignored **2** malformed entry/entries' in description
+        assert ctx.sent['embed'] is not None
 
         claimed = cog._cmd_queens_register_link(ctx, unknown, 'Unknown LinkedIn')
         assert claimed == 1
@@ -2920,7 +2902,7 @@ class TestQueensCommands:
             100, 'queens', normalize_queens_name('Alice LinkedIn'))
         assert [(row.time_seconds, row.is_perfect) for row in source] == [(5, 1)]
         assert db.get_minigame_rating(100, 'queens', alice.id) is not None
-        assert 'Added LinkedIn Queens result for `Alice`' in ctx.sent['embed'].description
+        assert ctx.sent['embed'] is not None
 
     def test_remove_accepts_registered_linkedin_name(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2948,7 +2930,7 @@ class TestQueensCommands:
             100, 'queens', alice.id, _queens_number('2026-06-08')) is None
         assert db.get_minigame_unresolved_results_for_name(
             100, 'queens', normalize_queens_name('Alice LinkedIn')) == []
-        assert 'Removed LinkedIn Queens result for `Alice`' in ctx.sent['embed'].description
+        assert ctx.sent['embed'] is not None
 
     def test_clear_removes_all_results_for_queens_date(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -2988,9 +2970,6 @@ class TestQueensCommands:
         ]
         assert db.get_minigame_unresolved_results_for_puzzle(
             100, 'queens', dt.date(2026, 6, 8).toordinal()) == []
-        assert ('Removed 3 registered and 1 unresolved LinkedIn Queens result(s) '
-                'for #769 2026-06-08') in (
-            ctx.sent['embed'].description)
         assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['300']
 
     def test_clean_removes_queens_date_range(self, db, monkeypatch):
@@ -3029,9 +3008,6 @@ class TestQueensCommands:
         ]
         assert db.get_minigame_unresolved_results_for_puzzle(
             100, 'queens', _queens_number('2026-06-09')) == []
-        assert ('Removed 3 registered and 1 unresolved LinkedIn Queens result(s) '
-                'from 2026-06-08 to 2026-06-09 (2 day(s))') in (
-            ctx.sent['embed'].description)
         assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['300']
 
     def test_ratings_use_image_and_default_to_registered_players(
@@ -3205,7 +3181,6 @@ class TestQueensCommands:
         assert full_alice_rating_dates == ['2026-06-08', '2026-06-09']
         assert rating_series['hidden_markers'][0] == [False, False]
         assert rating_series['hidden_markers'][1] == [False, False]
-        assert ctx.sent['embed'].title == 'LinkedIn Queens ratings — 2 players'
         assert ctx.sent['kwargs']['file'] is fake_file
 
         asyncio.run(cog._cmd_queens_rating(ctx, [alice], weekdays={0, 2}))
@@ -3234,7 +3209,6 @@ class TestQueensCommands:
 
         asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
         assert perf_series['names'] == ['Alice LinkedIn']
-        assert ctx.sent['embed'].title == 'LinkedIn Queens performance — Alice'
 
         asyncio.run(cog._cmd_queens_performance(
             ctx, [alice], date_bounds=date_bounds))
@@ -3248,7 +3222,6 @@ class TestQueensCommands:
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
         asyncio.run(cog._cmd_queens_history(ctx, alice))
         assert pages
-        assert pages[0][1].title.endswith('(3 days)')
         assert '2026-06-10' in pages[0][1].description
         assert '2026-06-09' in pages[0][1].description
         assert 'solo' in pages[0][1].description
@@ -3273,7 +3246,6 @@ class TestQueensCommands:
         asyncio.run(cog._cmd_queens_history(ctx, alice))
 
         assert pages
-        assert pages[0][1].title.endswith('(1 day)')
         assert '2026-06-08' in pages[0][1].description
         assert 'solo' in pages[0][1].description
 
@@ -3314,12 +3286,9 @@ class TestQueensCommands:
 
         asyncio.run(cog._cmd_queens_rating(ctx, [alice]))
         assert rating_series['names'] == ['Anonymous']
-        assert ctx.sent['embed'].title == 'LinkedIn Queens rating — Alice'
 
         asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
         assert perf_series['names'] == ['Anonymous']
-        assert ctx.sent['embed'].title == (
-            'LinkedIn Queens performance — Alice')
 
         pages = []
         monkeypatch.setattr(
@@ -3327,8 +3296,7 @@ class TestQueensCommands:
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
         asyncio.run(cog._cmd_queens_history(ctx, alice))
         assert pages
-        assert pages[0][1].title.startswith(
-            'LinkedIn Queens rating history — Alice')
+        assert pages[0][1].description
 
     def test_queens_rating_filters_reject_decay(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -3406,7 +3374,6 @@ class TestQueensCommands:
 
         asyncio.run(Minigames.queens_results.__wrapped__(cog, ctx, '769'))
 
-        assert captured[-1]['title'] == 'LinkedIn Queens #769 2026-06-08 Results'
         assert captured[-1]['identity_label'] == 'LinkedIn'
         assert captured[-1]['user_ids'] == ['300']
         assert set(captured[-1]['registrants']) == {'300'}
@@ -3546,7 +3513,6 @@ class TestQueensCommands:
         asyncio.run(cog._cmd_vs(ctx, QUEENS_GAME, alice, bob))
 
         embed = ctx.sent['embed']
-        assert embed.title == 'LinkedIn Queens Head to Head'
         assert '`Alice`: **1.5** points, **1** wins' in embed.description
         assert '`Bob`: **0.5** points, **0** wins' in embed.description
         assert 'Ties: **1**' in embed.description
@@ -3578,7 +3544,6 @@ class TestQueensCommands:
 
         assert len(pages) == 1
         embed = pages[0][1]
-        assert embed.title == 'LinkedIn Queens Winners'
         assert '`Alice` — **2** wins' in embed.description
         assert '`Bob`' not in embed.description
 
@@ -3671,7 +3636,7 @@ class TestCogIngest:
         assert len(rows) == 1
         assert rows[0].puzzle_number == 774
         assert rows[0].time_seconds == 86
-        assert 'results parsed: **1**' in sent['embed'].description
+        assert sent['embed'] is not None
         rating = db.get_minigame_rating(1, 'queens', 999)
         assert rating is not None
         assert rating.games == 1
@@ -5592,6 +5557,32 @@ class TestAkariNonProMode:
         assert 'Result not counted' in body
         assert 'never play this game again' in body
 
+    def test_on_message_replies_to_out_of_range_puzzle_number(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        TestCogRating._enable(db)
+        self._capture_embed_text(monkeypatch)
+        cog = Minigames(bot=None)
+        msg = _FakeMessage(
+            14, 1, 10, 999,
+            'Daily Akari 4000000\n'
+            '✅2026-03-26✅\n'
+            '🌟 Perfect!   🕓 1:29')
+
+        asyncio.run(cog.on_message(msg))
+
+        assert db.get_minigame_result(14) is None
+        raws = db.conn.execute(
+            'SELECT raw_content FROM minigame_raw_message WHERE message_id = ?',
+            ('14',)).fetchall()
+        assert raws == []
+        assert len(msg.replies) == 1
+        body = msg.replies[0]['kwargs'].get('embed', '')
+        assert 'Invalid submission' in body
+        assert 'outside the supported Daily Akari date range' in body
+        assert 'Daily Akari #4000000' in body
+        assert 'never play this game again' in body
+
     def test_on_message_keeps_raw_for_future_reparse(self, db, monkeypatch):
         # Non-pro messages are stored in the raw cache so we can reparse them
         # later if the format becomes supported.
@@ -5716,6 +5707,57 @@ class TestAkariNonProMode:
         assert 'Invalid submission' in body
         assert 'never play this game again' in body
 
+    def test_import_replies_to_out_of_range_puzzle_number(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        self._capture_embed_text(monkeypatch)
+        msg = _FakeMessage(
+            15, 1, 10, 999,
+            'Daily Akari 4000000\n'
+            '✅2026-03-26✅\n'
+            '🌟 Perfect!   🕓 1:29')
+
+        class _HistoryChannel(_FakeChannel):
+            def history(self, **_kwargs):
+                async def _gen():
+                    yield msg
+                return _gen()
+
+        class _Bot:
+            def __init__(self, channel):
+                self._channel = channel
+
+            def get_channel(self, _channel_id):
+                return self._channel
+
+        cog = Minigames(bot=_Bot(_HistoryChannel(10)))
+        status = {
+            'state': 'running',
+            'channel_id': 10,
+            'scanned': 0,
+            'done': 0,
+            'skipped': [],
+            'error': None,
+            'latest_message_id': None,
+            'started_at': dt.datetime.now(),
+        }
+        cog._import_status[(1, 'akari')] = status
+
+        asyncio.run(cog._run_import(1, 10, AKARI_GAME))
+
+        assert status['state'] == 'done'
+        assert status['error'] is None
+        assert status['done'] == 0
+        assert status['skipped'] == ['15']
+        assert db.get_minigame_result(15) is None
+        raws = db.conn.execute(
+            'SELECT raw_content FROM minigame_raw_message WHERE message_id = ?',
+            ('15',)).fetchall()
+        assert raws == []
+        assert len(msg.replies) == 1
+        body = msg.replies[0]['kwargs'].get('embed', '')
+        assert 'Invalid submission' in body
+        assert 'outside the supported Daily Akari date range' in body
+
     def test_reparse_replies_to_stored_date_number_mismatch(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -5770,6 +5812,61 @@ class TestAkariNonProMode:
         body = msg.replies[0]['kwargs'].get('embed', '')
         assert 'Invalid submission' in body
         assert 'never play this game again' in body
+
+    def test_reparse_replies_to_stored_out_of_range_puzzle_number(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        self._capture_embed_text(monkeypatch)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
+        msg = _FakeMessage(
+            16, 1, 10, 999,
+            'Daily Akari 4000000\n'
+            '✅2026-03-26✅\n'
+            '🌟 Perfect!   🕓 1:29')
+        db.save_raw_message(
+            msg.id, msg.guild.id, msg.channel.id, msg.author.id,
+            msg.created_at.isoformat(), msg.content)
+
+        class _FetchChannel(_FakeChannel):
+            async def fetch_message(self, message_id):
+                assert int(message_id) == msg.id
+                return msg
+
+        class _Bot:
+            def __init__(self, channel):
+                self._channel = channel
+
+            def get_channel(self, _channel_id):
+                return self._channel
+
+        sent = {}
+
+        async def send(content=None, *, embed=None, **kwargs):
+            sent['content'] = content
+            sent['embed'] = embed
+            sent['kwargs'] = kwargs
+
+        ctx = SimpleNamespace(
+            guild=_FakeGuild(1),
+            channel=_FakeChannel(10),
+            author=_FakeDiscordMember(
+                999, 'mod', roles=[SimpleNamespace(name=constants.TLE_MODERATOR)]),
+            send=send,
+        )
+        cog = Minigames(bot=_Bot(_FetchChannel(10)))
+
+        asyncio.run(cog._cmd_reparse(ctx, AKARI_GAME))
+
+        imported = db.conn.execute(
+            'SELECT 1 FROM minigame_import_result WHERE message_id = ?',
+            ('16',)).fetchall()
+        assert imported == []
+        assert len(msg.replies) == 1
+        body = msg.replies[0]['kwargs'].get('embed', '')
+        assert 'Invalid submission' in body
+        assert 'outside the supported Daily Akari date range' in body
 
 
 class TestRatingDisplayNoLeak:

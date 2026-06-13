@@ -3692,6 +3692,14 @@ class Minigames(commands.Cog):
         mismatch = akari_date_number_mismatch(content)
         if mismatch is None:
             return None
+        if getattr(mismatch, 'out_of_range', False):
+            return (
+                f'Invalid submission: puzzle number/date mismatch. '
+                f'Daily Akari #{mismatch.puzzle_number} is outside the supported '
+                f'Daily Akari date range, but this message says '
+                f'{mismatch.puzzle_date.isoformat()} (that date is '
+                f'#{mismatch.expected_number}). Result not counted. '
+                f'You should never play this game again.')
         return (
             f'Invalid submission: puzzle number/date mismatch. '
             f'Daily Akari #{mismatch.puzzle_number} '

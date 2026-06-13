@@ -85,7 +85,16 @@ def akari_date_number_mismatch(content):
     except ValueError:
         return None
 
-    expected_date = puzzle_date_for(puzzle_number)
+    try:
+        expected_date = puzzle_date_for(puzzle_number)
+    except OverflowError:
+        return SimpleNamespace(
+            puzzle_number=puzzle_number,
+            puzzle_date=puzzle_date,
+            expected_date=None,
+            expected_number=_puzzle_number_from_date(puzzle_date),
+            out_of_range=True,
+        )
     if expected_date == puzzle_date:
         return None
 
@@ -182,7 +191,11 @@ def parse_akari_message(content):
     num_match = _HEADER_NUM_RE.search(header_line)
     if num_match:
         puzzle_number = int(num_match.group(1))
-        if puzzle_date_for(puzzle_number) != puzzle_date:
+        try:
+            expected_date = puzzle_date_for(puzzle_number)
+        except OverflowError:
+            return []
+        if expected_date != puzzle_date:
             return []
     else:
         puzzle_number = _puzzle_number_from_date(puzzle_date)
