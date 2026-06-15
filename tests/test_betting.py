@@ -10,7 +10,7 @@ from tle.util.db.user_db_upgrades import upgrade_1_33_0
 from tle.util import odds_api
 from tle.cogs.betting import (
     outcome_from_score, payout_amount, normalize_pick, parse_amount,
-    parse_bet_message, parse_settle_arg, rank_line,
+    parse_bet_message, parse_settle_arg, rank_line, is_due,
 )
 
 
@@ -208,6 +208,70 @@ class TestParseH2H:
 
     def test_missing_teams_returns_none(self):
         assert odds_api.parse_h2h_event(_raw_event(home_team=None)) is None
+
+
+class _FakeResp:
+    def __init__(self, data):
+        self._data = data
+        self.status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def json(self):
+        return self._data
+
+    async def text(self):
+        return ''
+
+
+class _FakeSession:
+    def __init__(self, data):
+        self._data = data
+        self.calls = []
+
+    def get(self, url, params=None):
+        self.calls.append((url, params))
+        return _FakeResp(self._data)
+
+
+class TestFetchAsync:
+    """Exercise the async client wiring (URL/params, loop, None-filtering)
+    with an injected session — no network, no aiohttp needed."""
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def test_fetch_h2h_params_and_parse(self):
+        session = _FakeSession([_raw_event(), _raw_event(id='evt2'),
+                                _raw_event(id='evt3', bookmakers=[])])  # last → None
+        events = self._run(odds_api.fetch_h2h(
+            'KEY', [odds_api.WORLD_CUP_SPORT_KEY], session=session))
+        assert len(events) == 2  # the no-odds event is dropped
+        url, params = session.calls[0]
+        assert url.endswith('/sports/soccer_fifa_world_cup/odds')
+        assert params['markets'] == 'h2h'
+        assert params['oddsFormat'] == 'decimal'
+        assert params['apiKey'] == 'KEY'
+
+    def test_fetch_scores_params_and_parse(self):
+        raw = [{'id': 'evt1', 'completed': True, 'home_team': 'A',
+                'away_team': 'B', 'scores': [{'name': 'A', 'score': '2'},
+                                             {'name': 'B', 'score': '0'}]}]
+        session = _FakeSession(raw)
+        scores = self._run(odds_api.fetch_scores(
+            'KEY', odds_api.WORLD_CUP_SPORT_KEY, event_ids=['evt1'],
+            session=session))
+        assert scores == [{'event_id': 'evt1', 'completed': True,
+                           'home_score': 2, 'away_score': 0}]
+        url, params = session.calls[0]
+        assert url.endswith('/sports/soccer_fifa_world_cup/scores')
+        assert params['daysFrom'] == '1'        # cheap completed-games window
+        assert params['eventIds'] == 'evt1'
 
 
 class TestParseScore:
@@ -546,3 +610,226 @@ class TestExecuteBet:
         status, data = self._run(
             cog._execute_bet(GUILD, market, self._user(USER_A), 'away', 'all'))
         assert status == 'ok' and data['stake'] == 1000 and data['balance'] == 0
+
+
+# ── World Cup auto-open ─────────────────────────────────────────────────────
+
+class TestIsDue:
+    def test_inside_window(self):
+        assert is_due(now := 3600, 0, 7200) is True  # kickoff in 1h, lead 2h
+
+    def test_outside_window(self):
+        assert is_due(8000, 0, 7200) is False  # kickoff in >2h
+
+    def test_already_started(self):
+        assert is_due(-1, 0, 7200) is False
+        assert is_due(0, 0, 7200) is False  # exactly now is not "upcoming"
+
+
+# Fakes for the auto-open engine (discord objects + bot).
+class _FakeThread:
+    def __init__(self, tid):
+        self.id = tid
+        self.sent = []
+        self.archived = False
+
+    async def send(self, embed=None, **kw):
+        self.sent.append(embed)
+
+    async def edit(self, **kw):
+        self.archived = kw.get('archived', self.archived)
+
+
+class _FakeMsg:
+    _n = 5000
+
+    def __init__(self):
+        _FakeMsg._n += 1
+        self.id = _FakeMsg._n
+        self.thread = None
+
+    async def create_thread(self, name=None, auto_archive_duration=None):
+        self.thread = _FakeThread(self.id + 100000)
+        return self.thread
+
+
+class _FakeChannel:
+    def __init__(self, cid):
+        self.id = cid
+        self.sent = []
+        self._messages = {}
+
+    async def send(self, embed=None, **kw):
+        m = _FakeMsg()
+        self.sent.append(m)
+        self._messages[m.id] = m
+        return m
+
+    async def fetch_message(self, mid):
+        return self._messages[mid]
+
+
+class _FakeGuild:
+    def __init__(self, gid, channel):
+        self.id = gid
+        self._channel = channel
+
+    def get_channel(self, cid):
+        return self._channel
+
+
+class _FakeBot:
+    def __init__(self, guilds, channels):
+        self.guilds = guilds
+        self._channels = channels
+        self.user = type('U', (), {'id': 999})()
+
+    def get_channel(self, cid):
+        return self._channels.get(cid)
+
+
+def _wc_event(event_id='evtWC', home='Spain', away='Cape Verde', commence=None):
+    return {
+        'event_id': event_id, 'sport_key': 'soccer_fifa_world_cup',
+        'home_team': home, 'away_team': away,
+        'commence_time': commence,
+        'odds': {'home': 1.25, 'draw': 5.5, 'away': 12.0},
+    }
+
+
+class TestAutoOpen:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    @pytest.fixture
+    def setup(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'BET_MIN_STAKE', 1, raising=False)
+        monkeypatch.setattr(constants, 'BET_OPEN_LEAD_SECONDS', 7200, raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'testkey', raising=False)
+        channel = _FakeChannel(222)
+        guild = _FakeGuild(int(GUILD), channel)
+        bot = _FakeBot([guild], {222: channel})
+        cog = Betting(bot)
+        db.set_guild_config(GUILD, 'bet_channel', '222')
+        return cog, db, channel
+
+    def _arm_events(self, cog, events, monkeypatch):
+        import time as _t
+        cog._wc_events = events
+        cog._wc_fetched_at = _t.time()
+
+        async def _fake_ensure(max_age):
+            return events
+        monkeypatch.setattr(cog, '_ensure_wc_events', _fake_ensure)
+
+    def test_opens_market_and_thread_for_due_game(self, setup, monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 3600)  # kickoff in 1h → due
+        self._arm_events(cog, [ev], monkeypatch)
+
+        self._run(cog._watch_pending())
+
+        market = db.bet_market_get_active(GUILD, '222')
+        assert market is not None
+        assert market.home_team == 'Spain'
+        assert market.odds_home == 1.25  # frozen from the event
+        assert market.message_id is not None
+        assert market.thread_id is not None
+        assert len(channel.sent) == 1                 # one announcement
+        assert channel.sent[0].thread is not None     # thread created
+        assert len(channel.sent[0].thread.sent) == 1  # intro embed posted
+
+    def test_does_not_open_game_outside_window(self, setup, monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 10 * 3600)  # 10h away → not due
+        self._arm_events(cog, [ev], monkeypatch)
+        self._run(cog._watch_pending())
+        assert db.bet_markets_open(GUILD) == []
+
+    def test_idempotent_no_double_open(self, setup, monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 3600)
+        self._arm_events(cog, [ev], monkeypatch)
+        self._run(cog._watch_pending())
+        self._run(cog._watch_pending())  # second pass
+        assert len(db.bet_markets_open(GUILD)) == 1
+        assert len(channel.sent) == 1
+
+    def test_skips_when_no_channel_configured(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_OPEN_LEAD_SECONDS', 7200, raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'testkey', raising=False)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+        # no ;prediction here → bet_channel unset
+        ev = _wc_event(commence=_t.time() + 3600)
+        self._arm_events(cog, [ev], monkeypatch)
+        self._run(cog._watch_pending())
+        assert db.bet_markets_open(GUILD) == []
+
+
+class TestWatchMaxAge:
+    @pytest.fixture
+    def cog(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_OPEN_LEAD_SECONDS', 7200, raising=False)
+        return Betting(bot=None)
+
+    def test_no_cache_forces_fetch(self, cog):
+        import time as _t
+        cog._wc_events = None
+        assert cog._watch_max_age(_t.time(), {GUILD: '222'}) == 0
+
+    def test_due_unopened_forces_fetch(self, cog):
+        import time as _t
+        now = _t.time()
+        cog._wc_events = [_wc_event(commence=now + 3600)]  # due, no market
+        assert cog._watch_max_age(now, {GUILD: '222'}) == 0
+
+    def test_due_but_already_open_not_forced(self, cog, db):
+        import time as _t
+        from tle.cogs.betting import _WC_TTL_ACTIVE
+        now = _t.time()
+        db.bet_market_create(GUILD, '222', 'evtWC', 'soccer_fifa_world_cup',
+                             'Spain', 'Cape Verde', now + 3600,
+                             1.25, 5.5, 12.0, USER_A, 0.0)
+        cog._wc_events = [_wc_event(commence=now + 3600)]
+        # not forced (0); a game is approaching → ACTIVE refresh
+        assert cog._watch_max_age(now, {GUILD: '222'}) == _WC_TTL_ACTIVE
+
+    def test_far_game_idle(self, cog):
+        import time as _t
+        from tle.cogs.betting import _WC_TTL_IDLE
+        now = _t.time()
+        cog._wc_events = [_wc_event(commence=now + 10 * 3600)]  # far away
+        assert cog._watch_max_age(now, {GUILD: '222'}) == _WC_TTL_IDLE
+
+
+class TestConfiguredGuilds:
+    def test_reads_channel_config(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+        assert cog._configured_guilds() == {}
+        db.set_guild_config(GUILD, 'bet_channel', '222')
+        assert cog._configured_guilds() == {int(GUILD): '222'}

@@ -2272,6 +2272,18 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
         ).fetchone()
         return row is not None
 
+    def bet_market_get_open_for_event(self, guild_id, event_id):
+        """Return the guild's open market on this event, or None.
+
+        Used by the auto-open watcher to decide whether to create a market or
+        (if one exists without a thread) just attach a thread.
+        """
+        return self.conn.execute(
+            "SELECT * FROM bet_market WHERE guild_id = ? AND event_id = ? "
+            "AND status = 'open' ORDER BY market_id DESC LIMIT 1",
+            (str(guild_id), str(event_id))
+        ).fetchone()
+
     def bet_markets_pending_settlement(self, before_time):
         """Return all open markets whose kickoff is at/before before_time —
         the auto-settle poller's work-list, across all guilds."""

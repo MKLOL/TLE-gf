@@ -1,24 +1,27 @@
-"""Soccer odds-betting minigame.
+"""World Cup soccer betting minigame.
 
-Moderators open a betting market on a real upcoming match (1X2 odds pulled
-live from The Odds API). Opening a market spins up a **thread**; members place
-bets by replying in that thread (e.g. `home 100`, `away all`, `draw 25%`) —
-messages anywhere else are ignored, so the channel stays clean. Stakes are
-escrowed from a per-guild wallet at the locked odds; markets auto-settle from
-the API's final score, paying winners stake × odds. Everyone starts with a
-balance and tops up `;bet daily` once per day.
+Fully automated and World Cup–only. A mod points the bot at a channel with
+`;prediction here`; from then on the bot, on its own, ~2 hours before each
+World Cup kickoff:
+  1. reads the live 1X2 odds from The Odds API and **freezes** them,
+  2. posts the market in the configured channel and opens a **thread**,
+  3. members bet by replying in the thread (`home 100`, `away all`, `draw 25%`).
+At kickoff betting closes; at full time the bot reads the final score and
+auto-settles, paying winners stake × odds. Everyone starts at 1000 coins and
+claims +100/day with `;bet daily`.
 
-Commands (group `;bet`):
-  ;bet matches [query]      list upcoming matches with odds
-  ;bet open <n|event_id>    open a market + betting thread on a match    (mod)
-  ;bet home|draw|away <amt> stake on an outcome (also reply in the thread)
+Commands (group `;bet`, alias `;prediction`):
+  ;prediction here          set this channel for auto-opened markets       (mod)
+  ;bet matches [query]      list upcoming World Cup matches with odds
+  ;bet open <n|event_id>    manually open a market early                    (mod)
+  ;bet home|draw|away <amt> stake on an outcome (also: reply in the thread)
   ;bet balance [@user]      show a wallet balance
   ;bet daily                claim the daily allowance
   ;bet leaderboard [profit] richest wallets / net profit
   ;bet mybet                show your bet on the active market
-  ;bet settle <home|draw|away|2-1>  settle the active market manually    (mod)
-  ;bet cancel               cancel the active market, refund stakes      (mod)
-  ;bet sports [keys…]       view/set/discover the competition list       (mod to set)
+  ;bet pending              list markets stuck open past kickoff           (mod-ish)
+  ;bet settle <home|draw|away|2-1>  settle the active market manually       (mod)
+  ;bet cancel               cancel the active market, refund stakes         (mod)
 """
 import logging
 import time
@@ -39,12 +42,15 @@ logger = logging.getLogger(__name__)
 _COIN = '🪙'
 _LB_PER_PAGE = 15
 _MATCH_LIST_LIMIT = 15
-# Reuse a guild's fetched odds for this long so repeated `;bet matches` calls
-# don't each burn API credits. 10 min is fresh enough for pre-match odds.
-_MATCH_CACHE_TTL = 10 * 60
-# Auto-settle poll cadence. The poller only hits the network when a market is
-# actually past kickoff, so a slow cadence is fine and frugal with the API.
-_SETTLE_INTERVAL = 15 * 60
+# Manual `;bet matches` reuses a fetch no older than this.
+_MATCH_CACHE_MAX_AGE = 10 * 60
+# Engine tick cadence (auto-open watcher + auto-settle poller share one task).
+_ENGINE_INTERVAL = 15 * 60
+# Adaptive odds-fetch freshness: refresh every tick when a game is approaching
+# its open window, else just keep the schedule loosely fresh. Keeps API credits
+# down — most of the day there is no game within the lead window.
+_WC_TTL_ACTIVE = 15 * 60
+_WC_TTL_IDLE = 3 * 3600
 
 _PICK_ALIASES = {
     'home': 'home', 'h': 'home', '1': 'home',
@@ -52,6 +58,8 @@ _PICK_ALIASES = {
     'away': 'away', 'a': 'away', '2': 'away',
 }
 _AMOUNT_WORDS = ('all', 'max', 'allin', 'all-in', 'everything')
+
+_CHANNEL_CONFIG_KEY = 'bet_channel'
 
 
 class BettingCogError(commands.CommandError):
@@ -72,6 +80,12 @@ def outcome_from_score(home, away):
 def payout_amount(stake, odds):
     """Gross return on a winning stake at decimal odds (rounded to a point)."""
     return int(round(stake * odds))
+
+
+def is_due(commence_time, now, lead):
+    """True if a game with this kickoff is inside the auto-open window: not yet
+    started, and within `lead` seconds of kickoff."""
+    return 0 < commence_time - now <= lead
 
 
 def normalize_pick(text):
@@ -202,44 +216,41 @@ class Betting(commands.Cog):
         self.bot = bot
         # channel_id -> events shown by the last `;bet matches` (for `;bet open <n>`)
         self._match_cache = {}
-        # guild_id -> (fetched_at, events): TTL cache so repeated `;bet matches`
-        # reuse one API fetch.
-        self._fetch_cache = {}
+        # Shared cache of the last World Cup odds fetch (schedule + frozen-able
+        # odds), reused by the watcher and `;bet matches`.
+        self._wc_events = None
+        self._wc_fetched_at = None
 
     @commands.Cog.listener()
     @discord_common.once
     async def on_ready(self):
-        self._settle_task.start()
+        self._engine_task.start()
 
     async def cog_unload(self):
-        await self._settle_task.stop()
+        await self._engine_task.stop()
 
-    # ── Config ─────────────────────────────────────────────────────────
+    # ── Odds cache ─────────────────────────────────────────────────────
 
-    def _sport_keys(self, guild_id):
-        raw = cf_common.user_db.get_guild_config(guild_id, 'bet_sports')
-        if raw:
-            keys = [k.strip() for k in raw.replace(',', ' ').split() if k.strip()]
-            if keys:
-                return keys
-        return odds_api.DEFAULT_SPORT_KEYS
-
-    async def _get_events(self, guild_id):
-        """Return upcoming odds events for a guild, reusing a recent fetch."""
-        cached = self._fetch_cache.get(guild_id)
-        if cached and time.time() - cached[0] < _MATCH_CACHE_TTL:
-            return cached[1]
+    async def _ensure_wc_events(self, max_age):
+        """Return World Cup odds events, refetching only if the cache is older
+        than max_age. Raises BettingCogError if no key / fetch fails."""
+        now = time.time()
+        if (self._wc_events is not None and self._wc_fetched_at is not None
+                and now - self._wc_fetched_at <= max_age):
+            return self._wc_events
         api_key = _api_key()
         if not api_key:
             raise BettingCogError(
                 'Live odds are not configured (no `ODDS_API_KEY`). A mod can '
                 'still settle markets manually with `;bet settle`.')
         try:
-            events = await odds_api.fetch_h2h(api_key, self._sport_keys(guild_id))
+            events = await odds_api.fetch_h2h(
+                api_key, [odds_api.WORLD_CUP_SPORT_KEY])
         except odds_api.OddsApiError as e:
-            logger.warning('odds fetch failed: %s', e)
-            raise BettingCogError(f'Could not fetch odds: {e}')
-        self._fetch_cache[guild_id] = (time.time(), events)
+            logger.warning('World Cup odds fetch failed: %s', e)
+            raise BettingCogError(f'Could not fetch World Cup odds: {e}')
+        self._wc_events = events
+        self._wc_fetched_at = now
         return events
 
     def _pick_label(self, market, pick):
@@ -272,7 +283,8 @@ class Betting(commands.Cog):
             f'Kickoff: <t:{kickoff}:F> (<t:{kickoff}:R>)',
         ]
         if open_now:
-            lines.append('\n👇 **Place your bets in the thread below.**')
+            lines.append('\n👇 **Place your bets in the thread below** — '
+                         'betting closes at kickoff.')
             color = 0x2ecc71
         elif market.status == 'open':
             lines.append('\n⏳ Kickoff passed — betting closed, awaiting result.')
@@ -297,8 +309,8 @@ class Betting(commands.Cog):
             '• `home 100` — back the home win\n'
             '• `draw 50` — back a draw\n'
             '• `away all` — back the away win (also `25%`)\n\n'
-            f'Odds: **1** {market.odds_home:.2f} · **X** {market.odds_draw:.2f} '
-            f'· **2** {market.odds_away:.2f}\n'
+            f'Odds (frozen): **1** {market.odds_home:.2f} · '
+            f'**X** {market.odds_draw:.2f} · **2** {market.odds_away:.2f}\n'
             f'Returns = stake × odds. Re-bet before kickoff to change it.\n'
             f'Betting closes at kickoff (<t:{kickoff}:R>).')
         return discord.Embed(title='🎟️ Place your bets', description=desc,
@@ -310,31 +322,51 @@ class Betting(commands.Cog):
 
     # ── Group ──────────────────────────────────────────────────────────
 
-    @commands.group(name='bet', aliases=['betting'], brief='Soccer betting',
-                    invoke_without_command=True)
+    @commands.group(name='bet', aliases=['betting', 'prediction', 'pred'],
+                    brief='World Cup betting', invoke_without_command=True)
     async def bet(self, ctx):
         """Show the active market here and your balance."""
         balance = cf_common.user_db.bet_ensure_wallet(
             ctx.guild.id, ctx.author.id, constants.BET_START_BALANCE)
         market = self._find_market(ctx)
         if market is None:
+            configured = cf_common.user_db.get_guild_config(
+                ctx.guild.id, _CHANNEL_CONFIG_KEY)
+            hint = ('Markets auto-open ~2h before each World Cup kickoff'
+                    if configured else
+                    'A mod can run `;prediction here` to start auto-opening '
+                    'World Cup markets in a channel')
             await ctx.send(embed=discord_common.embed_neutral(
                 f'No open market here. You have **{balance}** {_COIN}.\n'
-                'A mod can open one with `;bet matches` then `;bet open <n>`. '
-                'See `;help bet`.'))
+                f'{hint}. See `;help bet`.'))
             return
         embed = self._market_embed(market)
         embed.set_footer(text=f'Your balance: {balance} coins')
         await ctx.send(embed=embed)
 
-    # ── Matches / open ─────────────────────────────────────────────────
+    @bet.command(name='here',
+                 brief='Set this channel for auto-opened World Cup markets (mod)')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def here(self, ctx):
+        """Designate this channel as where the bot auto-posts markets."""
+        cf_common.user_db.set_guild_config(
+            ctx.guild.id, _CHANNEL_CONFIG_KEY, str(ctx.channel.id))
+        note = ('' if _api_key() else
+                '\n⚠️ No `ODDS_API_KEY` is set, so nothing will auto-open until '
+                'one is configured.')
+        await ctx.send(embed=discord_common.embed_success(
+            f'World Cup markets will auto-open in {ctx.channel.mention} ~2h '
+            f'before each kickoff, with a thread for bets.{note}'))
+
+    # ── Matches / manual open ──────────────────────────────────────────
 
     @bet.command(name='matches', aliases=['games', 'fixtures'],
-                 brief='List upcoming matches with odds', usage='[query]')
+                 brief='List upcoming World Cup matches with odds',
+                 usage='[query]')
     async def matches(self, ctx, *, query: str = None):
-        """List upcoming matches (optionally filtered by a team name)."""
+        """List upcoming World Cup matches (optionally filtered by team)."""
         async with ctx.typing():
-            events = await self._get_events(ctx.guild.id)
+            events = await self._ensure_wc_events(_MATCH_CACHE_MAX_AGE)
 
         now = time.time()
         events = [e for e in events if e['commence_time'] > now]
@@ -345,9 +377,8 @@ class Betting(commands.Cog):
         events.sort(key=lambda e: e['commence_time'])
         if not events:
             raise BettingCogError(
-                'No upcoming matches with odds found'
-                + (f' for “{query}”.' if query else
-                   '. Try `;bet sports` to check the configured competitions.'))
+                'No upcoming World Cup matches with odds found'
+                + (f' for “{query}”.' if query else '.'))
 
         events = events[:_MATCH_LIST_LIMIT]
         self._match_cache[ctx.channel.id] = events
@@ -359,16 +390,17 @@ class Betting(commands.Cog):
                 f'**{i}.** {e["home_team"]} vs {e["away_team"]} — <t:{ko}:R>\n'
                 f'    1 **{o["home"]:.2f}** · X **{o["draw"]:.2f}** · '
                 f'2 **{o["away"]:.2f}**')
-        embed = discord.Embed(title='⚽ Upcoming matches',
+        embed = discord.Embed(title='⚽ Upcoming World Cup matches',
                               description='\n'.join(lines), color=0x3498db)
-        embed.set_footer(text='Mods: ;bet open <number> to open betting')
+        embed.set_footer(text='Auto-opens ~2h before kickoff · '
+                              'mods: ;bet open <number> to open early')
         await ctx.send(embed=embed)
 
-    @bet.command(name='open', brief='Open a market + thread on a match (mod)',
+    @bet.command(name='open', brief='Manually open a market early (mod)',
                  usage='<number from ;bet matches | event_id>')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def open_market(self, ctx, *, ref: str):
-        """Open betting on a match from the last `;bet matches` list."""
+        """Open betting on a match from the last `;bet matches` list, early."""
         if cf_common.user_db.bet_market_get_active(ctx.guild.id, ctx.channel.id):
             raise BettingCogError(
                 'A market is already open in this channel. Settle or '
@@ -394,32 +426,44 @@ class Betting(commands.Cog):
                 ctx.guild.id, event['event_id']):
             raise BettingCogError('There is already an open market on that match.')
 
-        o = event['odds']
-        market_id = cf_common.user_db.bet_market_create(
-            ctx.guild.id, ctx.channel.id, event['event_id'], event['sport_key'],
-            event['home_team'], event['away_team'], event['commence_time'],
-            o['home'], o['draw'], o['away'], ctx.author.id, time.time())
+        market_id = self._create_market(ctx.guild.id, ctx.channel.id, event)
         market = cf_common.user_db.bet_market_get(market_id)
-
         msg = await ctx.send(embed=self._market_embed(market))
         cf_common.user_db.bet_market_set_message(market_id, msg.id)
+        thread = await self._create_thread(market_id, msg, market)
+        if thread is None:
+            await ctx.send(embed=discord_common.embed_alert(
+                'Could not create a betting thread (missing "Create Public '
+                'Threads" permission?). Bets can still be placed here with '
+                '`;bet home/draw/away <amount>`.'))
+        logger.info('Manually opened market %s (%s vs %s) in guild %s',
+                    market_id, event['home_team'], event['away_team'], ctx.guild.id)
 
-        thread = None
+    # ── Market creation (shared by manual + auto) ──────────────────────
+
+    def _create_market(self, guild_id, channel_id, event):
+        o = event['odds']
+        creator = (self.bot.user.id if self.bot and self.bot.user else '0')
+        return cf_common.user_db.bet_market_create(
+            guild_id, channel_id, event['event_id'], event['sport_key'],
+            event['home_team'], event['away_team'], event['commence_time'],
+            o['home'], o['draw'], o['away'], creator, time.time())
+
+    async def _create_thread(self, market_id, msg, market):
+        """Create the betting thread off the announcement message and post the
+        intro. Returns the thread, or None if creation failed."""
         try:
             thread = await msg.create_thread(name=self._thread_name(market),
                                              auto_archive_duration=1440)
         except (discord.HTTPException, AttributeError) as e:
             logger.warning('thread create failed for market %s: %s', market_id, e)
-        if thread is not None:
-            cf_common.user_db.bet_market_set_thread(market_id, thread.id)
+            return None
+        cf_common.user_db.bet_market_set_thread(market_id, thread.id)
+        try:
             await thread.send(embed=self._thread_intro_embed(market))
-        else:
-            await ctx.send(embed=discord_common.embed_alert(
-                'Could not create a betting thread (missing "Create Public '
-                'Threads" permission?). Bets can still be placed here with '
-                '`;bet home/draw/away <amount>`.'))
-        logger.info('Opened bet market %s (%s vs %s) in guild %s',
-                    market_id, event['home_team'], event['away_team'], ctx.guild.id)
+        except discord.HTTPException:
+            pass
+        return thread
 
     # ── Placing bets ───────────────────────────────────────────────────
 
@@ -454,8 +498,8 @@ class Betting(commands.Cog):
         market = self._find_market(ctx)
         if market is None:
             raise BettingCogError(
-                'No open market here. Bets are placed in the match thread — a '
-                'mod opens one with `;bet open`.')
+                'No open market here. Bets are placed in the match thread the '
+                'bot opens ~2h before kickoff.')
         status, data = await self._execute_bet(
             ctx.guild.id, market, ctx.author, pick, amount_str)
         if status == 'closed':
@@ -595,7 +639,8 @@ class Betting(commands.Cog):
                 return f'{row.balance} {_COIN}'
 
         if not rows:
-            raise BettingCogError('No bettors yet. Be the first — `;bet matches`.')
+            raise BettingCogError('No bettors yet. Markets auto-open before '
+                                  'each World Cup kickoff — `;bet matches`.')
 
         personal = rank_line(rows, ctx.author.id, value_attr,
                              'profit' if profit else 'wallet')
@@ -614,7 +659,7 @@ class Betting(commands.Cog):
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
                            set_pagenum_footers=True, author_id=ctx.author.id)
 
-    # ── Settle / cancel (mod) ──────────────────────────────────────────
+    # ── Settle / cancel / pending (mod) ────────────────────────────────
 
     @bet.command(name='settle', brief='Settle the active market manually (mod)',
                  usage='<home|draw|away|2-1>')
@@ -760,59 +805,117 @@ class Betting(commands.Cog):
         embed.set_footer(text=tag)
         return embed
 
-    # ── Sport keys ─────────────────────────────────────────────────────
+    # ── Engine: auto-open watcher + auto-settle poller ─────────────────
 
-    @bet.command(name='sports', brief='View/set the competition list',
-                 usage='[discover | <key1 key2 …>]')
-    async def sports(self, ctx, *, args: str = None):
-        if args is None:
-            keys = self._sport_keys(ctx.guild.id)
-            custom = cf_common.user_db.get_guild_config(ctx.guild.id, 'bet_sports')
-            note = '(custom)' if custom else '(default)'
-            await ctx.send(embed=discord_common.embed_neutral(
-                f'Competitions {note}:\n' + '\n'.join(f'• `{k}`' for k in keys)
-                + '\n\nMods: `;bet sports <key1 key2 …>` to set, '
-                '`;bet sports discover` to list live ones.'))
-            return
-
-        if args.strip().lower() == 'discover':
-            if not _is_mod(ctx.author):
-                raise BettingCogError('Only moderators can discover sports.')
-            api_key = _api_key()
-            if not api_key:
-                raise BettingCogError('No `ODDS_API_KEY` configured.')
-            try:
-                keys = await odds_api.fetch_soccer_sport_keys(api_key)
-            except odds_api.OddsApiError as e:
-                raise BettingCogError(f'Could not list sports: {e}')
-            if not keys:
-                raise BettingCogError('No in-season soccer competitions found.')
-            await ctx.send(embed=discord_common.embed_neutral(
-                'In-season soccer competitions:\n'
-                + '\n'.join(f'• `{k}`' for k in keys)
-                + '\n\nSet with `;bet sports <key1 key2 …>`.'))
-            return
-
-        if not _is_mod(ctx.author):
-            raise BettingCogError('Only moderators can set the competition list.')
-        keys = [k.strip() for k in args.replace(',', ' ').split() if k.strip()]
-        if not keys:
-            raise BettingCogError('Give one or more sport keys, or `discover`.')
-        cf_common.user_db.set_guild_config(ctx.guild.id, 'bet_sports', ' '.join(keys))
-        # Drop the cached fetch so the new list takes effect immediately.
-        self._fetch_cache.pop(ctx.guild.id, None)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Competition list set to {len(keys)} key(s).'))
-
-    # ── Auto-settle task ───────────────────────────────────────────────
-
-    @tasks.task_spec(name='BetAutoSettle',
-                     waiter=tasks.Waiter.fixed_delay(_SETTLE_INTERVAL))
-    async def _settle_task(self, _):
+    @tasks.task_spec(name='BetEngine',
+                     waiter=tasks.Waiter.fixed_delay(_ENGINE_INTERVAL))
+    async def _engine_task(self, _):
+        try:
+            await self._watch_pending()
+        except Exception:
+            logger.warning('bet auto-open pass failed', exc_info=True)
         try:
             await self._settle_pending()
         except Exception:
             logger.warning('bet auto-settle pass failed', exc_info=True)
+
+    def _configured_guilds(self):
+        """{guild_id: channel_id} for guilds that ran `;prediction here`."""
+        out = {}
+        if not self.bot:
+            return out
+        for guild in self.bot.guilds:
+            channel_id = cf_common.user_db.get_guild_config(
+                guild.id, _CHANNEL_CONFIG_KEY)
+            if channel_id:
+                out[guild.id] = channel_id
+        return out
+
+    def _watch_max_age(self, now, configured):
+        """How stale the cached odds may be before the watcher refetches.
+
+        Forces a fresh fetch (0) when a configured guild has a game inside the
+        open window with no market yet — we need current odds to freeze. Else
+        refreshes often only while a game is approaching, and rarely otherwise.
+        """
+        if not self._wc_events:
+            return 0
+        lead = constants.BET_OPEN_LEAD_SECONDS
+        for e in self._wc_events:
+            if is_due(e['commence_time'], now, lead):
+                for guild_id in configured:
+                    if cf_common.user_db.bet_market_get_open_for_event(
+                            guild_id, e['event_id']) is None:
+                        return 0
+        upcoming = [e['commence_time'] - now for e in self._wc_events
+                    if e['commence_time'] > now]
+        if upcoming and min(upcoming) <= lead + _ENGINE_INTERVAL:
+            return _WC_TTL_ACTIVE
+        return _WC_TTL_IDLE
+
+    async def _watch_pending(self):
+        """Auto-open markets for World Cup games entering the 2h window."""
+        if not _api_key():
+            return
+        configured = self._configured_guilds()
+        if not configured:
+            return
+        now = time.time()
+        try:
+            events = await self._ensure_wc_events(
+                self._watch_max_age(now, configured))
+        except BettingCogError:
+            return
+        lead = constants.BET_OPEN_LEAD_SECONDS
+        due = [e for e in events if is_due(e['commence_time'], now, lead)]
+        for guild_id, channel_id in configured.items():
+            for event in due:
+                try:
+                    await self._auto_open_or_thread(guild_id, channel_id, event, now)
+                except Exception:
+                    logger.warning('auto-open failed for %s in guild %s',
+                                   event.get('event_id'), guild_id, exc_info=True)
+
+    async def _auto_open_or_thread(self, guild_id, channel_id, event, now):
+        market = cf_common.user_db.bet_market_get_open_for_event(
+            guild_id, event['event_id'])
+        if market is None:
+            await self._open_market_auto(guild_id, channel_id, event)
+        elif not market.thread_id and market.commence_time > now:
+            # Market exists but lost its thread (e.g. earlier perms hiccup) —
+            # attach one so people can still bet, as long as it's pre-kickoff.
+            await self._ensure_thread(market)
+
+    async def _open_market_auto(self, guild_id, channel_id, event):
+        channel = self.bot.get_channel(int(channel_id)) if self.bot else None
+        if channel is None:
+            logger.warning('configured bet channel %s missing for guild %s',
+                           channel_id, guild_id)
+            return
+        market_id = self._create_market(guild_id, channel_id, event)
+        market = cf_common.user_db.bet_market_get(market_id)
+        try:
+            msg = await channel.send(embed=self._market_embed(market))
+        except discord.HTTPException:
+            logger.warning('failed to post auto market %s', market_id,
+                           exc_info=True)
+            return
+        cf_common.user_db.bet_market_set_message(market_id, msg.id)
+        await self._create_thread(market_id, msg, market)
+        logger.info('Auto-opened market %s (%s vs %s) in guild %s',
+                    market_id, event['home_team'], event['away_team'], guild_id)
+
+    async def _ensure_thread(self, market):
+        if not market.message_id or not self.bot:
+            return
+        channel = self.bot.get_channel(int(market.channel_id))
+        if channel is None:
+            return
+        try:
+            msg = await channel.fetch_message(int(market.message_id))
+        except (discord.HTTPException, AttributeError):
+            return
+        await self._create_thread(market.market_id, msg, market)
 
     async def _settle_pending(self):
         api_key = _api_key()

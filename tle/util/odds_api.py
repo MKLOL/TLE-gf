@@ -18,19 +18,14 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = 'https://api.the-odds-api.com/v4'
 
-# A small starter set of soccer competition keys. Kept short on purpose: an
-# odds request costs (markets × regions) credits PER sport key, so each extra
-# league here is paid every time `;bet matches` refreshes. Guilds tailor it
-# with `;bet sports <keys...>`; `;bet sports discover` lists the live set.
-DEFAULT_SPORT_KEYS = [
-    'soccer_epl',
-    'soccer_spain_la_liga',
-    'soccer_italy_serie_a',
-    'soccer_uefa_champs_league',
-]
+# This bot is World Cup–only. The Odds API key for the 2026 tournament is
+# 'soccer_fifa_world_cup' (verified live: active, "FIFA World Cup 2026", h2h
+# 1X2 odds across ~16 bookmakers). NOTE: 'soccer_fifa_world_cup_winner' is a
+# different (outright winner) market — do not use it for match betting.
+WORLD_CUP_SPORT_KEY = 'soccer_fifa_world_cup'
 
-# One region keeps an odds request at (1 market × 1 region) = 1 credit per
-# sport key. 'eu' aggregates a broad set of European bookmakers.
+# One region keeps an odds request at (1 market × 1 region) = 1 credit.
+# 'eu' aggregates a broad set of European bookmakers.
 DEFAULT_REGIONS = 'eu'
 
 
@@ -179,21 +174,6 @@ async def fetch_scores(api_key, sport_key, *, days_from=1, event_ids=None,
             params['eventIds'] = ','.join(event_ids)
         raw = await _get_json(session, url, params)
         return [parse_score_event(ev) for ev in (raw or [])]
-    finally:
-        if own:
-            await session.close()
-
-
-async def fetch_soccer_sport_keys(api_key, *, session=None, base_url=BASE_URL):
-    """Return the keys of all in-season soccer competitions."""
-    own = session is None
-    if own:
-        session = aiohttp.ClientSession()
-    try:
-        raw = await _get_json(session, f'{base_url}/sports', {'apiKey': api_key})
-        return [s['key'] for s in (raw or [])
-                if s.get('group') == 'Soccer' and s.get('active', True)
-                and s.get('key')]
     finally:
         if own:
             await session.close()
