@@ -23,6 +23,7 @@ Commands (group `;bet`, alias `;prediction`):
   ;bet settle <home|draw|away|2-1>  settle the active market manually       (mod)
   ;bet cancel               cancel the active market, refund stakes         (mod)
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -45,20 +46,20 @@ _LB_PER_PAGE = 15
 _MATCH_LIST_LIMIT = 15
 # Manual `;bet matches` reuses a fetch no older than this.
 _MATCH_CACHE_MAX_AGE = 10 * 60
-# Auto-open watcher cadence. Bounds how late after the 2h mark a market opens
-# (worst case ≈ one interval, i.e. [2:00, 1:55] before kickoff). Cheap to keep
-# tight: the odds fetch is gated to "a due game with no market yet" (~1 fetch
-# per game), so a 5-min tick costs no more credits than a 15-min one.
-_WATCH_INTERVAL = 5 * 60
+# Each fixture gets a precise asyncio timer that opens its market at exactly
+# kickoff − BET_OPEN_LEAD_SECONDS (never late), mirroring rpoll's per-poll
+# expiry timers. The safety-net task is only a coarse backstop: it re-discovers
+# the schedule (to arm timers for new fixtures) and catches anything a missed
+# timer / restart left in-window. So opening precision comes from the timers,
+# NOT this interval.
+_SAFETY_NET_INTERVAL = 15 * 60
 # Auto-settle poller cadence. Results come from football-data.org (free), so we
 # can poll often; only hits the network when a market is actually past kickoff.
 _SETTLE_INTERVAL = 5 * 60
-# How stale the cached World Cup schedule may be before a refetch. Odds are
-# frozen at open and never re-read, and kickoff times are stable, so the only
-# reason to refresh is to discover newly-listed fixtures — a slow cadence is
-# plenty. Fresh odds at the moment of opening are guaranteed separately by the
-# force-fresh (max_age 0) path in _watch_max_age.
-_WC_TTL_IDLE = 6 * 3600
+# How stale the cached schedule may be before the safety net refetches it (to
+# arm timers for newly-listed fixtures). Fresh odds at the open moment are
+# guaranteed separately — the timer fetches with max_age 0 when it fires.
+_SCHEDULE_TTL = 6 * 3600
 
 _PICK_ALIASES = {
     'home': 'home', 'h': 'home', '1': 'home',
@@ -95,6 +96,12 @@ def is_due(commence_time, now, lead):
     """True if a game with this kickoff is inside the auto-open window: not yet
     started, and within `lead` seconds of kickoff."""
     return 0 < commence_time - now <= lead
+
+
+def seconds_until_open(commence_time, lead, now):
+    """Seconds from now until a fixture's market should open (kickoff − lead),
+    floored at 0 (already inside the window → open now)."""
+    return max(0.0, (commence_time - lead) - now)
 
 
 def normalize_pick(text):
@@ -262,19 +269,36 @@ class Betting(commands.Cog):
         # channel_id -> events shown by the last `;bet matches` (for `;bet open <n>`)
         self._match_cache = {}
         # Shared cache of the last World Cup odds fetch (schedule + frozen-able
-        # odds), reused by the watcher and `;bet matches`.
+        # odds), reused by the scheduler, open timers and `;bet matches`.
         self._wc_events = None
         self._wc_fetched_at = None
+        # event_id -> asyncio.Task: precise per-fixture "open at kickoff − 2h"
+        # timers (see rpoll's _scheduled_timers).
+        self._open_timers = {}
 
     @commands.Cog.listener()
     @discord_common.once
     async def on_ready(self):
-        self._watch_task.start()
+        # user_db is set in the bot's on_ready handler, which may run after cog
+        # listeners — wait briefly (as rpoll does) before arming timers.
+        for _ in range(30):
+            if cf_common.user_db is not None:
+                break
+            await asyncio.sleep(1)
+        if cf_common.user_db is None:
+            logger.warning('betting: user_db still None after waiting; skipping')
+            return
+        await self._refresh_schedule()   # arm open timers + catch in-window games
+        self._safety_net_task.start()
         self._settle_task.start()
 
     async def cog_unload(self):
-        await self._watch_task.stop()
+        await self._safety_net_task.stop()
         await self._settle_task.stop()
+        for task in list(self._open_timers.values()):
+            if not task.done():
+                task.cancel()
+        self._open_timers.clear()
 
     # ── Odds cache ─────────────────────────────────────────────────────
 
@@ -437,13 +461,13 @@ class Betting(commands.Cog):
         await ctx.send(embed=discord_common.embed_success(
             f'World Cup markets will auto-open in {ctx.channel.mention} ~2h '
             f'before each kickoff, with a thread for bets.{note}'))
-        # One-time immediate pass so a game already inside the 2h window opens
-        # right now instead of waiting for the next watcher tick.
+        # Arm timers now (and open anything already inside the 2h window) so we
+        # don't wait for the next safety-net sweep.
         if _api_key():
             try:
-                await self._watch_pending()
+                await self._refresh_schedule()
             except Exception:
-                logger.warning('immediate watch pass after `;prediction here` '
+                logger.warning('schedule refresh after `;prediction here` '
                                'failed', exc_info=True)
 
     # ── Matches / manual open ──────────────────────────────────────────
@@ -1062,19 +1086,20 @@ class Betting(commands.Cog):
         embed.set_footer(text=tag)
         return embed
 
-    # ── Engine: auto-open watcher (slow) + auto-settle poller (fast) ───
+    # ── Engine: precise per-fixture open timers + coarse safety net ────
 
-    @tasks.task_spec(name='BetWatch',
-                     waiter=tasks.Waiter.fixed_delay(_WATCH_INTERVAL))
-    async def _watch_task(self, _):
-        # The first tick fires immediately on start, which can race the bot's
-        # on_ready that initializes cf_common.user_db. Skip until it's ready.
+    @tasks.task_spec(name='BetSafetyNet',
+                     waiter=tasks.Waiter.fixed_delay(_SAFETY_NET_INTERVAL))
+    async def _safety_net_task(self, _):
+        # Backstop only: arm timers for newly-listed fixtures and catch any
+        # game a missed timer / restart left inside the window. The on-time
+        # opening itself is done by the per-fixture timers, not this sweep.
         if cf_common.user_db is None:
             return
         try:
-            await self._watch_pending()
+            await self._refresh_schedule()
         except Exception:
-            logger.warning('bet auto-open pass failed', exc_info=True)
+            logger.warning('bet schedule refresh failed', exc_info=True)
 
     @tasks.task_spec(name='BetSettle',
                      waiter=tasks.Waiter.fixed_delay(_SETTLE_INTERVAL))
@@ -1102,64 +1127,93 @@ class Betting(commands.Cog):
                 out[guild.id] = channel_id
         return out
 
-    def _watch_max_age(self, now, configured):
-        """How stale the cached odds may be before the watcher refetches.
-
-        Forces a fresh fetch (0) only when a configured guild has a game inside
-        the open window with no market yet — that is the one moment we need
-        current odds to freeze. Once the market is open its odds are frozen and
-        never re-read, so there is nothing fast polling would buy; fall back to
-        a slow schedule refresh. (This keeps credit use bounded to ~1 fetch per
-        game instead of one every tick across each game's whole 2h window.)
-        """
-        if not self._wc_events:
-            return 0
-        lead = constants.BET_OPEN_LEAD_SECONDS
-        for e in self._wc_events:
-            if is_due(e['commence_time'], now, lead):
-                for guild_id in configured:
-                    if cf_common.user_db.bet_market_get_open_for_event(
-                            guild_id, e['event_id']) is None:
-                        return 0
-        return _WC_TTL_IDLE
-
-    async def _watch_pending(self):
-        """Auto-open markets for World Cup games entering the 2h window."""
+    async def _refresh_schedule(self):
+        """Discover the fixture list (cached schedule, cheap) and, for each
+        upcoming game, either arm a precise open timer (kickoff − 2h still in
+        the future) or open it now (already inside the window — restart / missed
+        timer catch-up). This is idempotent and safe to call often."""
         if not _api_key():
+            return
+        if not self._configured_guilds():
+            return
+        try:
+            events = await self._ensure_wc_events(_SCHEDULE_TTL)
+        except BettingCogError:
+            return
+        now = time.time()
+        lead = constants.BET_OPEN_LEAD_SECONDS
+        for event in events:
+            if event['commence_time'] <= now:
+                continue  # already kicked off — never open / thread
+            if seconds_until_open(event['commence_time'], lead, now) > 0:
+                self._schedule_open(event['event_id'], event['commence_time'])
+            else:
+                # Inside the 2h window already — open (or attach a thread) now.
+                await self._fire_open(event['event_id'])
+
+    def _schedule_open(self, event_id, commence_time):
+        """Arm a precise asyncio timer to open this fixture at kickoff − lead.
+        Skips if a live timer already exists (avoid churn on every refresh)."""
+        existing = self._open_timers.get(event_id)
+        if existing is not None and not existing.done():
+            return
+        delay = seconds_until_open(
+            commence_time, constants.BET_OPEN_LEAD_SECONDS, time.time())
+        self._open_timers[event_id] = asyncio.create_task(
+            self._open_timer(event_id, delay))
+
+    async def _open_timer(self, event_id, delay):
+        """Sleep until the exact open moment, then open the market."""
+        try:
+            await asyncio.sleep(delay)
+            await self._fire_open(event_id)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning('open timer failed for %s', event_id, exc_info=True)
+        finally:
+            self._open_timers.pop(event_id, None)
+
+    async def _fire_open(self, event_id):
+        """Open this fixture's market in every configured guild that lacks one,
+        freezing fresh odds read right now. Also (re)attaches a thread to a
+        market that lost one. Idempotent; fetches odds only if a market is
+        actually missing."""
+        if cf_common.user_db is None:
             return
         configured = self._configured_guilds()
         if not configured:
             return
         now = time.time()
+        needs_open = False
+        for guild_id in configured:
+            market = cf_common.user_db.bet_market_get_open_for_event(
+                guild_id, event_id)
+            if market is None:
+                needs_open = True
+            elif not market.thread_id and market.commence_time > now:
+                # Market exists but lost its thread — no odds fetch needed.
+                await self._ensure_thread(market)
+        if not needs_open:
+            return
         try:
-            events = await self._ensure_wc_events(
-                self._watch_max_age(now, configured))
+            events = await self._ensure_wc_events(0)  # fresh odds, frozen at open
         except BettingCogError:
             return
-        lead = constants.BET_OPEN_LEAD_SECONDS
-        due = [e for e in events if is_due(e['commence_time'], now, lead)]
-        for guild_id, channel_id in configured.items():
-            for event in due:
-                try:
-                    await self._auto_open_or_thread(guild_id, channel_id, event, now)
-                except Exception:
-                    logger.warning('auto-open failed for %s in guild %s',
-                                   event.get('event_id'), guild_id, exc_info=True)
-
-    async def _auto_open_or_thread(self, guild_id, channel_id, event, now):
-        if event['commence_time'] <= now:
-            # Already kicked off — you can't bet, so never open a market or make
-            # a thread for it (belt-and-suspenders; _watch_pending already
-            # filters to is_due, i.e. strictly-future games).
+        event = next((e for e in events if e['event_id'] == event_id), None)
+        if event is None or event['commence_time'] <= time.time():
+            # Vanished from the feed, or kicked off while we fetched — don't
+            # open a market/thread for a game you can't bet on.
             return
-        market = cf_common.user_db.bet_market_get_open_for_event(
-            guild_id, event['event_id'])
-        if market is None:
-            await self._open_market_auto(guild_id, channel_id, event)
-        elif not market.thread_id and market.commence_time > now:
-            # Market exists but lost its thread (e.g. earlier perms hiccup) —
-            # attach one so people can still bet, as long as it's pre-kickoff.
-            await self._ensure_thread(market)
+        for guild_id, channel_id in configured.items():
+            if cf_common.user_db.bet_market_get_open_for_event(
+                    guild_id, event_id) is not None:
+                continue
+            try:
+                await self._open_market_auto(guild_id, channel_id, event)
+            except Exception:
+                logger.warning('auto-open failed for %s in guild %s',
+                               event_id, guild_id, exc_info=True)
 
     async def _open_market_auto(self, guild_id, channel_id, event):
         channel = self.bot.get_channel(int(channel_id)) if self.bot else None

@@ -940,7 +940,7 @@ class TestAutoOpen:
         ev = _wc_event(commence=_t.time() + 3600)  # kickoff in 1h → due
         self._arm_events(cog, [ev], monkeypatch)
 
-        self._run(cog._watch_pending())
+        self._run(cog._refresh_schedule())
 
         market = db.bet_market_get_active(GUILD, '222')
         assert market is not None
@@ -957,7 +957,7 @@ class TestAutoOpen:
         cog, db, channel = setup
         ev = _wc_event(commence=_t.time() + 10 * 3600)  # 10h away → not due
         self._arm_events(cog, [ev], monkeypatch)
-        self._run(cog._watch_pending())
+        self._run(cog._refresh_schedule())
         assert db.bet_markets_open(GUILD) == []
 
     def test_does_not_open_already_started_game(self, setup, monkeypatch):
@@ -967,7 +967,7 @@ class TestAutoOpen:
         cog, db, channel = setup
         ev = _wc_event(commence=_t.time() - 600)  # kicked off 10 min ago
         self._arm_events(cog, [ev], monkeypatch)
-        self._run(cog._watch_pending())
+        self._run(cog._refresh_schedule())
         assert db.bet_markets_open(GUILD) == []
         assert len(channel.sent) == 0  # nothing posted, no thread
 
@@ -981,8 +981,7 @@ class TestAutoOpen:
         db.bet_market_create(GUILD, '222', 'evtWC', 'soccer_fifa_world_cup',
                              'Spain', 'Cape Verde', now - 600,
                              1.25, 5.5, 12.0, USER_A, 0.0)
-        ev = _wc_event(commence=now - 600)
-        self._run(cog._auto_open_or_thread(int(GUILD), '222', ev, now))
+        self._run(cog._fire_open('evtWC'))
         market = db.bet_market_get_open_for_event(GUILD, 'evtWC')
         assert market.thread_id is None  # no thread attached post-kickoff
         assert len(channel.sent) == 0
@@ -992,8 +991,8 @@ class TestAutoOpen:
         cog, db, channel = setup
         ev = _wc_event(commence=_t.time() + 3600)
         self._arm_events(cog, [ev], monkeypatch)
-        self._run(cog._watch_pending())
-        self._run(cog._watch_pending())  # second pass
+        self._run(cog._refresh_schedule())
+        self._run(cog._refresh_schedule())  # second pass
         assert len(db.bet_markets_open(GUILD)) == 1
         assert len(channel.sent) == 1
 
@@ -1039,7 +1038,7 @@ class TestAutoOpen:
             raise discord.HTTPException()
         monkeypatch.setattr(channel, 'send', _boom)
 
-        self._run(cog._watch_pending())
+        self._run(cog._refresh_schedule())
         assert db.bet_markets_open(GUILD) == []  # no orphan
 
     def test_skips_when_no_channel_configured(self, db, monkeypatch):
@@ -1056,7 +1055,7 @@ class TestAutoOpen:
         # no ;prediction here → bet_channel unset
         ev = _wc_event(commence=_t.time() + 3600)
         self._arm_events(cog, [ev], monkeypatch)
-        self._run(cog._watch_pending())
+        self._run(cog._refresh_schedule())
         assert db.bet_markets_open(GUILD) == []
 
 
@@ -1116,44 +1115,90 @@ class TestAutoSettleFootballData:
         assert db.bet_market_get(mid).status == 'open'
 
 
-class TestWatchMaxAge:
+class TestSecondsUntilOpen:
+    def test_future_game(self):
+        from tle.cogs.betting import seconds_until_open
+        # kickoff in 3h, lead 2h → opens in 1h (3600s), exactly at kickoff−2h.
+        assert seconds_until_open(now := 3 * 3600, 2 * 3600, 0) == 3600
+
+    def test_in_window_floors_to_zero(self):
+        from tle.cogs.betting import seconds_until_open
+        # kickoff in 1h, lead 2h → already past the open moment → 0.
+        assert seconds_until_open(3600, 7200, 0) == 0
+
+
+class TestScheduler:
+    """Precise per-fixture open timers (the rpoll pattern): a future game is
+    scheduled (not opened early), an in-window game opens now, and the armed
+    timer fires on time and opens the market."""
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
     @pytest.fixture
-    def cog(self, db, monkeypatch):
+    def setup(self, db, monkeypatch):
         from tle.util import codeforces_common as cf_common
         from tle import constants
         from tle.cogs.betting import Betting
         monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
         monkeypatch.setattr(constants, 'BET_OPEN_LEAD_SECONDS', 7200, raising=False)
-        return Betting(bot=None)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'k', raising=False)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+        db.set_guild_config(GUILD, 'bet_channel', '222')
+        return cog, db, channel
 
-    def test_no_cache_forces_fetch(self, cog):
+    def _arm(self, cog, events, monkeypatch):
         import time as _t
-        cog._wc_events = None
-        assert cog._watch_max_age(_t.time(), {GUILD: '222'}) == 0
+        cog._wc_events = events
+        cog._wc_fetched_at = _t.time()
 
-    def test_due_unopened_forces_fetch(self, cog):
-        import time as _t
-        now = _t.time()
-        cog._wc_events = [_wc_event(commence=now + 3600)]  # due, no market
-        assert cog._watch_max_age(now, {GUILD: '222'}) == 0
+        async def _fake_ensure(max_age):
+            return events
+        monkeypatch.setattr(cog, '_ensure_wc_events', _fake_ensure)
 
-    def test_due_but_already_open_not_forced(self, cog, db):
+    def test_future_game_is_scheduled_not_opened(self, setup, monkeypatch):
         import time as _t
-        from tle.cogs.betting import _WC_TTL_IDLE
-        now = _t.time()
-        db.bet_market_create(GUILD, '222', 'evtWC', 'soccer_fifa_world_cup',
-                             'Spain', 'Cape Verde', now + 3600,
-                             1.25, 5.5, 12.0, USER_A, 0.0)
-        cog._wc_events = [_wc_event(commence=now + 3600)]
-        # Market already open → odds frozen → no fast polling, fall back to idle.
-        assert cog._watch_max_age(now, {GUILD: '222'}) == _WC_TTL_IDLE
 
-    def test_far_game_idle(self, cog):
+        async def scenario():
+            cog, db, channel = setup
+            ev = _wc_event(commence=_t.time() + 5 * 3600)  # 5h away
+            self._arm(cog, [ev], monkeypatch)
+            await cog._refresh_schedule()
+            # No market opened early; a precise timer is armed instead.
+            assert db.bet_markets_open(GUILD) == []
+            assert 'evtWC' in cog._open_timers
+            cog._open_timers['evtWC'].cancel()
+        self._run(scenario())
+
+    def test_in_window_game_opens_now(self, setup, monkeypatch):
         import time as _t
-        from tle.cogs.betting import _WC_TTL_IDLE
-        now = _t.time()
-        cog._wc_events = [_wc_event(commence=now + 10 * 3600)]  # far away
-        assert cog._watch_max_age(now, {GUILD: '222'}) == _WC_TTL_IDLE
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 3600)  # inside 2h window
+        self._arm(cog, [ev], monkeypatch)
+        self._run(cog._refresh_schedule())
+        assert db.bet_market_get_active(GUILD, '222') is not None
+        assert 'evtWC' not in cog._open_timers  # opened directly, no timer
+
+    def test_armed_timer_fires_on_time(self, setup, monkeypatch):
+        """Arm a timer that should fire almost immediately and confirm it opens
+        the market via the precise-timer path (not the safety net)."""
+        import time as _t
+
+        async def scenario():
+            cog, db, channel = setup
+            # open moment ≈ now + 0.05s → timer delay ~0.05s
+            ev = _wc_event(commence=_t.time() + 7200 + 0.05)
+            self._arm(cog, [ev], monkeypatch)
+            await cog._refresh_schedule()
+            assert db.bet_markets_open(GUILD) == []   # not yet (still future)
+            assert 'evtWC' in cog._open_timers
+            await __import__('asyncio').sleep(0.2)     # let the timer fire
+            assert db.bet_market_get_active(GUILD, '222') is not None
+        self._run(scenario())
 
 
 class _FakeBetMessage:
@@ -1182,14 +1227,14 @@ class TestStartupGuards:
         from tle.cogs.betting import Betting
         monkeypatch.setattr(cf_common, 'user_db', None)
         cog = Betting(bot=None)
-        called = {'watch': False}
+        called = {'refresh': False}
 
-        async def _w():
-            called['watch'] = True
-        monkeypatch.setattr(cog, '_watch_pending', _w)
+        async def _r():
+            called['refresh'] = True
+        monkeypatch.setattr(cog, '_refresh_schedule', _r)
         # Invoke the task body (conftest wraps it in a fake task-spec).
-        self._run(cog._watch_task._func(cog, None))
-        assert called['watch'] is False  # short-circuited before any DB work
+        self._run(cog._safety_net_task._func(cog, None))
+        assert called['refresh'] is False  # short-circuited before any DB work
 
     def test_on_message_ignored_when_db_uninitialized(self, monkeypatch):
         from tle.util import codeforces_common as cf_common
