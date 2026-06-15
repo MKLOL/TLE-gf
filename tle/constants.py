@@ -51,3 +51,28 @@ AKARI_DECAY_GRACE = 0
 AKARI_MAX_PUZZLE_LOOKAHEAD = 2
 # Players who haven't played within this many days are hidden from the ranking.
 AKARI_RANKING_MAX_INACTIVE_DAYS = 30
+
+# ── Soccer betting minigame (tle/cogs/betting.py) ──────────────────────────
+# Live 1X2 odds and final scores come from The Odds API (the-odds-api.com).
+# Set ODDS_API_KEY to a free-tier key to enable `;bet matches`/`;bet open` and
+# auto-settlement. Without it the cog loads but those paths are disabled
+# (mods can still settle markets manually).
+ODDS_API_KEY = os.environ.get('ODDS_API_KEY')
+# Results come from football-data.org when this is set (free, rate-limited, no
+# per-call credit cost) so settlement can poll often and cheaply. Falls back to
+# The Odds API scores endpoint when unset. Get a free token at
+# football-data.org/client/register.
+FOOTBALL_DATA_API_KEY = os.environ.get('FOOTBALL_DATA_API_KEY')
+# Wallet economy. Everyone starts at BET_START_BALANCE; `;bet daily` grants a
+# flat BET_DAILY_AMOUNT once per UTC day (unconditional). Stakes are uncapped —
+# you can wager up to your whole balance.
+BET_START_BALANCE = int(os.environ.get('BET_START_BALANCE', 1000))
+BET_DAILY_AMOUNT = int(os.environ.get('BET_DAILY_AMOUNT', 100))
+BET_MIN_STAKE = 1
+# The bot auto-opens a betting market this long before kickoff, freezing the
+# odds it reads at that moment for the life of the market. 2h, per spec.
+BET_OPEN_LEAD_SECONDS = 2 * 3600
+# How long after kickoff before the auto-settle poller asks for a final score.
+# A World Cup match runs ~2h (group) and up to ~2h45 with extra time +
+# penalties (knockouts); 3h leaves margin for the final score to land.
+BET_SETTLE_BUFFER_SECONDS = 3 * 3600

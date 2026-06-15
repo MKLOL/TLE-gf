@@ -6,6 +6,13 @@ export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 export CF_API_KEY=""
 export CF_API_SECRET=""
 
+# World Cup betting.
+# Required for odds, ;bet matches, manual opens, and auto-opening markets.
+export ODDS_API_KEY=""
+# Optional but recommended: lets settlement poll football-data.org for free
+# before falling back to The Odds API scores endpoint.
+export FOOTBALL_DATA_API_KEY=""
+
 # Ranklist data source is now configured per-guild via:
 #   ;meta config enable cf_ranklist_source_rating_changes
 # This routes contest.standings through contest.ratingChanges (public) for
@@ -14,4 +21,3 @@ export CF_API_SECRET=""
 
 # Set to enable automatic venv usage.
 export VENV_DIR=""
-

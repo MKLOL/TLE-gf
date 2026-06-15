@@ -821,3 +821,82 @@ def upgrade_1_32_0(db):
     ''')
     db.commit()
     logger.info('1.32.0: Upgrade complete')
+
+
+@registry.register('1.33.0', 'Soccer odds-betting minigame')
+def upgrade_1_33_0(db):
+    """Create the betting tables.
+
+    A *market* is one match, with the 1X2 odds (home / draw / away) frozen
+    from The Odds API at open time; everyone bets at those locked odds. A
+    *wager* is just one user's pick + stake — odds and payout are NOT stored
+    because they are derivable: a wager's odds = the market's frozen
+    odds_<pick>, and its payout = round(stake × odds) when pick == result, else
+    0. A *wallet* is a per-guild points balance; stakes are escrowed (deducted
+    at placement) and winnings credited at settlement, so the wallet balance is
+    the source of truth for net worth.
+    """
+    logger.info('1.33.0: Creating betting tables')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS bet_wallet (
+            guild_id    TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            balance     INTEGER NOT NULL,
+            last_daily  TEXT,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS bet_market (
+            market_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id       TEXT NOT NULL,
+            channel_id     TEXT NOT NULL,
+            message_id     TEXT,
+            thread_id      TEXT,
+            event_id       TEXT NOT NULL,
+            sport_key      TEXT NOT NULL,
+            home_team      TEXT NOT NULL,
+            away_team      TEXT NOT NULL,
+            commence_time  REAL NOT NULL,
+            odds_home      REAL NOT NULL,
+            odds_draw      REAL NOT NULL,
+            odds_away      REAL NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'open',
+            bets_closed    INTEGER NOT NULL DEFAULT 0,
+            result         TEXT,
+            result_home    INTEGER,
+            result_away    INTEGER,
+            created_by     TEXT NOT NULL,
+            created_at     REAL NOT NULL,
+            settled_at     REAL
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_bet_market_active
+            ON bet_market (guild_id, channel_id, status)
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_bet_market_pending
+            ON bet_market (status, commence_time)
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_bet_market_thread
+            ON bet_market (guild_id, thread_id, status)
+    ''')
+    db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_market_open_event
+            ON bet_market (guild_id, event_id)
+            WHERE status = 'open'
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS bet_wager (
+            market_id   INTEGER NOT NULL,
+            user_id     TEXT NOT NULL,
+            pick        TEXT NOT NULL,
+            stake       INTEGER NOT NULL,
+            placed_at   REAL NOT NULL,
+            PRIMARY KEY (market_id, user_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.33.0: betting tables created')
