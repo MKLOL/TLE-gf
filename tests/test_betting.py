@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tle.util.db.user_db_conn import UserDbConn, namedtuple_factory
-from tle.util.db.user_db_upgrades import upgrade_1_33_0, upgrade_1_34_0
+from tle.util.db.user_db_conn import UserDbConn, namedtuple_factory, bet_fixture_key
+from tle.util.db.user_db_upgrades import (
+    upgrade_1_33_0, upgrade_1_34_0, upgrade_1_35_0,
+)
 from tle.util import odds_api
 from tle.util import football_data
 from tle.cogs.betting import (
@@ -547,6 +549,39 @@ class TestWallet:
         db.bet_ensure_wallet('1', USER_A, 1000)
         assert db.bet_get_balance('2', USER_A) is None
 
+    def test_transfer_moves_balance_and_logs_both_wallets(self, db):
+        admin = '999'
+        ok, reason, sender_bal, receiver_bal = db.bet_transfer(
+            GUILD, USER_A, USER_B, 300, 1000, transferred_at=7.0,
+            actor_id=admin)
+        assert (ok, reason, sender_bal, receiver_bal) == (True, 'ok', 700, 1300)
+        assert db.bet_get_balance(GUILD, USER_A) == 700
+        assert db.bet_get_balance(GUILD, USER_B) == 1300
+
+        sender_hist = db.bet_wallet_history(GUILD, USER_A)
+        receiver_hist = db.bet_wallet_history(GUILD, USER_B)
+        assert sender_hist[0].action == 'transfer_out'
+        assert sender_hist[0].actor_id == admin
+        assert sender_hist[0].amount == -300
+        assert sender_hist[0].balance_after == 700
+        assert sender_hist[0].note == USER_B
+        assert receiver_hist[0].action == 'transfer_in'
+        assert receiver_hist[0].actor_id == admin
+        assert receiver_hist[0].amount == 300
+        assert receiver_hist[0].balance_after == 1300
+        assert receiver_hist[0].note == USER_A
+
+    def test_transfer_rejects_insufficient_without_recipient_wallet(self, db):
+        db.bet_set_balance(GUILD, USER_A, 50, 1000)
+        ok, reason, sender_bal, receiver_bal = db.bet_transfer(
+            GUILD, USER_A, USER_B, 60, 1000, transferred_at=7.0)
+        assert (ok, reason, sender_bal, receiver_bal) == (
+            False, 'insufficient', 50, None)
+        assert db.bet_get_balance(GUILD, USER_A) == 50
+        assert db.bet_get_balance(GUILD, USER_B) is None
+        assert [r.action for r in db.bet_wallet_history(GUILD, USER_A)] == [
+            'setbalance', 'init']
+
 
 class TestDaily:
     def test_grants_once(self, db):
@@ -605,6 +640,31 @@ class TestMarket:
             GUILD, '999', 'evt1', 'soccer_epl', 'Spain', 'Cape Verde', 20_000.0,
             2.0, 3.0, 4.0, USER_A, 3.0)
         assert reopened is not None
+
+    def test_duplicate_open_fixture_with_new_event_id_returns_none(self, db):
+        first = _make_market(db)
+        second = db.bet_market_create(
+            GUILD, '999', 'evt2', 'soccer_epl', 'Cape Verde', 'Spain', 10_900.0,
+            2.0, 3.0, 4.0, USER_A, 1.0)
+        assert first is not None
+        assert second is None
+        assert len(db.bet_markets_open(GUILD)) == 1
+
+    def test_duplicate_fixture_can_reopen_after_terminal_status(self, db):
+        first = _make_market(db)
+        db.bet_void(GUILD, first, 2.0)
+        reopened = db.bet_market_create(
+            GUILD, '999', 'evt2', 'soccer_epl', 'Cape Verde', 'Spain', 20_000.0,
+            2.0, 3.0, 4.0, USER_A, 3.0)
+        assert reopened is not None
+
+    def test_same_teams_different_utc_day_allowed(self, db):
+        first = _make_market(db, commence=10_000.0)
+        second = db.bet_market_create(
+            GUILD, '999', 'evt2', 'soccer_epl', 'Cape Verde', 'Spain',
+            10_000.0 + 86400, 2.0, 3.0, 4.0, USER_A, 1.0)
+        assert first is not None
+        assert second is not None
 
     def test_pending_settlement_by_cutoff(self, db):
         mid = _make_market(db, commence=1000.0)
@@ -677,6 +737,23 @@ class TestSettle:
         hist = db.bet_wallet_history(GUILD, USER_A)
         assert hist[0].action == 'payout' and hist[0].amount == 200
         assert hist[0].market_id == mid
+
+    def test_settlement_embed_reports_net_win_loss(self, db):
+        from tle.cogs.betting import Betting
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 100, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_B, 'away', 50, 1.0, 1000)
+        rows = db.bet_settle(GUILD, mid, 'home', 2, 1, 5.0)
+
+        embed = Betting(None)._settlement_embed(
+            db.bet_market_get(mid), 'home', 2, 1, rows, 'auto')
+
+        desc = embed.description
+        assert f'<@{USER_A}> **+100**' in desc
+        assert f'<@{USER_B}> **-50**' in desc
+        assert 'Total staked: **150**' in desc
+        assert 'paid out: **200**' in desc
+        assert 'player net: **+50**' in desc
 
     def test_draw_outcome(self, db):
         mid = _make_market(db)
@@ -935,6 +1012,79 @@ class TestMigration:
         assert 'idx_bet_wallet_txn_user' in indexes
         conn.close()
 
+    def test_upgrade_135_backfills_fixture_key_and_index(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        conn.execute(
+            'INSERT INTO bet_market (guild_id, channel_id, event_id, sport_key, '
+            'home_team, away_team, commence_time, odds_home, odds_draw, '
+            'odds_away, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ('1', '2', 'e', 'soccer_epl', 'Spain', 'Cape Verde', 10_000.0,
+             2.0, 3.0, 4.0, '9', 0.0))
+        upgrade_1_35_0(conn)
+        cols = [r[1] for r in conn.execute('PRAGMA table_info(bet_market)')]
+        assert 'fixture_key' in cols
+        row = conn.execute(
+            'SELECT fixture_key FROM bet_market WHERE event_id = ?', ('e',)
+        ).fetchone()
+        assert row.fixture_key == bet_fixture_key(
+            'soccer_epl', 'Spain', 'Cape Verde', 10_000.0)
+        indexes = [r[1] for r in conn.execute('PRAGMA index_list(bet_market)')]
+        assert 'idx_bet_market_open_fixture' in indexes
+        conn.close()
+
+    def test_upgrade_135_refuses_existing_duplicate_open_fixture(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        for event_id, home, away in [
+                ('e1', 'Spain', 'Cape Verde'),
+                ('e2', 'Cape Verde', 'Spain')]:
+            conn.execute(
+                'INSERT INTO bet_market (guild_id, channel_id, event_id, sport_key, '
+                'home_team, away_team, commence_time, odds_home, odds_draw, '
+                'odds_away, created_by, created_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ('1', '2', event_id, 'soccer_epl', home, away, 10_000.0,
+                 2.0, 3.0, 4.0, '9', 0.0))
+        with pytest.raises(RuntimeError):
+            upgrade_1_35_0(conn)
+        conn.close()
+
+    def test_userdb_existing_134_runs_fixture_migration(self, tmp_path):
+        from tle.util.db.user_db_upgrades import registry
+        path = tmp_path / 'user.db'
+        conn = sqlite3.connect(path)
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        upgrade_1_34_0(conn)
+        conn.execute('CREATE TABLE db_version (version TEXT NOT NULL)')
+        conn.execute('INSERT INTO db_version (version) VALUES (?)', ('1.34.0',))
+        conn.execute(
+            'INSERT INTO bet_market (guild_id, channel_id, event_id, sport_key, '
+            'home_team, away_team, commence_time, odds_home, odds_draw, '
+            'odds_away, created_by, created_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ('1', '2', 'e', 'soccer_epl', 'Spain', 'Cape Verde', 10_000.0,
+             2.0, 3.0, 4.0, '9', 0.0))
+        conn.commit()
+        conn.close()
+
+        db = UserDbConn(str(path))
+        try:
+            assert registry.get_current_version(db.conn) == '1.35.0'
+            row = db.conn.execute(
+                'SELECT fixture_key FROM bet_market WHERE event_id = ?', ('e',)
+            ).fetchone()
+            assert row.fixture_key == bet_fixture_key(
+                'soccer_epl', 'Spain', 'Cape Verde', 10_000.0)
+            indexes = [r.name for r in db.conn.execute('PRAGMA index_list(bet_market)')]
+            assert 'idx_bet_market_open_fixture' in indexes
+        finally:
+            db.conn.close()
+
 
 # ── Cog bet-execution path ──────────────────────────────────────────────────
 
@@ -1076,6 +1226,127 @@ class TestCheckCommand:
         assert 'fd-secret' not in text
 
 
+class TestTransferCommand:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def _member(self, uid, name, *, bot=False):
+        return type('Member', (), {
+            'id': uid,
+            'display_name': name,
+            'bot': bot,
+        })()
+
+    def test_transfer_command_moves_money_between_users(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+        admin = self._member('999', 'Admin')
+        source = self._member(USER_A, 'Alice')
+        target = self._member(USER_B, 'Bob')
+
+        class _Ctx:
+            def __init__(self):
+                self.guild = type('G', (), {'id': int(GUILD)})()
+                self.author = admin
+                self.sent = []
+
+            async def send(self, embed=None, **kw):
+                self.sent.append(embed)
+
+        db.bet_set_balance(GUILD, USER_A, 400, 1000)
+        ctx = _Ctx()
+        cog = Betting(bot=None)
+
+        self._run(Betting.transfer.__wrapped__(
+            cog, ctx, source, target, '25%'))
+
+        assert db.bet_get_balance(GUILD, USER_A) == 300
+        assert db.bet_get_balance(GUILD, USER_B) == 1100
+        hist = db.bet_wallet_history(GUILD, USER_A)
+        assert hist[0].action == 'transfer_out'
+        assert hist[0].actor_id == str(admin.id)
+        assert len(ctx.sent) == 1
+
+    def test_transfer_command_rejects_same_source_and_destination(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting, BettingCogError
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+        admin = self._member('999', 'Admin')
+        source = self._member(USER_A, 'Alice')
+        ctx = type('Ctx', (), {
+            'guild': type('G', (), {'id': int(GUILD)})(),
+            'author': admin,
+        })()
+        cog = Betting(bot=None)
+
+        with pytest.raises(BettingCogError):
+            self._run(Betting.transfer.__wrapped__(
+                cog, ctx, source, source, '10'))
+
+
+class TestHistoryCommand:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def test_any_user_can_inspect_another_wallet_history(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.bet_transfer(GUILD, USER_A, USER_B, 100, 1000, transferred_at=7.0)
+
+        author = type('Member', (), {
+            'id': USER_A,
+            'display_name': 'Alice',
+            'roles': [],
+        })()
+        target = type('Member', (), {
+            'id': USER_B,
+            'display_name': 'Bob',
+            'roles': [],
+        })()
+
+        class _Ctx:
+            def __init__(self):
+                self.guild = type('G', (), {'id': int(GUILD)})()
+                self.author = author
+                self.sent = []
+
+            async def send(self, embed=None, **kw):
+                self.sent.append(embed)
+
+        ctx = _Ctx()
+        cog = Betting(bot=None)
+
+        self._run(Betting.history.__wrapped__(cog, ctx, target))
+
+        assert len(ctx.sent) == 1
+        assert ctx.sent[0].title == 'Wallet history — Bob'
+
+
+class TestBettingStaffPermissions:
+    def test_mutating_betting_commands_do_not_allow_moderator_role(self):
+        from pathlib import Path
+        source = Path('tle/cogs/betting.py').read_text()
+        assert ('@commands.has_any_role(constants.TLE_ADMIN, '
+                'constants.TLE_MODERATOR)') not in source
+
+    def test_transfer_command_is_admin_only(self):
+        from pathlib import Path
+        source = Path('tle/cogs/betting.py').read_text()
+        block = source[source.index("@bet.command(name='transfer'"):
+                       source.index('    def _wallet_txn_line')]
+        assert '@commands.has_role(constants.TLE_ADMIN)' in block
+
+
 # ── World Cup auto-open ─────────────────────────────────────────────────────
 
 class TestIsDue:
@@ -1170,6 +1441,12 @@ def _wc_event(event_id='evtWC', home='Spain', away='Cape Verde', commence=None):
     }
 
 
+def _fixture_key(event):
+    return bet_fixture_key(
+        event['sport_key'], event['home_team'], event['away_team'],
+        event['commence_time'])
+
+
 class TestAutoOpen:
     def _run(self, coro):
         import asyncio
@@ -1224,7 +1501,30 @@ class TestAutoOpen:
 
         self._run(scenario())
 
-    def test_fire_close_marks_market_edits_message_and_posts_once(self, setup):
+    def test_channel_lifecycle_has_open_and_final_result_messages(self, setup,
+                                                                   monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 3600)
+        self._arm_events(cog, [ev], monkeypatch)
+
+        async def scenario():
+            await cog._refresh_schedule()
+            market = db.bet_market_get_active(GUILD, '222')
+            thread = channel.sent[0].thread
+            cog.bot._channels[int(market.thread_id)] = thread
+            db.bet_place(GUILD, market.market_id, USER_A, 'home', 100, 1.0, 1000)
+
+            await cog._do_settle(market, 'home', 2, 1, source='auto')
+
+            assert len(channel.sent) == 2
+            assert len(thread.sent) == 1
+            assert thread.archived is True
+            cog._close_timers[market.market_id].cancel()
+
+        self._run(scenario())
+
+    def test_fire_close_marks_market_and_edits_message_without_posting(self, setup):
         import time as _t
         cog, db, channel = setup
         msg = self._run(channel.send(embed=None))
@@ -1242,11 +1542,10 @@ class TestAutoOpen:
         assert market.bets_closed == 1
         assert msg.edited_embed is not None
         assert 'Betting ended' in msg.edited_embed.description
-        assert len(thread.sent) == 1
-        assert 'Betting ended' in thread.sent[0]
+        assert len(thread.sent) == 0
 
         self._run(cog._fire_close(mid))
-        assert len(thread.sent) == 1  # DB guard prevents duplicate close notices
+        assert len(thread.sent) == 0
 
     def test_does_not_open_game_outside_window(self, setup, monkeypatch):
         import time as _t
@@ -1277,7 +1576,8 @@ class TestAutoOpen:
         db.bet_market_create(GUILD, '222', 'evtWC', 'soccer_fifa_world_cup',
                              'Spain', 'Cape Verde', now - 600,
                              1.25, 5.5, 12.0, USER_A, 0.0)
-        self._run(cog._fire_open('evtWC'))
+        self._run(cog._fire_open(bet_fixture_key(
+            'soccer_fifa_world_cup', 'Spain', 'Cape Verde', now - 600)))
         market = db.bet_market_get_open_for_event(GUILD, 'evtWC')
         assert market.thread_id is None  # no thread attached post-kickoff
         assert len(channel.sent) == 0
@@ -1289,6 +1589,19 @@ class TestAutoOpen:
         self._arm_events(cog, [ev], monkeypatch)
         self._run(cog._refresh_schedule())
         self._run(cog._refresh_schedule())  # second pass
+        assert len(db.bet_markets_open(GUILD)) == 1
+        assert len(channel.sent) == 1
+
+    def test_safety_net_event_id_drift_does_not_double_open(self, setup, monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        old = _wc_event(event_id='old-id', commence=_t.time() + 3600)
+        new = _wc_event(event_id='new-id', home='Cape Verde', away='Spain',
+                        commence=old['commence_time'] + 15 * 60)
+        self._arm_events(cog, [old], monkeypatch)
+        self._run(cog._refresh_schedule())
+        self._arm_events(cog, [new], monkeypatch)
+        self._run(cog._refresh_schedule())
         assert len(db.bet_markets_open(GUILD)) == 1
         assert len(channel.sent) == 1
 
@@ -1321,9 +1634,9 @@ class TestAutoOpen:
         market = db.bet_market_get_active(GUILD, str(channel.id))
         assert market is not None and market.home_team == 'Spain'
 
-    def test_failed_send_does_not_orphan_market(self, setup, monkeypatch):
-        """If the announcement send fails, NO market row is persisted, so the
-        next tick can re-open cleanly (send-first ordering)."""
+    def test_failed_send_does_not_leave_open_market(self, setup, monkeypatch):
+        """If the announcement send fails, the reserved market is voided so the
+        next tick can re-open cleanly."""
         import time as _t
         import discord
         cog, db, channel = setup
@@ -1335,21 +1648,22 @@ class TestAutoOpen:
         monkeypatch.setattr(channel, 'send', _boom)
 
         self._run(cog._refresh_schedule())
-        assert db.bet_markets_open(GUILD) == []  # no orphan
+        assert db.bet_markets_open(GUILD) == []  # no open orphan
 
-    def test_duplicate_insert_deletes_extra_announcement(self, setup, monkeypatch):
+    def test_duplicate_fixture_posts_no_extra_announcement(self, setup, monkeypatch):
         import time as _t
         cog, db, channel = setup
-        ev = _wc_event(commence=_t.time() + 3600)
+        midday_utc = int(_t.time() // 86400) * 86400 + 12 * 3600
+        old = _wc_event(event_id='old-id', commence=midday_utc)
+        new = _wc_event(event_id='new-id', commence=old['commence_time'] + 15 * 60)
         db.bet_market_create(
-            GUILD, '222', ev['event_id'], ev['sport_key'], ev['home_team'],
-            ev['away_team'], ev['commence_time'], 1.25, 5.5, 12.0, USER_A, 0.0)
+            GUILD, '222', old['event_id'], old['sport_key'], old['home_team'],
+            old['away_team'], old['commence_time'], 1.25, 5.5, 12.0, USER_A, 0.0)
 
-        self._run(cog._open_market_auto(GUILD, '222', ev))
+        self._run(cog._open_market_auto(GUILD, '222', new))
 
         assert len(db.bet_markets_open(GUILD)) == 1
-        assert len(channel.sent) == 1
-        assert channel.sent[0].deleted is True
+        assert len(channel.sent) == 0
 
     def test_skips_when_no_channel_configured(self, db, monkeypatch):
         import time as _t
@@ -1408,6 +1722,32 @@ class TestAutoSettleFootballData:
         assert m.result_home == 3 and m.result_away == 1
         # payout = round(100 * 1.25) = 125 → 900 + 125
         assert db.bet_get_balance(GUILD, USER_A) == 1025
+
+    def test_settlement_posts_result_only_to_parent_channel(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        mid = db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Spain',
+            'Cape Verde', _t.time() - 100, 1.25, 5.5, 12.0, USER_A, 0.0)
+        db.bet_market_set_thread(mid, '333')
+        db.bet_place(GUILD, mid, USER_A, 'home', 100, 1.0, 1000)
+
+        channel = _FakeChannel(222)
+        thread = _FakeThread(333)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)],
+                       {222: channel, 333: thread})
+        cog = Betting(bot)
+
+        self._run(cog._do_settle(
+            db.bet_market_get(mid), 'home', 2, 1, source='auto'))
+
+        assert len(channel.sent) == 1
+        assert len(thread.sent) == 0
+        assert thread.archived is True
 
     def test_knockout_settles_by_advancing_winner(self, db, monkeypatch):
         import time as _t
@@ -1510,8 +1850,25 @@ class TestScheduler:
             await cog._refresh_schedule()
             # No market opened early; a precise timer is armed instead.
             assert db.bet_markets_open(GUILD) == []
-            assert 'evtWC' in cog._open_timers
-            cog._open_timers['evtWC'].cancel()
+            key = _fixture_key(ev)
+            assert key in cog._open_timers
+            cog._open_timers[key].cancel()
+        self._run(scenario())
+
+    def test_duplicate_provider_events_arm_one_fixture_timer(self, setup, monkeypatch):
+        import time as _t
+
+        async def scenario():
+            cog, db, channel = setup
+            base = _t.time() + 5 * 3600
+            ev1 = _wc_event(event_id='old-id', commence=base)
+            ev2 = _wc_event(event_id='new-id', home='Cape Verde', away='Spain',
+                            commence=base + 15 * 60)
+            self._arm(cog, [ev1, ev2], monkeypatch)
+            await cog._refresh_schedule()
+            assert len(cog._open_timers) == 1
+            task = next(iter(cog._open_timers.values()))
+            task.cancel()
         self._run(scenario())
 
     def test_in_window_game_opens_now(self, setup, monkeypatch):
@@ -1521,7 +1878,7 @@ class TestScheduler:
         self._arm(cog, [ev], monkeypatch)
         self._run(cog._refresh_schedule())
         assert db.bet_market_get_active(GUILD, '222') is not None
-        assert 'evtWC' not in cog._open_timers  # opened directly, no timer
+        assert _fixture_key(ev) not in cog._open_timers  # opened directly, no timer
 
     def test_armed_timer_fires_on_time(self, setup, monkeypatch):
         """Arm a timer that should fire almost immediately and confirm it opens
@@ -1535,7 +1892,7 @@ class TestScheduler:
             self._arm(cog, [ev], monkeypatch)
             await cog._refresh_schedule()
             assert db.bet_markets_open(GUILD) == []   # not yet (still future)
-            assert 'evtWC' in cog._open_timers
+            assert _fixture_key(ev) in cog._open_timers
             await __import__('asyncio').sleep(0.2)     # let the timer fire
             assert db.bet_market_get_active(GUILD, '222') is not None
         self._run(scenario())
@@ -1585,6 +1942,41 @@ class TestStartupGuards:
         cog = Betting(bot=None)
         # A valid-looking bet message must not raise despite user_db=None.
         self._run(cog.on_message(_FakeBetMessage('home 100')))
+
+
+class TestBettingSurfaceUX:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    @pytest.fixture
+    def cog(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.util import discord_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(discord_common, '_BOT_PREFIX', ';', raising=False)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'BET_MIN_STAKE', 1, raising=False)
+        return Betting(bot=None)
+
+    def test_parent_market_embed_points_to_existing_thread(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        db.bet_market_set_thread(mid, THREAD)
+        market = db.bet_market_get(mid)
+        embed = cog._market_embed(market, current_channel_id=CH)
+        assert f'<#{THREAD}>' in embed.description
+        assert 'thread below' not in embed.description
+
+    def test_parent_channel_plain_bet_remains_thread_only(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        msg = _FakeBetMessage('Spain 100', channel_id=int(CH))
+
+        self._run(cog.on_message(msg))
+
+        assert msg.reactions == []
+        assert db.bet_get_wager(mid, msg.author.id) is None
 
 
 class TestConfiguredGuilds:

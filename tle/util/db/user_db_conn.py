@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import time
+import unicodedata
 from enum import IntEnum
 from collections import defaultdict, namedtuple
 
@@ -43,6 +44,20 @@ def _bet_odds_for_pick(odds_map, pick):
     base = _bet_pick_base(pick)
     odds = odds_map.get(base)
     return _bet_not_odds(odds) if pick != base else odds
+
+
+def _bet_norm_team(name):
+    if not name:
+        return ''
+    decomposed = unicodedata.normalize('NFKD', str(name))
+    stripped = ''.join(c for c in decomposed if not unicodedata.combining(c))
+    return ''.join(c for c in stripped.lower() if c.isalnum())
+
+
+def bet_fixture_key(sport_key, home_team, away_team, commence_time):
+    teams = sorted((_bet_norm_team(home_team), _bet_norm_team(away_team)))
+    day = int(float(commence_time) // 86400)
+    return f'{sport_key}:{day}:{teams[0]}:{teams[1]}'
 
 
 class Gitgud(IntEnum):
@@ -569,6 +584,7 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 message_id     TEXT,
                 thread_id      TEXT,
                 event_id       TEXT NOT NULL,
+                fixture_key    TEXT NOT NULL,
                 sport_key      TEXT NOT NULL,
                 home_team      TEXT NOT NULL,
                 away_team      TEXT NOT NULL,
@@ -586,6 +602,11 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 settled_at     REAL
             )
         ''')
+        bet_market_cols = [
+            row.name for row in self.conn.execute('PRAGMA table_info(bet_market)')
+        ]
+        if 'fixture_key' not in bet_market_cols:
+            self.conn.execute('ALTER TABLE bet_market ADD COLUMN fixture_key TEXT')
         self.conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_bet_market_active
                 ON bet_market (guild_id, channel_id, status)
@@ -603,6 +624,16 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 ON bet_market (guild_id, event_id)
                 WHERE status = 'open'
         ''')
+        missing_fixture_key = self.conn.execute(
+            'SELECT 1 FROM bet_market '
+            'WHERE fixture_key IS NULL OR fixture_key = "" LIMIT 1'
+        ).fetchone()
+        if missing_fixture_key is None:
+            self.conn.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_market_open_fixture
+                    ON bet_market (guild_id, fixture_key)
+                    WHERE status = 'open'
+            ''')
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS bet_wager (
                 market_id   INTEGER NOT NULL,
@@ -2193,9 +2224,9 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
              time.time() if created_at is None else created_at)
         )
 
-    def bet_ensure_wallet(self, guild_id, user_id, start_balance):
-        """Create a wallet seeded at start_balance if absent; return the
-        current balance either way."""
+    def _bet_ensure_wallet_txn(self, guild_id, user_id, start_balance,
+                               created_at=None):
+        """Create a betting wallet inside the caller's transaction."""
         guild_id, user_id = str(guild_id), str(user_id)
         cur = self.conn.execute(
             'INSERT OR IGNORE INTO bet_wallet (guild_id, user_id, balance) '
@@ -2204,13 +2235,20 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
         )
         if cur.rowcount:
             self._bet_log_wallet_txn(
-                guild_id, user_id, None, 'init', start_balance, start_balance)
-        self.conn.commit()
+                guild_id, user_id, None, 'init', start_balance, start_balance,
+                created_at=created_at)
         row = self.conn.execute(
             'SELECT balance FROM bet_wallet WHERE guild_id = ? AND user_id = ?',
             (guild_id, user_id)
         ).fetchone()
         return row.balance
+
+    def bet_ensure_wallet(self, guild_id, user_id, start_balance):
+        """Create a wallet seeded at start_balance if absent; return the
+        current balance either way."""
+        with self.conn:
+            return self._bet_ensure_wallet_txn(
+                guild_id, user_id, start_balance)
 
     def bet_get_balance(self, guild_id, user_id):
         """Return a user's balance, or None if they have no wallet yet."""
@@ -2257,6 +2295,54 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             note=today)
         self.conn.commit()
         return (True, new_balance, 'ok')
+
+    def bet_transfer(self, guild_id, sender_id, receiver_id, amount,
+                     start_balance, transferred_at=None, actor_id=None):
+        """Move coins from one user wallet to another.
+
+        Returns (ok, reason, sender_balance, receiver_balance). On
+        insufficient funds, the receiver wallet is not created or modified.
+        """
+        guild_id = str(guild_id)
+        sender_id = str(sender_id)
+        receiver_id = str(receiver_id)
+        actor_id = sender_id if actor_id is None else str(actor_id)
+        amount = int(amount)
+        if sender_id == receiver_id:
+            bal = self.bet_get_balance(guild_id, sender_id)
+            return (False, 'self', bal, bal)
+        if amount <= 0:
+            bal = self.bet_get_balance(guild_id, sender_id)
+            return (False, 'invalid', bal, self.bet_get_balance(guild_id, receiver_id))
+
+        when = time.time() if transferred_at is None else transferred_at
+        with self.conn:
+            sender_balance = self._bet_ensure_wallet_txn(
+                guild_id, sender_id, start_balance, created_at=when)
+            if amount > sender_balance:
+                return (False, 'insufficient', sender_balance,
+                        self.bet_get_balance(guild_id, receiver_id))
+            receiver_balance = self._bet_ensure_wallet_txn(
+                guild_id, receiver_id, start_balance, created_at=when)
+            new_sender = sender_balance - amount
+            new_receiver = receiver_balance + amount
+            self.conn.execute(
+                'UPDATE bet_wallet SET balance = ? '
+                'WHERE guild_id = ? AND user_id = ?',
+                (new_sender, guild_id, sender_id)
+            )
+            self.conn.execute(
+                'UPDATE bet_wallet SET balance = ? '
+                'WHERE guild_id = ? AND user_id = ?',
+                (new_receiver, guild_id, receiver_id)
+            )
+            self._bet_log_wallet_txn(
+                guild_id, sender_id, actor_id, 'transfer_out', -amount,
+                new_sender, note=receiver_id, created_at=when)
+            self._bet_log_wallet_txn(
+                guild_id, receiver_id, actor_id, 'transfer_in', amount,
+                new_receiver, note=sender_id, created_at=when)
+            return (True, 'ok', new_sender, new_receiver)
 
     def bet_balance_leaderboard(self, guild_id):
         """Return [(user_id, balance)] for the guild, richest first."""
@@ -2305,20 +2391,26 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                           odds_home, odds_draw, odds_away, created_by, created_at):
         """Open a betting market and return its id, or None if already open."""
         guild_id, channel_id, event_id = str(guild_id), str(channel_id), str(event_id)
+        fixture_key = bet_fixture_key(
+            sport_key, home_team, away_team, commence_time)
         try:
             cur = self.conn.execute(
                 'INSERT INTO bet_market '
-                '(guild_id, channel_id, event_id, sport_key, home_team, away_team, '
-                'commence_time, odds_home, odds_draw, odds_away, created_by, '
-                'created_at, status) '
-                'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'open\' '
+                '(guild_id, channel_id, event_id, fixture_key, sport_key, '
+                'home_team, away_team, commence_time, odds_home, odds_draw, '
+                'odds_away, created_by, created_at, status) '
+                'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'open\' '
                 'WHERE NOT EXISTS ('
                 '    SELECT 1 FROM bet_market '
                 '    WHERE guild_id = ? AND event_id = ? AND status = \'open\''
+                ') AND NOT EXISTS ('
+                '    SELECT 1 FROM bet_market '
+                '    WHERE guild_id = ? AND fixture_key = ? AND status = \'open\''
                 ')',
-                (guild_id, channel_id, event_id, sport_key, home_team, away_team,
+                (guild_id, channel_id, event_id, fixture_key, sport_key,
+                 home_team, away_team,
                  commence_time, odds_home, odds_draw, odds_away, str(created_by),
-                 created_at, guild_id, event_id)
+                 created_at, guild_id, event_id, guild_id, fixture_key)
             )
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
@@ -2386,6 +2478,14 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             "SELECT * FROM bet_market WHERE guild_id = ? AND event_id = ? "
             "AND status = 'open' ORDER BY market_id DESC LIMIT 1",
             (str(guild_id), str(event_id))
+        ).fetchone()
+
+    def bet_market_get_open_for_fixture(self, guild_id, fixture_key):
+        """Return the guild's open market for a canonical fixture key, or None."""
+        return self.conn.execute(
+            "SELECT * FROM bet_market WHERE guild_id = ? AND fixture_key = ? "
+            "AND status = 'open' ORDER BY market_id DESC LIMIT 1",
+            (str(guild_id), fixture_key)
         ).fetchone()
 
     def bet_markets_pending_settlement(self, before_time):

@@ -5,6 +5,7 @@ Register upgrades in version order; they run automatically on startup.
 import logging
 
 from tle.util.db.upgrades import UpgradeRegistry
+from tle.util.db.user_db_conn import bet_fixture_key
 
 logger = logging.getLogger(__name__)
 
@@ -944,3 +945,53 @@ def upgrade_1_34_0(db):
     ''')
     db.commit()
     logger.info('1.34.0: betting wallet transaction audit table created')
+
+
+@registry.register('1.35.0', 'Betting fixture-level duplicate guard')
+def upgrade_1_35_0(db):
+    """Add canonical fixture keys and enforce one open market per fixture.
+
+    Provider event ids can change. The bot still stores the provider id, but
+    open-market uniqueness must be based on the fixture itself.
+    """
+    logger.info('1.35.0: Adding betting fixture duplicate guard')
+    try:
+        db.execute('ALTER TABLE bet_market ADD COLUMN fixture_key TEXT')
+        logger.info('1.35.0: Added bet_market.fixture_key')
+    except Exception as e:
+        logger.debug('1.35.0: fixture_key already exists or unavailable: %s', e)
+
+    rows = db.execute(
+        'SELECT market_id, sport_key, home_team, away_team, commence_time '
+        'FROM bet_market WHERE fixture_key IS NULL OR fixture_key = ""'
+    ).fetchall()
+    for row in rows:
+        db.execute(
+            'UPDATE bet_market SET fixture_key = ? WHERE market_id = ?',
+            (bet_fixture_key(
+                row.sport_key, row.home_team, row.away_team,
+                row.commence_time),
+             row.market_id)
+        )
+
+    duplicates = db.execute('''
+        SELECT guild_id, fixture_key, COUNT(*) AS cnt
+        FROM bet_market
+        WHERE status = 'open'
+        GROUP BY guild_id, fixture_key
+        HAVING cnt > 1
+    ''').fetchall()
+    if duplicates:
+        details = ', '.join(
+            f'{row.guild_id}:{row.fixture_key} x{row.cnt}' for row in duplicates)
+        raise RuntimeError(
+            'Cannot add betting fixture uniqueness; duplicate open markets exist: '
+            + details)
+
+    db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_market_open_fixture
+            ON bet_market (guild_id, fixture_key)
+            WHERE status = 'open'
+    ''')
+    db.commit()
+    logger.info('1.35.0: betting fixture duplicate guard created')
