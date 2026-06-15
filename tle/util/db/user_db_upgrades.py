@@ -884,6 +884,11 @@ def upgrade_1_33_0(db):
             ON bet_market (guild_id, thread_id, status)
     ''')
     db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_market_open_event
+            ON bet_market (guild_id, event_id)
+            WHERE status = 'open'
+    ''')
+    db.execute('''
         CREATE TABLE IF NOT EXISTS bet_wager (
             market_id   INTEGER NOT NULL,
             user_id     TEXT NOT NULL,

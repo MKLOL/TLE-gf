@@ -246,11 +246,15 @@ class TestParseH2H:
     def test_missing_teams_returns_none(self):
         assert odds_api.parse_h2h_event(_raw_event(home_team=None)) is None
 
+    def test_missing_event_id_returns_none(self):
+        assert odds_api.parse_h2h_event(_raw_event(id=None)) is None
+
 
 class _FakeResp:
-    def __init__(self, data):
+    def __init__(self, data, status=200, text=''):
         self._data = data
-        self.status = 200
+        self.status = status
+        self._text = text
 
     async def __aenter__(self):
         return self
@@ -262,7 +266,7 @@ class _FakeResp:
         return self._data
 
     async def text(self):
-        return ''
+        return self._text
 
 
 class _FakeSession:
@@ -309,6 +313,17 @@ class TestFetchAsync:
         assert url.endswith('/sports/soccer_fifa_world_cup/scores')
         assert params['daysFrom'] == '1'        # cheap completed-games window
         assert params['eventIds'] == 'evt1'
+
+    def test_fetch_h2h_raises_when_all_sports_fail(self):
+        class _BadSession:
+            def get(self, url, params=None):
+                return _FakeResp({}, status=401, text='bad key')
+
+        with pytest.raises(odds_api.OddsApiError) as exc:
+            self._run(odds_api.fetch_h2h(
+                'BAD', [odds_api.WORLD_CUP_SPORT_KEY], session=_BadSession()))
+        assert 'soccer_fifa_world_cup' in str(exc.value)
+        assert 'HTTP 401' in str(exc.value)
 
 
 class TestParseScore:
@@ -502,6 +517,20 @@ class TestMarket:
         _make_market(db)
         assert db.bet_market_exists_open_for_event(GUILD, 'evt1') is True
         assert db.bet_market_exists_open_for_event(GUILD, 'evtX') is False
+
+    def test_duplicate_open_event_returns_none(self, db):
+        first = _make_market(db)
+        second = db.bet_market_create(
+            GUILD, '999', 'evt1', 'soccer_epl', 'Spain', 'Cape Verde', 10_000.0,
+            2.0, 3.0, 4.0, USER_A, 1.0)
+        assert second is None
+        assert len(db.bet_markets_open(GUILD)) == 1
+
+        db.bet_settle(GUILD, first, 'home', 1, 0, 2.0)
+        reopened = db.bet_market_create(
+            GUILD, '999', 'evt1', 'soccer_epl', 'Spain', 'Cape Verde', 20_000.0,
+            2.0, 3.0, 4.0, USER_A, 3.0)
+        assert reopened is not None
 
     def test_pending_settlement_by_cutoff(self, db):
         mid = _make_market(db, commence=1000.0)
@@ -751,6 +780,8 @@ class TestMigration:
         assert conn.execute('SELECT COUNT(*) FROM bet_wager').fetchone()[0] == 1
         cols = [r[1] for r in conn.execute('PRAGMA table_info(bet_wager)')]
         assert 'odds' not in cols and 'payout' not in cols
+        indexes = [r[1] for r in conn.execute('PRAGMA index_list(bet_market)')]
+        assert 'idx_bet_market_open_event' in indexes
         conn.close()
 
 
@@ -816,6 +847,20 @@ class TestExecuteBet:
             cog._execute_bet(GUILD, market, self._user(USER_A), 'away', 'all'))
         assert status == 'ok' and data['stake'] == 1000 and data['balance'] == 0
 
+    def test_rebet_can_use_escrowed_stake(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        market = db.bet_market_get(mid)
+        status, data = self._run(
+            cog._execute_bet(GUILD, market, self._user(USER_A), 'home', 'all'))
+        assert status == 'ok' and data['balance'] == 0
+
+        status, data = self._run(
+            cog._execute_bet(GUILD, market, self._user(USER_A), 'away', 'all'))
+        assert status == 'ok'
+        assert data['stake'] == 1000 and data['balance'] == 0
+        wager = db.bet_get_wager(mid, USER_A)
+        assert wager.pick == 'away' and wager.stake == 1000
+
 
 # ── World Cup auto-open ─────────────────────────────────────────────────────
 
@@ -852,10 +897,14 @@ class _FakeMsg:
         _FakeMsg._n += 1
         self.id = _FakeMsg._n
         self.thread = None
+        self.deleted = False
 
     async def create_thread(self, name=None, auto_archive_duration=None):
         self.thread = _FakeThread(self.id + 100000)
         return self.thread
+
+    async def delete(self):
+        self.deleted = True
 
 
 class _FakeChannel:
@@ -1040,6 +1089,20 @@ class TestAutoOpen:
 
         self._run(cog._refresh_schedule())
         assert db.bet_markets_open(GUILD) == []  # no orphan
+
+    def test_duplicate_insert_deletes_extra_announcement(self, setup, monkeypatch):
+        import time as _t
+        cog, db, channel = setup
+        ev = _wc_event(commence=_t.time() + 3600)
+        db.bet_market_create(
+            GUILD, '222', ev['event_id'], ev['sport_key'], ev['home_team'],
+            ev['away_team'], ev['commence_time'], 1.25, 5.5, 12.0, USER_A, 0.0)
+
+        self._run(cog._open_market_auto(GUILD, '222', ev))
+
+        assert len(db.bet_markets_open(GUILD)) == 1
+        assert len(channel.sent) == 1
+        assert channel.sent[0].deleted is True
 
     def test_skips_when_no_channel_configured(self, db, monkeypatch):
         import time as _t

@@ -542,6 +542,9 @@ class Betting(commands.Cog):
         # failed send never leaves an orphan market with no Discord presence.
         msg = await ctx.send(embed=self._open_announce_embed(event))
         market_id = self._create_market(ctx.guild.id, ctx.channel.id, event)
+        if market_id is None:
+            await self._delete_message(msg)
+            raise BettingCogError('There is already an open market on that match.')
         cf_common.user_db.bet_market_set_message(market_id, msg.id)
         market = cf_common.user_db.bet_market_get(market_id)
         thread = await self._create_thread(market_id, msg, market)
@@ -579,6 +582,12 @@ class Betting(commands.Cog):
             pass
         return thread
 
+    async def _delete_message(self, msg):
+        try:
+            await msg.delete()
+        except (discord.HTTPException, AttributeError):
+            pass
+
     # ── Placing bets ───────────────────────────────────────────────────
 
     async def _execute_bet(self, guild_id, market, user, pick, amount_str):
@@ -592,17 +601,19 @@ class Betting(commands.Cog):
             return ('closed', None)
         balance = cf_common.user_db.bet_ensure_wallet(
             guild_id, user.id, constants.BET_START_BALANCE)
-        stake = parse_amount(amount_str, balance, constants.BET_MIN_STAKE)
+        existing = cf_common.user_db.bet_get_wager(market.market_id, user.id)
+        available = balance + (existing.stake if existing else 0)
+        stake = parse_amount(amount_str, available, constants.BET_MIN_STAKE)
         if stake is None:
             return ('invalid', None)
-        if stake > balance:
-            return ('insufficient', {'balance': balance})
+        if stake > available:
+            return ('insufficient', {'balance': available})
         odds = self._pick_odds(market, pick)
         ok, reason, new_balance = cf_common.user_db.bet_place(
             guild_id, market.market_id, user.id, pick, stake,
             time.time(), constants.BET_START_BALANCE)
         if not ok:
-            return ('insufficient', {'balance': balance})
+            return ('insufficient', {'balance': available})
         return ('ok', {
             'stake': stake, 'odds': odds, 'pick': pick,
             'label': self._pick_label(market, pick),
@@ -1231,6 +1242,11 @@ class Betting(commands.Cog):
                            event.get('event_id'), guild_id, exc_info=True)
             return
         market_id = self._create_market(guild_id, channel_id, event)
+        if market_id is None:
+            await self._delete_message(msg)
+            logger.info('Auto-open skipped duplicate event %s in guild %s',
+                        event.get('event_id'), guild_id)
+            return
         cf_common.user_db.bet_market_set_message(market_id, msg.id)
         market = cf_common.user_db.bet_market_get(market_id)
         await self._create_thread(market_id, msg, market)

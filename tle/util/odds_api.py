@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 logger = logging.getLogger(__name__)
+_AIOHTTP_CLIENT_ERROR = getattr(aiohttp, 'ClientError', OSError)
 
 BASE_URL = 'https://api.the-odds-api.com/v4'
 
@@ -50,10 +51,11 @@ def parse_h2h_event(raw):
     Returns: {event_id, sport_key, home_team, away_team, commence_time(unix),
               odds: {home, draw, away}}
     """
+    event_id = raw.get('id')
     home = raw.get('home_team')
     away = raw.get('away_team')
     commence = raw.get('commence_time')
-    if not home or not away or not commence:
+    if not event_id or not home or not away or not commence:
         return None
     prices = {'home': [], 'draw': [], 'away': []}
     for bookmaker in raw.get('bookmakers', []):
@@ -77,7 +79,7 @@ def parse_h2h_event(raw):
             return None  # need home/draw/away to form a 1X2 market
         odds[key] = round(sum(values) / len(values), 2)
     return {
-        'event_id': raw.get('id'),
+        'event_id': event_id,
         'sport_key': raw.get('sport_key'),
         'home_team': home,
         'away_team': away,
@@ -117,7 +119,7 @@ async def _get_json(session, url, params):
                 body = await resp.text()
                 raise OddsApiError(f'HTTP {resp.status}: {body[:200]}')
             return await resp.json()
-    except aiohttp.ClientError as e:
+    except _AIOHTTP_CLIENT_ERROR as e:
         raise OddsApiError(f'request failed: {e}') from e
 
 
@@ -133,6 +135,8 @@ async def fetch_h2h(api_key, sport_keys, *, regions=DEFAULT_REGIONS,
     if own:
         session = aiohttp.ClientSession()
     events = []
+    failures = []
+    successful = 0
     try:
         for key in sport_keys:
             url = f'{base_url}/sports/{key}/odds'
@@ -142,11 +146,16 @@ async def fetch_h2h(api_key, sport_keys, *, regions=DEFAULT_REGIONS,
                 raw = await _get_json(session, url, params)
             except OddsApiError as e:
                 logger.warning('odds fetch failed for %s: %s', key, e)
+                failures.append((key, e))
                 continue
+            successful += 1
             for ev in raw or []:
                 parsed = parse_h2h_event(ev)
                 if parsed:
                     events.append(parsed)
+        if successful == 0 and failures:
+            detail = '; '.join(f'{key}: {err}' for key, err in failures)
+            raise OddsApiError(detail)
     finally:
         if own:
             await session.close()

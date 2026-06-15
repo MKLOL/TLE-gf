@@ -573,6 +573,11 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 ON bet_market (guild_id, thread_id, status)
         ''')
         self.conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_market_open_event
+                ON bet_market (guild_id, event_id)
+                WHERE status = 'open'
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS bet_wager (
                 market_id   INTEGER NOT NULL,
                 user_id     TEXT NOT NULL,
@@ -2217,18 +2222,30 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def bet_market_create(self, guild_id, channel_id, event_id, sport_key,
                           home_team, away_team, commence_time,
                           odds_home, odds_draw, odds_away, created_by, created_at):
-        """Open a betting market and return its id."""
-        cur = self.conn.execute(
-            'INSERT INTO bet_market '
-            '(guild_id, channel_id, event_id, sport_key, home_team, away_team, '
-            'commence_time, odds_home, odds_draw, odds_away, created_by, '
-            "created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')",
-            (str(guild_id), str(channel_id), str(event_id), sport_key,
-             home_team, away_team, commence_time, odds_home, odds_draw,
-             odds_away, str(created_by), created_at)
-        )
+        """Open a betting market and return its id, or None if already open."""
+        guild_id, channel_id, event_id = str(guild_id), str(channel_id), str(event_id)
+        try:
+            cur = self.conn.execute(
+                'INSERT INTO bet_market '
+                '(guild_id, channel_id, event_id, sport_key, home_team, away_team, '
+                'commence_time, odds_home, odds_draw, odds_away, created_by, '
+                'created_at, status) '
+                'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'open\' '
+                'WHERE NOT EXISTS ('
+                '    SELECT 1 FROM bet_market '
+                '    WHERE guild_id = ? AND event_id = ? AND status = \'open\''
+                ')',
+                (guild_id, channel_id, event_id, sport_key, home_team, away_team,
+                 commence_time, odds_home, odds_draw, odds_away, str(created_by),
+                 created_at, guild_id, event_id)
+            )
+        except sqlite3.IntegrityError as e:
+            self.conn.rollback()
+            if 'UNIQUE constraint failed' in str(e):
+                return None
+            raise
         self.conn.commit()
-        return cur.lastrowid
+        return cur.lastrowid if cur.rowcount else None
 
     def bet_market_set_message(self, market_id, message_id):
         """Record the market announcement message id."""
