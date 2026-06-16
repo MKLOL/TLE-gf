@@ -1,4 +1,4 @@
-"""Betting cog tests for the wallet-facing commands: check, transfer, beg, me,\nnotify-role, and history."""
+"""Betting cog tests for the wallet-facing commands: check, transfer, me,\nnotify-role, and history."""
 import pytest  # noqa: F401
 
 from tle.util import odds_api
@@ -120,112 +120,6 @@ class TestTransferCommand:
         with pytest.raises(BettingCogError):
             self._run(Betting.transfer.__wrapped__(
                 cog, ctx, source, source, '10'))
-
-
-class TestBegCommand:
-    def _run(self, coro):
-        import asyncio
-        return asyncio.run(coro)
-
-    def _member(self, uid, name, *, bot=False):
-        return type('Member', (), {
-            'id': uid,
-            'display_name': name,
-            'bot': bot,
-            'mention': f'<@{uid}>',
-        })()
-
-    def _ctx(self, author):
-        class _Ctx:
-            def __init__(self):
-                self.guild = type('G', (), {'id': int(GUILD)})()
-                self.channel = type('C', (), {'id': int(CH)})()
-                self.author = author
-                self.sent = []
-
-            async def send(self, *args, **kwargs):
-                self.sent.append((args, kwargs))
-
-        return _Ctx()
-
-    def _message(self, author, content):
-        return type('Message', (), {
-            'guild': type('G', (), {'id': int(GUILD)})(),
-            'channel': type('C', (), {'id': int(CH)})(),
-            'author': author,
-            'content': content,
-        })()
-
-    class _Bot:
-        def __init__(self, messages):
-            self.messages = list(messages)
-
-        async def wait_for(self, event, timeout=None, check=None):
-            import asyncio
-            assert event == 'message'
-            while self.messages:
-                message = self.messages.pop(0)
-                if check is None or check(message):
-                    return message
-            raise asyncio.TimeoutError
-
-    def test_beg_approved_by_tagged_user_moves_money(self, db, monkeypatch):
-        from tle.util import codeforces_common as cf_common
-        from tle import constants
-        from tle.cogs.betting import Betting
-        monkeypatch.setattr(cf_common, 'user_db', db)
-        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
-
-        beggar = self._member(USER_A, 'Alice')
-        donor = self._member(USER_B, 'Bob')
-        db.bet_set_balance(GUILD, USER_B, 400, 1000)
-        bot = self._Bot([self._message(donor, '25%')])
-        cog = Betting(bot=bot)
-        ctx = self._ctx(beggar)
-
-        self._run(cog.beg(ctx, donor, suggested=None))
-
-        assert db.bet_get_balance(GUILD, USER_B) == 300
-        assert db.bet_get_balance(GUILD, USER_A) == 1100
-        hist = db.bet_wallet_history(GUILD, USER_B)
-        assert hist[0].action == 'transfer_out'
-        assert hist[0].actor_id == str(USER_B)
-        assert len(ctx.sent) == 2
-
-    def test_beg_declined_by_tagged_user_does_not_move_money(self, db, monkeypatch):
-        from tle.util import codeforces_common as cf_common
-        from tle import constants
-        from tle.cogs.betting import Betting
-        monkeypatch.setattr(cf_common, 'user_db', db)
-        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
-
-        beggar = self._member(USER_A, 'Alice')
-        donor = self._member(USER_B, 'Bob')
-        db.bet_set_balance(GUILD, USER_B, 400, 1000)
-        bot = self._Bot([self._message(donor, 'no')])
-        cog = Betting(bot=bot)
-        ctx = self._ctx(beggar)
-
-        self._run(cog.beg(ctx, donor, suggested='100'))
-
-        assert db.bet_get_balance(GUILD, USER_B) == 400
-        assert db.bet_get_balance(GUILD, USER_A) is None
-        assert len(ctx.sent) == 2
-
-    def test_beg_rejects_invalid_suggested_amount(self, db, monkeypatch):
-        from tle.util import codeforces_common as cf_common
-        from tle import constants
-        from tle.cogs.betting import Betting, BettingCogError
-        monkeypatch.setattr(cf_common, 'user_db', db)
-        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
-
-        beggar = self._member(USER_A, 'Alice')
-        donor = self._member(USER_B, 'Bob')
-        cog = Betting(bot=self._Bot([]))
-        ctx = self._ctx(beggar)
-
-        with pytest.raises(BettingCogError):
-            self._run(cog.beg(ctx, donor, suggested='0%'))
 
 
 class TestMeCommand:

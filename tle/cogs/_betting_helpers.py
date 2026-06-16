@@ -355,16 +355,6 @@ def _role_mentions():
         return None
 
 
-def _user_mentions():
-    allowed = getattr(discord, 'AllowedMentions', None)
-    if allowed is None:
-        return None
-    try:
-        return allowed(everyone=False, users=True, roles=False, replied_user=False)
-    except TypeError:
-        return None
-
-
 def _api_key():
     return getattr(constants, 'ODDS_API_KEY', None)
 

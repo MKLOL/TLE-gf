@@ -1,7 +1,7 @@
 """Implementation bodies for the wallet-facing ``;bet`` subcommands.
 
 Plain mixin (not a ``commands.Cog``); mixed into ``Betting``. Holds the
-bet-placing, withdraw, beg and leaderboard flows. The command callbacks live in
+bet-placing, withdraw and leaderboard flows. The command callbacks live in
 ``betting.py`` and delegate here.
 """
 import asyncio
@@ -17,14 +17,13 @@ from tle.util import paginator
 from tle.cogs._betting_engine import BettingCogError
 from tle.cogs._betting_helpers import (
     extract_bet_tokens, parse_amount, payout_amount, rank_line,
-    resolve_bet_pick, _COIN, _bot_prefix, _no_mentions, _user_mentions,
+    resolve_bet_pick, _COIN, _bot_prefix, _no_mentions,
     _utc_today,
 )
 
 logger = logging.getLogger(__name__)
 
 _LB_PER_PAGE = 15
-_BEG_TIMEOUT = 60
 
 
 class BetWalletCmdImplMixin:
@@ -136,100 +135,6 @@ class BetWalletCmdImplMixin:
             f'Removed **{count}** bet(s) on **{market.home_team} vs '
             f'{market.away_team}** and refunded **{refunded}** {_COIN}.\n'
             f'Balance: **{balance}** {_COIN}.'))
-
-    # ── Beg ────────────────────────────────────────────────────────────
-
-    async def _cmd_beg(self, ctx, donor, suggested):
-        if donor.id == ctx.author.id:
-            raise BettingCogError('You cannot beg yourself.')
-        if getattr(donor, 'bot', False):
-            raise BettingCogError('You cannot beg bots for coins.')
-        if self.bot is None:
-            raise BettingCogError('Begging is not available right now.')
-
-        donor_balance = cf_common.user_db.bet_ensure_wallet(
-            ctx.guild.id, donor.id, constants.BET_START_BALANCE)
-        suggestion = ''
-        if suggested:
-            suggested_amount = parse_amount(suggested, donor_balance, 1)
-            if suggested_amount is None:
-                raise BettingCogError(
-                    'Invalid suggested amount. Use a positive whole number, '
-                    'a percentage like `50%`, or `all`.')
-            suggestion = (
-                f'\nSuggested amount: **{suggested_amount}** {_COIN}. '
-                'You can still choose a different amount.')
-
-        requester = discord.utils.escape_markdown(ctx.author.display_name)
-        donor_name = discord.utils.escape_markdown(donor.display_name)
-        await ctx.send(
-            content=donor.mention,
-            embed=discord_common.embed_neutral(
-                f'`{requester}` is begging `{donor_name}` for betting coins.'
-                f'{suggestion}\n'
-                f'{donor.mention}, reply in this channel with an amount to give '
-                f'(`100`, `50%`, or `all`), or `no` to decline. '
-                f'This expires in {_BEG_TIMEOUT}s.'),
-            allowed_mentions=_user_mentions())
-
-        end_time = asyncio.get_running_loop().time() + _BEG_TIMEOUT
-
-        def check(message):
-            return (
-                getattr(message, 'guild', None) is not None
-                and str(message.guild.id) == str(ctx.guild.id)
-                and str(message.channel.id) == str(ctx.channel.id)
-                and str(message.author.id) == str(donor.id)
-                and not getattr(message.author, 'bot', False)
-            )
-
-        while True:
-            timeout = end_time - asyncio.get_running_loop().time()
-            if timeout <= 0:
-                await ctx.send(embed=discord_common.embed_neutral(
-                    f'Beg request expired. `{donor_name}` did not respond.'))
-                return
-            try:
-                message = await self.bot.wait_for(
-                    'message', timeout=timeout, check=check)
-            except asyncio.TimeoutError:
-                await ctx.send(embed=discord_common.embed_neutral(
-                    f'Beg request expired. `{donor_name}` did not respond.'))
-                return
-
-            text = (message.content or '').strip()
-            if text.startswith(_bot_prefix()):
-                continue
-            lowered = text.lower()
-            if lowered in {'no', 'n', 'decline', 'deny', 'cancel', '0'}:
-                await ctx.send(embed=discord_common.embed_neutral(
-                    f'`{donor_name}` declined the beg request.'))
-                return
-
-            donor_balance = cf_common.user_db.bet_ensure_wallet(
-                ctx.guild.id, donor.id, constants.BET_START_BALANCE)
-            amount = parse_amount(text, donor_balance, 1)
-            if amount is None:
-                await ctx.send(embed=discord_common.embed_alert(
-                    f'Invalid amount. `{donor_name}`, reply with a positive whole '
-                    'number, a percentage like `50%`, `all`, or `no`.'))
-                continue
-            ok, reason, donor_balance, requester_balance = cf_common.user_db.bet_transfer(
-                ctx.guild.id, donor.id, ctx.author.id, amount,
-                constants.BET_START_BALANCE, actor_id=donor.id)
-            if not ok:
-                if reason == 'insufficient':
-                    await ctx.send(embed=discord_common.embed_alert(
-                        f'Insufficient balance. `{donor_name}` has '
-                        f'**{donor_balance}** {_COIN}.'))
-                    continue
-                raise BettingCogError('Beg transfer failed.')
-
-            await ctx.send(embed=discord_common.embed_success(
-                f'`{donor_name}` gave `{requester}` **{amount}** {_COIN}.\n'
-                f'`{donor_name}`: **{donor_balance}** {_COIN}. '
-                f'`{requester}`: **{requester_balance}** {_COIN}.'))
-            return
 
     # ── Leaderboard ────────────────────────────────────────────────────
 

@@ -19,7 +19,6 @@ Commands (group `;bet`, alias `;prediction`):
   ;bet balance [@user]      show a wallet balance
   ;bet daily                claim the daily allowance
   ;bet transfer @from @to <amt> move coins between users                 (admin)
-  ;beg @user [amount]       ask someone to give you betting coins
   ;bet notify               toggle the configured notification role
   ;bet notifyrole @role     set role pinged when markets open             (admin)
   ;bet leaderboard [profit] richest wallets / net profit
@@ -35,8 +34,7 @@ market/bet/settle engine in ``_betting_engine``, the open/close scheduler in
 ``_betting_scheduler``, and the heavier subcommand bodies in
 ``_betting_commands`` / ``_betting_wallet_cmds``. This file keeps the cog
 itself: the ``bet`` group and all ``@bet.command`` callbacks in one class body
-(as discord.py requires), the standalone ``;beg`` command, the message listener
-and the background task hooks.
+(as discord.py requires), the message listener and the background task hooks.
 """
 import asyncio
 import logging
@@ -62,7 +60,7 @@ from tle.cogs._betting_helpers import (  # noqa: F401
     parse_settle_arg, payout_amount, pick_is_negative, pick_wins, positive_pick,
     rank_line, resolve_bet_pick, resolve_pick, seconds_until_open,
     _COIN, _api_key, _bot_prefix, _football_data_key, _no_mentions,
-    _role_mentions, _short_error, _user_mentions, _utc_today,
+    _role_mentions, _short_error, _utc_today,
 )
 
 logger = logging.getLogger(__name__)
@@ -301,11 +299,6 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @bet.command(name='daily', aliases=['claim'], brief='Claim the daily allowance')
     async def daily(self, ctx):
         await self._cmd_daily(ctx)
-
-    @commands.command(name='beg', brief='Ask someone for betting coins',
-                      usage='@user [amount]')
-    async def beg(self, ctx, donor: discord.Member, *, suggested: str = None):
-        await self._cmd_beg(ctx, donor, suggested)
 
     @bet.command(name='transfer', aliases=['send', 'pay'],
                  brief='Move coins from one user to another (admin)',
