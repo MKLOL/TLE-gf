@@ -130,3 +130,6 @@ extra/.queens-venv/
 queens-debug.png
 queens-debug.txt
 queens-solve-debug.png
+
+# Claude Code agent worktrees
+.claude/
