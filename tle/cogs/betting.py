@@ -19,10 +19,12 @@ Commands (group `;bet`, alias `;prediction`):
   ;bet balance [@user]      show a wallet balance
   ;bet daily                claim the daily allowance
   ;bet transfer @from @to <amt> move coins between users                 (admin)
+  ;beg @user [amount]       ask someone to give you betting coins
   ;bet notify               toggle the configured notification role
   ;bet notifyrole @role     set role pinged when markets open             (admin)
   ;bet leaderboard [profit] richest wallets / net profit
   ;bet mybet                show your bet on the active market
+  ;bet withdraw             remove all your bets on the active match
   ;bet pending              list markets stuck open past kickoff
   ;bet settle <home|draw|away|2-1>  settle the active market manually       (admin)
   ;bet cancel               cancel the active market, refund stakes         (admin)
@@ -70,6 +72,7 @@ _SCHEDULE_TTL = 6 * 3600
 _DUPLICATE_MATCH_WINDOW = 6 * 3600
 # Coalesce rapid thread bets into one first-message edit.
 _POOL_REFRESH_DELAY = 5
+_BEG_TIMEOUT = 60
 
 _PICK_ALIASES = {
     'home': 'home', 'h': 'home', '1': 'home',
@@ -270,6 +273,13 @@ def parse_amount(text, balance, min_stake=1):
     return amount if amount >= min_stake else None
 
 
+def is_remove_amount(text):
+    """A zero stake removes the user's wager for that pick."""
+    if text is None:
+        return False
+    return text.strip() == '0'
+
+
 def _normalize_probabilities_from_odds(odds):
     implied = {}
     for pick in _DIRECT_PICKS:
@@ -392,6 +402,10 @@ def _utc_today():
     return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 
+def _bot_prefix():
+    return getattr(discord_common, '_BOT_PREFIX', ';')
+
+
 def _no_mentions():
     allowed = getattr(discord, 'AllowedMentions', None)
     return allowed.none() if allowed is not None and hasattr(allowed, 'none') else None
@@ -403,6 +417,16 @@ def _role_mentions():
         return None
     try:
         return allowed(everyone=False, users=False, roles=True, replied_user=False)
+    except TypeError:
+        return None
+
+
+def _user_mentions():
+    allowed = getattr(discord, 'AllowedMentions', None)
+    if allowed is None:
+        return None
+    try:
+        return allowed(everyone=False, users=True, roles=False, replied_user=False)
     except TypeError:
         return None
 
@@ -616,13 +640,26 @@ class Betting(commands.Cog):
                 'That role is not mentionable. Make it mentionable or give me '
                 'Mention Everyone so market-open pings work.')
 
-    def _find_market(self, ctx):
+    def _open_markets_for_channel(self, guild_id, channel_id):
+        return [
+            market for market in cf_common.user_db.bet_markets_open(guild_id)
+            if str(market.channel_id) == str(channel_id)
+        ]
+
+    def _find_market(self, ctx, *, require_unambiguous=False):
         """The open market relevant to where the command was run: the betting
         thread if we're in one, else the channel's market."""
         m = cf_common.user_db.bet_market_get_active_by_thread(
             ctx.guild.id, ctx.channel.id)
         if m is not None:
             return m
+        if require_unambiguous:
+            candidates = self._open_markets_for_channel(ctx.guild.id, ctx.channel.id)
+            if len(candidates) > 1:
+                raise BettingCogError(
+                    'Multiple betting markets are open here. Run this command in '
+                    'the match thread so the target is unambiguous.')
+            return candidates[0] if candidates else None
         return cf_common.user_db.bet_market_get_active(ctx.guild.id, ctx.channel.id)
 
     def _find_duplicate_match(self, guild_id, event):
@@ -634,15 +671,6 @@ class Betting(commands.Cog):
             if _same_match_market_event(market, event):
                 return market
         return None
-
-    def _bettable_markets_for_channel(self, guild_id, channel_id):
-        now = time.time()
-        return [
-            market for market in cf_common.user_db.bet_markets_open(guild_id)
-            if (str(market.channel_id) == str(channel_id)
-                and not market.bets_closed
-                and market.commence_time > now)
-        ]
 
     def _market_place_ref(self, market):
         if market is None:
@@ -740,7 +768,8 @@ class Betting(commands.Cog):
             f'{examples}\n'
             '\n'
             f'{odds_line}\n'
-            f'Returns = stake × odds. Re-bet before kickoff to change it.\n'
+            f'Returns = stake × odds. Re-bet a pick to change it; use `0` '
+            f'to remove that pick.\n'
             f'Kickoff: <t:{kickoff}:F> (<t:{kickoff}:R>)\n'
             '⏱️ **Betting closes at kickoff.**')
         embed = discord.Embed(title='🎟️ Place your bets', description=desc,
@@ -1113,14 +1142,27 @@ class Betting(commands.Cog):
           'invalid'      — amount didn't parse / below minimum
           'insufficient' — not enough balance (data={'balance': N})
           'ok'           — placed (data has stake/odds/label/potential/balance)
+          'removed'      — removed one pick (data has stake/label/balance)
+          'unchanged'    — same pick already had the requested stake
         """
         if time.time() >= market.commence_time or market.bets_closed:
             return ('closed', None)
         if not self._pick_allowed(market, pick):
             return ('invalid_pick', None)
+        label = self._pick_label(market, pick)
+        if is_remove_amount(amount_str):
+            ok, reason, new_balance, refunded = cf_common.user_db.bet_remove_wager(
+                guild_id, market.market_id, user.id, pick, time.time())
+            if not ok:
+                if reason == 'closed':
+                    return ('closed', None)
+                return ('missing', {'label': label})
+            return ('removed', {
+                'stake': refunded, 'pick': pick, 'label': label,
+                'balance': new_balance})
         balance = cf_common.user_db.bet_ensure_wallet(
             guild_id, user.id, constants.BET_START_BALANCE)
-        existing = cf_common.user_db.bet_get_wager(market.market_id, user.id)
+        existing = cf_common.user_db.bet_get_wager(market.market_id, user.id, pick)
         available = balance + (existing.stake if existing else 0)
         stake = parse_amount(amount_str, available, constants.BET_MIN_STAKE)
         if stake is None:
@@ -1133,23 +1175,23 @@ class Betting(commands.Cog):
         ok, reason, new_balance = cf_common.user_db.bet_place(
             guild_id, market.market_id, user.id, pick, stake,
             time.time(), constants.BET_START_BALANCE)
+        if ok and reason == 'unchanged':
+            return ('unchanged', {
+                'stake': stake, 'odds': odds, 'pick': pick, 'label': label,
+                'potential': payout_amount(stake, odds), 'balance': new_balance})
         if not ok:
+            if reason == 'closed':
+                return ('closed', None)
+            if reason == 'invalid':
+                return ('invalid', None)
             return ('insufficient', {'balance': available})
         return ('ok', {
             'stake': stake, 'odds': odds, 'pick': pick,
-            'label': self._pick_label(market, pick),
+            'label': label,
             'potential': payout_amount(stake, odds), 'balance': new_balance})
 
     async def _place(self, ctx, pick, amount_str):
-        if cf_common.user_db.bet_market_get_active_by_thread(
-                ctx.guild.id, ctx.channel.id) is None:
-            candidates = self._bettable_markets_for_channel(
-                ctx.guild.id, ctx.channel.id)
-            if len(candidates) > 1:
-                raise BettingCogError(
-                    'Multiple betting markets are open here. Place this bet in '
-                    'the match thread so the target is unambiguous.')
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError(
                 'No open market here. Bets are placed in the match thread the '
@@ -1169,6 +1211,22 @@ class Betting(commands.Cog):
         if status == 'insufficient':
             raise BettingCogError(
                 f'You only have **{data["balance"]}** {_COIN}. Try `;bet daily`.')
+        if status == 'missing':
+            raise BettingCogError(
+                f'You do not have a bet on **{data["label"]}** to remove.')
+        if status == 'removed':
+            self._schedule_pool_refresh(market.market_id)
+            await ctx.send(embed=discord_common.embed_success(
+                f'Removed bet on **{data["label"]}** and refunded '
+                f'**{data["stake"]}** {_COIN}.\n'
+                f'Balance: **{data["balance"]}** {_COIN}.'))
+            return
+        if status == 'unchanged':
+            await ctx.send(embed=discord_common.embed_neutral(
+                f'Bet unchanged: **{data["stake"]}** {_COIN} on '
+                f'**{data["label"]}** @ **{data["odds"]:.2f}**.\n'
+                f'Balance: **{data["balance"]}** {_COIN}.'))
+            return
         self._schedule_pool_refresh(market.market_id)
         await ctx.send(embed=discord_common.embed_success(
             f'Bet placed: **{data["stake"]}** {_COIN} on **{data["label"]}** @ '
@@ -1176,24 +1234,24 @@ class Betting(commands.Cog):
             f'if it hits.\nBalance: **{data["balance"]}** {_COIN}.'))
 
     @bet.command(name='home', aliases=['1'], brief='Bet on the home win',
-                 usage='<amount | 50% | all>')
+                 usage='<amount | 50% | all | 0 to remove>')
     async def bet_home(self, ctx, amount: str):
         await self._place(ctx, 'home', amount)
 
     @bet.command(name='draw', aliases=['x', 'tie'], brief='Bet on a draw',
-                 usage='<amount | 50% | all>')
+                 usage='<amount | 50% | all | 0 to remove>')
     async def bet_draw(self, ctx, amount: str):
         await self._place(ctx, 'draw', amount)
 
     @bet.command(name='away', aliases=['2'], brief='Bet on the away win',
-                 usage='<amount | 50% | all>')
+                 usage='<amount | 50% | all | 0 to remove>')
     async def bet_away(self, ctx, amount: str):
         await self._place(ctx, 'away', amount)
 
     @bet.command(name='not', aliases=['no'], brief='Bet that an outcome will not happen',
-                 usage='<team|home|draw|away> <amount | 50% | all>')
+                 usage='<team|home|draw|away> <amount | 50% | all | 0 to remove>')
     async def bet_not(self, ctx, *, text: str):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here.')
         tokens = extract_bet_tokens(text)
@@ -1211,20 +1269,56 @@ class Betting(commands.Cog):
 
     @bet.command(name='mybet', aliases=['mybets'], brief='Show your active bet')
     async def mybet(self, ctx):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here.')
-        wager = cf_common.user_db.bet_get_wager(market.market_id, ctx.author.id)
-        if wager is None:
+        wagers = cf_common.user_db.bet_get_wagers_for_user(
+            market.market_id, ctx.author.id)
+        if not wagers:
             await ctx.send(embed=discord_common.embed_neutral(
                 "You haven't bet on this match yet."))
             return
-        label = self._pick_label(market, wager.pick)
-        odds = self._pick_odds(market, wager.pick)  # frozen on the market
-        potential = payout_amount(wager.stake, odds)
+        lines = []
+        total_stake = 0
+        for wager in wagers:
+            label = self._pick_label(market, wager.pick)
+            odds = self._pick_odds(market, wager.pick)  # frozen on the market
+            potential = payout_amount(wager.stake, odds)
+            total_stake += wager.stake
+            lines.append(
+                f'**{wager.stake}** {_COIN} on **{label}** @ '
+                f'**{odds:.2f}** → returns **{potential}** {_COIN}')
         await ctx.send(embed=discord_common.embed_neutral(
-            f'Your bet: **{wager.stake}** {_COIN} on **{label}** @ '
-            f'**{odds:.2f}** → returns **{potential}** {_COIN}.'))
+            'Your bets:\n' + '\n'.join(lines)
+            + f'\n\nTotal staked: **{total_stake}** {_COIN}.'))
+
+    async def _withdraw_match(self, ctx):
+        market = self._find_market(ctx, require_unambiguous=True)
+        if market is None:
+            raise BettingCogError('No open market here.')
+        if time.time() >= market.commence_time or market.bets_closed:
+            raise BettingCogError('Betting is closed — bets can no longer be withdrawn.')
+        ok, reason, balance, refunded, count = cf_common.user_db.bet_remove_wagers_for_user(
+            ctx.guild.id, market.market_id, ctx.author.id, time.time())
+        if not ok:
+            if reason == 'closed':
+                raise BettingCogError(
+                    'Betting is closed — bets can no longer be withdrawn.')
+            if reason == 'missing':
+                await ctx.send(embed=discord_common.embed_neutral(
+                    "You don't have any bets on this match."))
+                return
+            raise BettingCogError('Could not withdraw bets from this match.')
+        self._schedule_pool_refresh(market.market_id)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed **{count}** bet(s) on **{market.home_team} vs '
+            f'{market.away_team}** and refunded **{refunded}** {_COIN}.\n'
+            f'Balance: **{balance}** {_COIN}.'))
+
+    @bet.command(name='withdraw', aliases=['clear', 'removeall', 'unbet', 'cancelbets'],
+                 brief='Remove all your bets on the active match')
+    async def withdraw(self, ctx):
+        await self._withdraw_match(ctx)
 
     # ── Thread bet listener ────────────────────────────────────────────
 
@@ -1241,7 +1335,7 @@ class Betting(commands.Cog):
         if message.author.bot or message.guild is None:
             return
         content = message.content or ''
-        if content.startswith(discord_common._BOT_PREFIX):
+        if content.startswith(_bot_prefix()):
             return  # a command — let the command system handle it
         tokens = extract_bet_tokens(content)
         if tokens is None:
@@ -1265,9 +1359,10 @@ class Betting(commands.Cog):
             logger.warning('thread bet failed in market %s', market.market_id,
                            exc_info=True)
             return
-        if status == 'ok':
+        if status in ('ok', 'removed', 'unchanged'):
             await self._react(message, '✅')
-            self._schedule_pool_refresh(market.market_id)
+            if status != 'unchanged':
+                self._schedule_pool_refresh(market.market_id)
         elif status == 'closed':
             await self._react(message, '🔒')
         elif status == 'insufficient':
@@ -1353,6 +1448,100 @@ class Betting(commands.Cog):
             await ctx.send(embed=discord_common.embed_alert(
                 f'Already claimed today. Balance: **{balance}** {_COIN}. '
                 'Resets at 00:00 UTC.'))
+
+    @commands.command(name='beg', brief='Ask someone for betting coins',
+                      usage='@user [amount]')
+    async def beg(self, ctx, donor: discord.Member, *, suggested: str = None):
+        if donor.id == ctx.author.id:
+            raise BettingCogError('You cannot beg yourself.')
+        if getattr(donor, 'bot', False):
+            raise BettingCogError('You cannot beg bots for coins.')
+        if self.bot is None:
+            raise BettingCogError('Begging is not available right now.')
+
+        donor_balance = cf_common.user_db.bet_ensure_wallet(
+            ctx.guild.id, donor.id, constants.BET_START_BALANCE)
+        suggestion = ''
+        if suggested:
+            suggested_amount = parse_amount(suggested, donor_balance, 1)
+            if suggested_amount is None:
+                raise BettingCogError(
+                    'Invalid suggested amount. Use a positive whole number, '
+                    'a percentage like `50%`, or `all`.')
+            suggestion = (
+                f'\nSuggested amount: **{suggested_amount}** {_COIN}. '
+                'You can still choose a different amount.')
+
+        requester = discord.utils.escape_markdown(ctx.author.display_name)
+        donor_name = discord.utils.escape_markdown(donor.display_name)
+        await ctx.send(
+            content=donor.mention,
+            embed=discord_common.embed_neutral(
+                f'`{requester}` is begging `{donor_name}` for betting coins.'
+                f'{suggestion}\n'
+                f'{donor.mention}, reply in this channel with an amount to give '
+                f'(`100`, `50%`, or `all`), or `no` to decline. '
+                f'This expires in {_BEG_TIMEOUT}s.'),
+            allowed_mentions=_user_mentions())
+
+        end_time = asyncio.get_running_loop().time() + _BEG_TIMEOUT
+
+        def check(message):
+            return (
+                getattr(message, 'guild', None) is not None
+                and str(message.guild.id) == str(ctx.guild.id)
+                and str(message.channel.id) == str(ctx.channel.id)
+                and str(message.author.id) == str(donor.id)
+                and not getattr(message.author, 'bot', False)
+            )
+
+        while True:
+            timeout = end_time - asyncio.get_running_loop().time()
+            if timeout <= 0:
+                await ctx.send(embed=discord_common.embed_neutral(
+                    f'Beg request expired. `{donor_name}` did not respond.'))
+                return
+            try:
+                message = await self.bot.wait_for(
+                    'message', timeout=timeout, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(embed=discord_common.embed_neutral(
+                    f'Beg request expired. `{donor_name}` did not respond.'))
+                return
+
+            text = (message.content or '').strip()
+            if text.startswith(_bot_prefix()):
+                continue
+            lowered = text.lower()
+            if lowered in {'no', 'n', 'decline', 'deny', 'cancel', '0'}:
+                await ctx.send(embed=discord_common.embed_neutral(
+                    f'`{donor_name}` declined the beg request.'))
+                return
+
+            donor_balance = cf_common.user_db.bet_ensure_wallet(
+                ctx.guild.id, donor.id, constants.BET_START_BALANCE)
+            amount = parse_amount(text, donor_balance, 1)
+            if amount is None:
+                await ctx.send(embed=discord_common.embed_alert(
+                    f'Invalid amount. `{donor_name}`, reply with a positive whole '
+                    'number, a percentage like `50%`, `all`, or `no`.'))
+                continue
+            ok, reason, donor_balance, requester_balance = cf_common.user_db.bet_transfer(
+                ctx.guild.id, donor.id, ctx.author.id, amount,
+                constants.BET_START_BALANCE, actor_id=donor.id)
+            if not ok:
+                if reason == 'insufficient':
+                    await ctx.send(embed=discord_common.embed_alert(
+                        f'Insufficient balance. `{donor_name}` has '
+                        f'**{donor_balance}** {_COIN}.'))
+                    continue
+                raise BettingCogError('Beg transfer failed.')
+
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{donor_name}` gave `{requester}` **{amount}** {_COIN}.\n'
+                f'`{donor_name}`: **{donor_balance}** {_COIN}. '
+                f'`{requester}`: **{requester_balance}** {_COIN}.'))
+            return
 
     @bet.command(name='transfer', aliases=['send', 'pay'],
                  brief='Move coins from one user to another (admin)',
@@ -1496,7 +1685,7 @@ class Betting(commands.Cog):
                  usage='<home|draw|away|2-1>')
     @commands.has_role(constants.TLE_ADMIN)
     async def settle(self, ctx, *, result: str):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here to settle.')
         parsed = self._parse_result(market, result)
@@ -1512,7 +1701,7 @@ class Betting(commands.Cog):
                  brief='Cancel the active market and refund (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def cancel(self, ctx):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here to cancel.')
         refunds = cf_common.user_db.bet_void(
@@ -1661,7 +1850,7 @@ class Betting(commands.Cog):
 
     @bet.command(name='book', brief='Show all bets on the active market')
     async def book(self, ctx):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here.')
         wagers = cf_common.user_db.bet_get_wagers(market.market_id)
@@ -1698,7 +1887,7 @@ class Betting(commands.Cog):
                  usage='<home> <draw> <away>')
     @commands.has_role(constants.TLE_ADMIN)
     async def setodds(self, ctx, home: float, draw: float, away: float):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here.')
         if cf_common.user_db.bet_market_count_wagers(market.market_id) > 0:
@@ -1725,7 +1914,7 @@ class Betting(commands.Cog):
     @bet.command(name='close', brief='Close betting early on the active market (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def close(self, ctx):
-        market = self._find_market(ctx)
+        market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
             raise BettingCogError('No open market here.')
         if cf_common.user_db.bet_market_close_betting(market.market_id):

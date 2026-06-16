@@ -1008,3 +1008,93 @@ def upgrade_1_36_0(db):
     except Exception as e:
         logger.debug('1.36.0: thread_intro_id already exists or unavailable: %s', e)
     db.commit()
+
+
+@registry.register('1.37.0', 'Betting multi-pick wagers')
+def upgrade_1_37_0(db):
+    """Allow one user to hold separate wagers on multiple picks in a market.
+
+    Existing rows migrate exactly as-is: each old one-pick wager becomes the
+    row for that specific pick under the new (market_id, user_id, pick) key.
+    """
+    logger.info('1.37.0: Migrating betting wagers to per-pick keys')
+
+    def _col_name(row):
+        return getattr(row, 'name', row[1])
+
+    def _col_pk(row):
+        return getattr(row, 'pk', row[5])
+
+    def _pk_cols(cols):
+        return [_col_name(row) for row in sorted(
+            (row for row in cols if _col_pk(row)), key=_col_pk)]
+
+    def _create_bet_wager_table():
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS bet_wager (
+                market_id   INTEGER NOT NULL,
+                user_id     TEXT NOT NULL,
+                pick        TEXT NOT NULL,
+                stake       INTEGER NOT NULL,
+                placed_at   REAL NOT NULL,
+                PRIMARY KEY (market_id, user_id, pick)
+            )
+        ''')
+
+    def _copy_from_old_table():
+        db.execute('''
+            INSERT OR REPLACE INTO bet_wager
+                (market_id, user_id, pick, stake, placed_at)
+            SELECT market_id, user_id, pick, stake, placed_at
+            FROM bet_wager_old_137
+        ''')
+
+    def _old_table_exists():
+        return bool(db.execute('PRAGMA table_info(bet_wager_old_137)').fetchall())
+
+    started_transaction = not db.in_transaction
+    if started_transaction:
+        db.execute('BEGIN IMMEDIATE')
+    try:
+        old_exists = _old_table_exists()
+        cols = db.execute('PRAGMA table_info(bet_wager)').fetchall()
+        if not cols:
+            _create_bet_wager_table()
+            if old_exists:
+                _copy_from_old_table()
+                db.execute('DROP TABLE bet_wager_old_137')
+                logger.info('1.37.0: recovered betting wagers from old table')
+            else:
+                logger.info('1.37.0: betting wager table created')
+            db.commit()
+            return
+
+        pk_cols = _pk_cols(cols)
+        if pk_cols == ['market_id', 'user_id', 'pick']:
+            if old_exists:
+                _copy_from_old_table()
+                db.execute('DROP TABLE bet_wager_old_137')
+                logger.info('1.37.0: recovered betting wagers from old table')
+            else:
+                logger.info('1.37.0: betting wager table already uses per-pick keys')
+            db.commit()
+            return
+
+        if pk_cols != ['market_id', 'user_id']:
+            raise RuntimeError(
+                'Cannot migrate bet_wager primary key; unexpected key columns: '
+                + ', '.join(pk_cols))
+        if old_exists:
+            raise RuntimeError(
+                'Cannot migrate bet_wager primary key; recovery table already exists')
+
+        db.execute('ALTER TABLE bet_wager RENAME TO bet_wager_old_137')
+        _create_bet_wager_table()
+        _copy_from_old_table()
+        db.execute('DROP TABLE bet_wager_old_137')
+        db.commit()
+        logger.info('1.37.0: betting wagers migrated to per-pick keys')
+    except Exception:
+        if started_transaction:
+            db.rollback()
+        raise

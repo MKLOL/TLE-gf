@@ -644,7 +644,7 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 pick        TEXT NOT NULL,
                 stake       INTEGER NOT NULL,
                 placed_at   REAL NOT NULL,
-                PRIMARY KEY (market_id, user_id)
+                PRIMARY KEY (market_id, user_id, pick)
             )
         ''')
         self.conn.execute('''
@@ -2528,17 +2528,38 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
 
     # -- Wagers --
 
+    def _bet_market_is_bettable(self, guild_id, market_id):
+        row = self.conn.execute(
+            'SELECT status, bets_closed FROM bet_market '
+            'WHERE guild_id = ? AND market_id = ?',
+            (str(guild_id), market_id)
+        ).fetchone()
+        return row is not None and row.status == 'open' and not row.bets_closed
+
     def bet_place(self, guild_id, market_id, user_id, pick, stake,
                   placed_at, start_balance):
-        """Place or replace a user's wager, escrowing the stake from their
-        wallet. Re-betting refunds the previous stake first. Odds are not
-        stored — they are the market's frozen odds_<pick>.
+        """Place or replace a user's wager on one pick, escrowing the stake
+        from their wallet. Re-betting the same pick refunds the previous stake
+        first; other picks by the same user stay in place. Odds are not stored
+        — they are the market's frozen odds_<pick>.
 
-        Returns (ok, reason, new_balance) where reason is 'ok' or
-        'insufficient'. Atomic: wallet debit and wager write commit together.
+        Returns (ok, reason, new_balance) where reason is 'ok', 'unchanged',
+        'invalid', 'closed', or 'insufficient'. Atomic: wallet debit and wager
+        write commit together.
         """
         guild_id, user_id = str(guild_id), str(user_id)
+        pick = str(pick)
+        stake = int(stake)
+        if stake <= 0:
+            return (False, 'invalid', self.bet_get_balance(guild_id, user_id))
         with self.conn:
+            balance_row = self.conn.execute(
+                'SELECT balance FROM bet_wallet WHERE guild_id = ? AND user_id = ?',
+                (guild_id, user_id)
+            ).fetchone()
+            if not self._bet_market_is_bettable(guild_id, market_id):
+                balance = balance_row.balance if balance_row else None
+                return (False, 'closed', balance)
             cur = self.conn.execute(
                 'INSERT OR IGNORE INTO bet_wallet (guild_id, user_id, balance) '
                 'VALUES (?, ?, ?)',
@@ -2553,9 +2574,12 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 (guild_id, user_id)
             ).fetchone().balance
             prev = self.conn.execute(
-                'SELECT stake FROM bet_wager WHERE market_id = ? AND user_id = ?',
-                (market_id, user_id)
+                'SELECT stake FROM bet_wager WHERE market_id = ? '
+                'AND user_id = ? AND pick = ?',
+                (market_id, user_id, pick)
             ).fetchone()
+            if prev and prev.stake == stake:
+                return (True, 'unchanged', balance)
             available = balance + (prev.stake if prev else 0)
             if stake > available:
                 return (False, 'insufficient', balance)
@@ -2563,7 +2587,8 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
             if prev:
                 self._bet_log_wallet_txn(
                     guild_id, user_id, user_id, 'wager_refund', prev.stake,
-                    available, market_id=market_id, created_at=placed_at)
+                    available, market_id=market_id, note=pick,
+                    created_at=placed_at)
             self.conn.execute(
                 'INSERT OR REPLACE INTO bet_wager '
                 '(market_id, user_id, pick, stake, placed_at) '
@@ -2579,13 +2604,124 @@ class UserDbConn(MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
                 market_id=market_id, note=pick, created_at=placed_at)
             return (True, 'ok', new_balance)
 
-    def bet_get_wager(self, market_id, user_id):
-        """Return a user's wager on a market, or None."""
+    def bet_remove_wager(self, guild_id, market_id, user_id, pick, removed_at):
+        """Remove one wager pick for a user and refund its stake.
+
+        Returns (ok, reason, new_balance, refunded) where reason is 'removed',
+        'missing', or 'closed'. Other picks by the same user stay in place.
+        """
+        guild_id, user_id, pick = str(guild_id), str(user_id), str(pick)
+        with self.conn:
+            balance_row = self.conn.execute(
+                'SELECT balance FROM bet_wallet WHERE guild_id = ? AND user_id = ?',
+                (guild_id, user_id)
+            ).fetchone()
+            balance = balance_row.balance if balance_row else None
+            if not self._bet_market_is_bettable(guild_id, market_id):
+                return (False, 'closed', balance, 0)
+            prev = self.conn.execute(
+                'SELECT stake FROM bet_wager WHERE market_id = ? '
+                'AND user_id = ? AND pick = ?',
+                (market_id, user_id, pick)
+            ).fetchone()
+            if prev is None:
+                return (False, 'missing', balance, 0)
+            if balance_row is None:
+                self.conn.execute(
+                    'INSERT INTO bet_wallet (guild_id, user_id, balance) '
+                    'VALUES (?, ?, 0)',
+                    (guild_id, user_id)
+                )
+                balance = 0
+            new_balance = (balance or 0) + prev.stake
+            self.conn.execute(
+                'DELETE FROM bet_wager WHERE market_id = ? AND user_id = ? '
+                'AND pick = ?',
+                (market_id, user_id, pick)
+            )
+            self.conn.execute(
+                'UPDATE bet_wallet SET balance = ? WHERE guild_id = ? AND user_id = ?',
+                (new_balance, guild_id, user_id)
+            )
+            self._bet_log_wallet_txn(
+                guild_id, user_id, user_id, 'wager_refund', prev.stake,
+                new_balance, market_id=market_id, note=pick,
+                created_at=removed_at)
+            return (True, 'removed', new_balance, prev.stake)
+
+    def bet_remove_wagers_for_user(self, guild_id, market_id, user_id, removed_at):
+        """Remove all wagers by one user on one market and refund their stakes.
+
+        Returns (ok, reason, new_balance, refunded, count) where reason is
+        'removed', 'missing', or 'closed'. Wagers by the same user on other
+        markets are untouched.
+        """
+        guild_id, user_id = str(guild_id), str(user_id)
+        with self.conn:
+            balance_row = self.conn.execute(
+                'SELECT balance FROM bet_wallet WHERE guild_id = ? AND user_id = ?',
+                (guild_id, user_id)
+            ).fetchone()
+            balance = balance_row.balance if balance_row else None
+            if not self._bet_market_is_bettable(guild_id, market_id):
+                return (False, 'closed', balance, 0, 0)
+            wagers = self.conn.execute(
+                'SELECT pick, stake FROM bet_wager '
+                'WHERE market_id = ? AND user_id = ? '
+                'ORDER BY placed_at ASC, pick ASC',
+                (market_id, user_id)
+            ).fetchall()
+            if not wagers:
+                return (False, 'missing', balance, 0, 0)
+            if balance_row is None:
+                self.conn.execute(
+                    'INSERT INTO bet_wallet (guild_id, user_id, balance) '
+                    'VALUES (?, ?, 0)',
+                    (guild_id, user_id)
+                )
+                balance = 0
+            total_refunded = sum(w.stake for w in wagers)
+            new_balance = balance + total_refunded
+            self.conn.execute(
+                'DELETE FROM bet_wager WHERE market_id = ? AND user_id = ?',
+                (market_id, user_id)
+            )
+            self.conn.execute(
+                'UPDATE bet_wallet SET balance = ? WHERE guild_id = ? AND user_id = ?',
+                (new_balance, guild_id, user_id)
+            )
+            running_balance = balance
+            for wager in wagers:
+                running_balance += wager.stake
+                self._bet_log_wallet_txn(
+                    guild_id, user_id, user_id, 'wager_refund', wager.stake,
+                    running_balance, market_id=market_id, note=wager.pick,
+                    created_at=removed_at)
+            return (True, 'removed', new_balance, total_refunded, len(wagers))
+
+    def bet_get_wager(self, market_id, user_id, pick=None):
+        """Return a user's wager on a market, optionally scoped to one pick."""
+        if pick is not None:
+            return self.conn.execute(
+                'SELECT market_id, user_id, pick, stake, placed_at '
+                'FROM bet_wager WHERE market_id = ? AND user_id = ? AND pick = ?',
+                (market_id, str(user_id), str(pick))
+            ).fetchone()
         return self.conn.execute(
             'SELECT market_id, user_id, pick, stake, placed_at '
-            'FROM bet_wager WHERE market_id = ? AND user_id = ?',
+            'FROM bet_wager WHERE market_id = ? AND user_id = ? '
+            'ORDER BY placed_at DESC, pick ASC LIMIT 1',
             (market_id, str(user_id))
         ).fetchone()
+
+    def bet_get_wagers_for_user(self, market_id, user_id):
+        """Return all of a user's wagers on one market."""
+        return self.conn.execute(
+            'SELECT market_id, user_id, pick, stake, placed_at '
+            'FROM bet_wager WHERE market_id = ? AND user_id = ? '
+            'ORDER BY placed_at ASC, pick ASC',
+            (market_id, str(user_id))
+        ).fetchall()
 
     def bet_get_wagers(self, market_id):
         """Return all wagers on a market, earliest first."""

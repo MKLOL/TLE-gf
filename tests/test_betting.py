@@ -8,6 +8,7 @@ import pytest
 from tle.util.db.user_db_conn import UserDbConn, namedtuple_factory, bet_fixture_key
 from tle.util.db.user_db_upgrades import (
     upgrade_1_33_0, upgrade_1_34_0, upgrade_1_35_0, upgrade_1_36_0,
+    upgrade_1_37_0,
 )
 from tle.util import odds_api
 from tle.util import football_data
@@ -698,23 +699,110 @@ class TestPlaceBet:
         assert db.bet_get_wager(mid, USER_A) is None
         assert db.bet_get_balance(GUILD, USER_A) == 1000
 
-    def test_rebet_refunds_previous_then_charges(self, db):
+    def test_same_pick_rebet_refunds_previous_then_charges(self, db):
         mid = _make_market(db)
         db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)  # bal 700
-        ok, _, bal = db.bet_place(GUILD, mid, USER_A, 'away', 200, 2.0, 1000)
+        ok, _, bal = db.bet_place(GUILD, mid, USER_A, 'home', 200, 2.0, 1000)
         assert ok and bal == 800  # 700 + 300 refund - 200
-        w = db.bet_get_wager(mid, USER_A)
-        assert w.pick == 'away' and w.stake == 200  # odds derived from market
+        w = db.bet_get_wager(mid, USER_A, 'home')
+        assert w.pick == 'home' and w.stake == 200  # odds derived from market
         rows = db.bet_wallet_history(GUILD, USER_A)
         assert [r.action for r in rows[:2]] == ['wager_stake', 'wager_refund']
         assert rows[0].amount == -200 and rows[0].balance_after == 800
         assert rows[1].amount == 300 and rows[1].balance_after == 1000
+
+    def test_different_pick_adds_second_wager(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)  # bal 700
+        ok, _, bal = db.bet_place(GUILD, mid, USER_A, 'away', 200, 2.0, 1000)
+        assert ok and bal == 500
+        wagers = db.bet_get_wagers_for_user(mid, USER_A)
+        assert [(w.pick, w.stake) for w in wagers] == [('home', 300), ('away', 200)]
+
+    def test_same_pick_same_stake_is_noop(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)
+        ok, reason, bal = db.bet_place(GUILD, mid, USER_A, 'home', 300, 2.0, 1000)
+        assert ok and reason == 'unchanged' and bal == 700
+        rows = db.bet_wallet_history(GUILD, USER_A)
+        assert [r.action for r in rows] == ['wager_stake', 'init']
 
     def test_rebet_to_larger_stake_within_refunded_budget(self, db):
         mid = _make_market(db)
         db.bet_place(GUILD, mid, USER_A, 'home', 1000, 1.0, 1000)  # all-in, bal 0
         ok, _, bal = db.bet_place(GUILD, mid, USER_A, 'home', 1000, 2.0, 1000)
         assert ok and bal == 0  # refund 1000 then stake 1000 again
+
+    def test_remove_one_pick_refunds_only_that_pick(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_A, 'away', 200, 2.0, 1000)
+        ok, reason, bal, refunded = db.bet_remove_wager(
+            GUILD, mid, USER_A, 'home', 3.0)
+        assert ok and reason == 'removed'
+        assert refunded == 300 and bal == 800
+        assert [(w.pick, w.stake) for w in db.bet_get_wagers_for_user(mid, USER_A)] == [
+            ('away', 200)]
+
+    def test_remove_missing_pick_is_noop(self, db):
+        mid = _make_market(db)
+        ok, reason, bal, refunded = db.bet_remove_wager(
+            GUILD, mid, USER_A, 'home', 3.0)
+        assert ok is False and reason == 'missing'
+        assert bal is None and refunded == 0
+
+    def test_remove_all_user_wagers_only_one_market(self, db):
+        mid = _make_market(db)
+        other_mid = db.bet_market_create(
+            GUILD, '999', 'evt2', 'soccer_epl', 'Brazil', 'Japan', 20_000.0,
+            2.0, 3.0, 4.0, USER_A, 0.0)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_A, 'away', 200, 2.0, 1000)
+        db.bet_place(GUILD, other_mid, USER_A, 'home', 100, 3.0, 1000)
+
+        ok, reason, bal, refunded, count = db.bet_remove_wagers_for_user(
+            GUILD, mid, USER_A, 4.0)
+
+        assert ok and reason == 'removed'
+        assert refunded == 500 and count == 2 and bal == 900
+        assert db.bet_get_wagers_for_user(mid, USER_A) == []
+        assert [(w.pick, w.stake) for w in db.bet_get_wagers_for_user(
+            other_mid, USER_A)] == [('home', 100)]
+
+    def test_remove_all_user_wagers_missing_is_noop(self, db):
+        mid = _make_market(db)
+        ok, reason, bal, refunded, count = db.bet_remove_wagers_for_user(
+            GUILD, mid, USER_A, 4.0)
+        assert ok is False and reason == 'missing'
+        assert bal is None and refunded == 0 and count == 0
+
+    def test_place_rejects_settled_market(self, db):
+        mid = _make_market(db)
+        db.bet_settle(GUILD, mid, 'home', 1, 0, 5.0)
+        ok, reason, bal = db.bet_place(GUILD, mid, USER_A, 'home', 100, 6.0, 1000)
+        assert ok is False and reason == 'closed'
+        assert bal is None
+        assert db.bet_get_wager(mid, USER_A) is None
+
+    def test_remove_rejects_settled_market(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)
+        db.bet_settle(GUILD, mid, 'home', 1, 0, 5.0)
+        ok, reason, bal, refunded = db.bet_remove_wager(
+            GUILD, mid, USER_A, 'home', 6.0)
+        assert ok is False and reason == 'closed'
+        assert bal == 1300 and refunded == 0
+        assert db.bet_get_wager(mid, USER_A, 'home').stake == 300
+
+    def test_remove_all_rejects_settled_market(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 300, 1.0, 1000)
+        db.bet_settle(GUILD, mid, 'home', 1, 0, 5.0)
+        ok, reason, bal, refunded, count = db.bet_remove_wagers_for_user(
+            GUILD, mid, USER_A, 6.0)
+        assert ok is False and reason == 'closed'
+        assert bal == 1300 and refunded == 0 and count == 0
+        assert db.bet_get_wager(mid, USER_A, 'home').stake == 300
 
 
 class TestPool:
@@ -775,6 +863,14 @@ class TestSettle:
         db.bet_place(GUILD, mid, USER_A, 'draw', 100, 1.0, 1000)
         db.bet_settle(GUILD, mid, 'draw', 1, 1, 5.0)
         assert db.bet_get_balance(GUILD, USER_A) == 1200  # 900 + 300
+
+    def test_multiple_picks_for_same_user_settle_independently(self, db):
+        mid = _make_market(db)
+        db.bet_place(GUILD, mid, USER_A, 'home', 100, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_A, 'away', 100, 2.0, 1000)
+        rows = db.bet_settle(GUILD, mid, 'home', 2, 1, 5.0)
+        assert sorted((r[1], r[4]) for r in rows) == [('away', 0), ('home', 200)]
+        assert db.bet_get_balance(GUILD, USER_A) == 1000
 
     def test_negative_pick_wins_when_event_does_not_happen(self, db):
         mid = _make_market(db, odds=(2.0, 4.0, 4.0))
@@ -989,6 +1085,17 @@ class TestBalanceLeaderboard:
 # ── Migration ──────────────────────────────────────────────────────────────
 
 class TestMigration:
+    def _wager_pk_cols(self, conn):
+        cols = conn.execute('PRAGMA table_info(bet_wager)').fetchall()
+        return [row.name for row in sorted(
+            (row for row in cols if row.pk), key=lambda row: row.pk)]
+
+    def _wager_rows(self, conn):
+        return conn.execute(
+            'SELECT market_id, user_id, pick, stake, placed_at '
+            'FROM bet_wager ORDER BY market_id, user_id, pick'
+        ).fetchall()
+
     def test_upgrade_creates_tables(self):
         conn = sqlite3.connect(':memory:')
         conn.row_factory = namedtuple_factory
@@ -1098,6 +1205,63 @@ class TestMigration:
         assert 'thread_intro_id' in cols
         conn.close()
 
+    def test_upgrade_137_migrates_wager_primary_key(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        rows = [
+            (1, '10', 'home', 100, 7.0),
+            (1, '11', 'away', 200, 8.0),
+            (2, '10', 'draw', 300, 9.0),
+        ]
+        conn.executemany(
+            'INSERT INTO bet_wager (market_id, user_id, pick, stake, placed_at) '
+            'VALUES (?, ?, ?, ?, ?)', rows)
+
+        upgrade_1_37_0(conn)
+
+        assert self._wager_pk_cols(conn) == ['market_id', 'user_id', 'pick']
+        assert self._wager_rows(conn) == rows
+        conn.execute(
+            'INSERT INTO bet_wager (market_id, user_id, pick, stake, placed_at) '
+            'VALUES (?, ?, ?, ?, ?)', (1, '10', 'away', 50, 8.0))
+        assert conn.execute('SELECT COUNT(*) FROM bet_wager').fetchone()[0] == 4
+        conn.close()
+
+    def test_upgrade_137_recovers_stranded_old_table(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        rows = [
+            (1, '10', 'home', 100, 7.0),
+            (2, '11', 'away', 200, 8.0),
+        ]
+        conn.executemany(
+            'INSERT INTO bet_wager (market_id, user_id, pick, stake, placed_at) '
+            'VALUES (?, ?, ?, ?, ?)', rows)
+        conn.execute('ALTER TABLE bet_wager RENAME TO bet_wager_old_137')
+        conn.execute('''
+            CREATE TABLE bet_wager (
+                market_id   INTEGER NOT NULL,
+                user_id     TEXT NOT NULL,
+                pick        TEXT NOT NULL,
+                stake       INTEGER NOT NULL,
+                placed_at   REAL NOT NULL,
+                PRIMARY KEY (market_id, user_id, pick)
+            )
+        ''')
+
+        upgrade_1_37_0(conn)
+
+        assert self._wager_pk_cols(conn) == ['market_id', 'user_id', 'pick']
+        assert self._wager_rows(conn) == rows
+        old_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'bet_wager_old_137'"
+        ).fetchone()
+        assert old_table is None
+        conn.close()
+
     def test_userdb_existing_134_runs_fixture_migration(self, tmp_path):
         from tle.util.db.user_db_upgrades import registry
         path = tmp_path / 'user.db'
@@ -1114,12 +1278,15 @@ class TestMigration:
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ('1', '2', 'e', 'soccer_epl', 'Spain', 'Cape Verde', 10_000.0,
              2.0, 3.0, 4.0, '9', 0.0))
+        conn.execute(
+            'INSERT INTO bet_wager (market_id, user_id, pick, stake, placed_at) '
+            'VALUES (?, ?, ?, ?, ?)', (1, '10', 'home', 100, 7.0))
         conn.commit()
         conn.close()
 
         db = UserDbConn(str(path))
         try:
-            assert registry.get_current_version(db.conn) == '1.36.0'
+            assert registry.get_current_version(db.conn) == registry.latest_version
             row = db.conn.execute(
                 'SELECT fixture_key FROM bet_market WHERE event_id = ?', ('e',)
             ).fetchone()
@@ -1127,6 +1294,8 @@ class TestMigration:
                 'soccer_epl', 'Spain', 'Cape Verde', 10_000.0)
             cols = [r.name for r in db.conn.execute('PRAGMA table_info(bet_market)')]
             assert 'thread_intro_id' in cols
+            assert self._wager_pk_cols(db.conn) == ['market_id', 'user_id', 'pick']
+            assert self._wager_rows(db.conn) == [(1, '10', 'home', 100, 7.0)]
             indexes = [r.name for r in db.conn.execute('PRAGMA index_list(bet_market)')]
             assert 'idx_bet_market_open_fixture' in indexes
         finally:
@@ -1134,6 +1303,114 @@ class TestMigration:
 
 
 # ── Cog bet-execution path ──────────────────────────────────────────────────
+
+class TestFindMarket:
+    @pytest.fixture
+    def cog(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        return Betting(bot=None)
+
+    def _ctx(self, channel_id):
+        class _Guild:
+            id = GUILD
+
+        class _Channel:
+            id = channel_id
+
+        class _Ctx:
+            guild = _Guild()
+            channel = _Channel()
+
+        return _Ctx()
+
+    def test_parent_channel_multiple_markets_requires_thread(self, db, cog):
+        from tle.cogs.betting import BettingCogError
+        _make_market(db, commence=1e12)
+        db.bet_market_create(
+            GUILD, CH, 'evt2', 'soccer_epl', 'Brazil', 'Japan', 1e12 + 1000,
+            2.0, 3.0, 4.0, USER_A, 1.0)
+
+        with pytest.raises(BettingCogError):
+            cog._find_market(self._ctx(CH), require_unambiguous=True)
+
+    def test_thread_market_is_unambiguous_even_with_parent_markets(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        db.bet_market_set_thread(mid, THREAD)
+        db.bet_market_create(
+            GUILD, CH, 'evt2', 'soccer_epl', 'Brazil', 'Japan', 1e12 + 1000,
+            2.0, 3.0, 4.0, USER_A, 1.0)
+
+        market = cog._find_market(self._ctx(THREAD), require_unambiguous=True)
+
+        assert market.market_id == mid
+
+
+class TestWithdrawCommand:
+    @pytest.fixture
+    def cog(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        return Betting(bot=None)
+
+    def _ctx(self, channel_id):
+        class _Guild:
+            id = GUILD
+
+        class _Channel:
+            id = channel_id
+
+        class _Author:
+            id = USER_A
+
+        class _Ctx:
+            guild = _Guild()
+            channel = _Channel()
+            author = _Author()
+
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, *args, **kwargs):
+                self.sent.append((args, kwargs))
+
+        return _Ctx()
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def test_withdraw_removes_only_current_thread_match(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        db.bet_market_set_thread(mid, THREAD)
+        other_mid = db.bet_market_create(
+            GUILD, CH, 'evt2', 'soccer_epl', 'Brazil', 'Japan', 1e12 + 1000,
+            2.0, 3.0, 4.0, USER_A, 0.0)
+        db.bet_market_set_thread(other_mid, '444')
+        db.bet_place(GUILD, mid, USER_A, 'home', 100, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_A, 'away', 200, 2.0, 1000)
+        db.bet_place(GUILD, other_mid, USER_A, 'home', 300, 3.0, 1000)
+        ctx = self._ctx(THREAD)
+
+        self._run(cog._withdraw_match(ctx))
+
+        assert db.bet_get_wagers_for_user(mid, USER_A) == []
+        assert [(w.pick, w.stake) for w in db.bet_get_wagers_for_user(
+            other_mid, USER_A)] == [('home', 300)]
+        assert db.bet_get_balance(GUILD, USER_A) == 700
+        assert len(ctx.sent) == 1
+
+    def test_withdraw_without_bets_reports_neutral(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        db.bet_market_set_thread(mid, THREAD)
+        ctx = self._ctx(THREAD)
+
+        self._run(cog._withdraw_match(ctx))
+
+        assert len(ctx.sent) == 1
+
 
 class TestExecuteBet:
     """_execute_bet wires parse_amount + escrow through the cog against a real
@@ -1219,11 +1496,36 @@ class TestExecuteBet:
         assert status == 'ok' and data['balance'] == 0
 
         status, data = self._run(
-            cog._execute_bet(GUILD, market, self._user(USER_A), 'away', 'all'))
+            cog._execute_bet(GUILD, market, self._user(USER_A), 'home', '500'))
         assert status == 'ok'
-        assert data['stake'] == 1000 and data['balance'] == 0
-        wager = db.bet_get_wager(mid, USER_A)
-        assert wager.pick == 'away' and wager.stake == 1000
+        assert data['stake'] == 500 and data['balance'] == 500
+        wager = db.bet_get_wager(mid, USER_A, 'home')
+        assert wager.pick == 'home' and wager.stake == 500
+
+    def test_different_pick_needs_free_balance(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        market = db.bet_market_get(mid)
+        self._run(cog._execute_bet(
+            GUILD, market, self._user(USER_A), 'home', 'all'))
+
+        status, data = self._run(
+            cog._execute_bet(GUILD, market, self._user(USER_A), 'away', 'all'))
+        assert status == 'invalid' and data is None
+
+    def test_zero_removes_one_pick(self, db, cog):
+        mid = _make_market(db, commence=1e12)
+        market = db.bet_market_get(mid)
+        self._run(cog._execute_bet(
+            GUILD, market, self._user(USER_A), 'home', '300'))
+        self._run(cog._execute_bet(
+            GUILD, market, self._user(USER_A), 'away', '200'))
+
+        status, data = self._run(
+            cog._execute_bet(GUILD, market, self._user(USER_A), 'home', '0'))
+        assert status == 'removed'
+        assert data['stake'] == 300 and data['balance'] == 800
+        assert [(w.pick, w.stake) for w in db.bet_get_wagers_for_user(mid, USER_A)] == [
+            ('away', 200)]
 
 
 class TestCheckCommand:
@@ -1337,6 +1639,112 @@ class TestTransferCommand:
         with pytest.raises(BettingCogError):
             self._run(Betting.transfer.__wrapped__(
                 cog, ctx, source, source, '10'))
+
+
+class TestBegCommand:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def _member(self, uid, name, *, bot=False):
+        return type('Member', (), {
+            'id': uid,
+            'display_name': name,
+            'bot': bot,
+            'mention': f'<@{uid}>',
+        })()
+
+    def _ctx(self, author):
+        class _Ctx:
+            def __init__(self):
+                self.guild = type('G', (), {'id': int(GUILD)})()
+                self.channel = type('C', (), {'id': int(CH)})()
+                self.author = author
+                self.sent = []
+
+            async def send(self, *args, **kwargs):
+                self.sent.append((args, kwargs))
+
+        return _Ctx()
+
+    def _message(self, author, content):
+        return type('Message', (), {
+            'guild': type('G', (), {'id': int(GUILD)})(),
+            'channel': type('C', (), {'id': int(CH)})(),
+            'author': author,
+            'content': content,
+        })()
+
+    class _Bot:
+        def __init__(self, messages):
+            self.messages = list(messages)
+
+        async def wait_for(self, event, timeout=None, check=None):
+            import asyncio
+            assert event == 'message'
+            while self.messages:
+                message = self.messages.pop(0)
+                if check is None or check(message):
+                    return message
+            raise asyncio.TimeoutError
+
+    def test_beg_approved_by_tagged_user_moves_money(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+        beggar = self._member(USER_A, 'Alice')
+        donor = self._member(USER_B, 'Bob')
+        db.bet_set_balance(GUILD, USER_B, 400, 1000)
+        bot = self._Bot([self._message(donor, '25%')])
+        cog = Betting(bot=bot)
+        ctx = self._ctx(beggar)
+
+        self._run(cog.beg(ctx, donor, suggested=None))
+
+        assert db.bet_get_balance(GUILD, USER_B) == 300
+        assert db.bet_get_balance(GUILD, USER_A) == 1100
+        hist = db.bet_wallet_history(GUILD, USER_B)
+        assert hist[0].action == 'transfer_out'
+        assert hist[0].actor_id == str(USER_B)
+        assert len(ctx.sent) == 2
+
+    def test_beg_declined_by_tagged_user_does_not_move_money(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+        beggar = self._member(USER_A, 'Alice')
+        donor = self._member(USER_B, 'Bob')
+        db.bet_set_balance(GUILD, USER_B, 400, 1000)
+        bot = self._Bot([self._message(donor, 'no')])
+        cog = Betting(bot=bot)
+        ctx = self._ctx(beggar)
+
+        self._run(cog.beg(ctx, donor, suggested='100'))
+
+        assert db.bet_get_balance(GUILD, USER_B) == 400
+        assert db.bet_get_balance(GUILD, USER_A) is None
+        assert len(ctx.sent) == 2
+
+    def test_beg_rejects_invalid_suggested_amount(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting, BettingCogError
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+        beggar = self._member(USER_A, 'Alice')
+        donor = self._member(USER_B, 'Bob')
+        cog = Betting(bot=self._Bot([]))
+        ctx = self._ctx(beggar)
+
+        with pytest.raises(BettingCogError):
+            self._run(cog.beg(ctx, donor, suggested='0%'))
 
 
 class TestMeCommand:
