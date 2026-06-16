@@ -15,9 +15,11 @@ from tle.util.db._minigame_db_common import (
 )
 from tle.util.db._minigame_db_results import MinigameResultsDbMixin
 from tle.util.db._minigame_db_links import MinigameLinksDbMixin
+from tle.util.db._minigame_db_schema import MinigameSchemaDbMixin
 
 
-class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin):
+class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin,
+                      MinigameSchemaDbMixin):
     """Mixin providing minigame config and result storage methods.
 
     All methods take a ``game`` parameter (e.g. ``'akari'``) to identify

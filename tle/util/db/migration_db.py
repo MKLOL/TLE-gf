@@ -13,6 +13,43 @@ logger = logging.getLogger(__name__)
 class MigrationDbMixin:
     """Mixin providing starboard migration DB methods. Expects self.conn."""
 
+    def _create_migration_tables(self):
+        # Starboard migration tables
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_migration (
+                guild_id            TEXT PRIMARY KEY,
+                old_channel_id      TEXT NOT NULL,
+                new_channel_id      TEXT NOT NULL,
+                emojis              TEXT NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'crawling',
+                last_crawled_msg_id TEXT,
+                crawl_total         INTEGER DEFAULT 0,
+                crawl_done          INTEGER DEFAULT 0,
+                crawl_failed        INTEGER DEFAULT 0,
+                post_total          INTEGER DEFAULT 0,
+                post_done           INTEGER DEFAULT 0,
+                started_at          REAL NOT NULL,
+                alias_map           TEXT
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_migration_entry (
+                guild_id            TEXT NOT NULL,
+                original_msg_id     TEXT NOT NULL,
+                emoji               TEXT NOT NULL,
+                old_bot_msg_id      TEXT NOT NULL,
+                old_channel_id      TEXT NOT NULL,
+                source_channel_id   TEXT,
+                author_id           TEXT,
+                star_count          INTEGER DEFAULT 0,
+                new_starboard_msg_id TEXT,
+                crawl_status        TEXT NOT NULL DEFAULT 'pending',
+                embed_fallback      TEXT,
+                last_error          TEXT,
+                PRIMARY KEY (original_msg_id, emoji)
+            )
+        ''')
+
     # --- Migration lifecycle ---
 
     def create_migration(self, guild_id, old_channel_id, new_channel_id, emojis, started_at):

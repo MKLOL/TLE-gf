@@ -23,6 +23,77 @@ class StarboardDbMixin(StarboardQueriesDbMixin):
     Leaderboard, alias and per-user-default methods are inherited from
     StarboardQueriesDbMixin (split out to keep this module under 500 lines)."""
 
+    def _create_starboard_tables(self):
+        self.conn.execute(
+            'CREATE TABLE IF NOT EXISTS starboard ('
+            'guild_id     TEXT PRIMARY KEY,'
+            'channel_id   TEXT'
+            ')'
+        )
+        self.conn.execute(
+            'CREATE TABLE IF NOT EXISTS starboard_message ('
+            'original_msg_id    TEXT PRIMARY KEY,'
+            'starboard_msg_id   TEXT,'
+            'guild_id           TEXT'
+            ')'
+        )
+        # Multi-emoji starboard v1 tables
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_config_v1 (
+                guild_id    TEXT PRIMARY KEY,
+                channel_id  TEXT
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_emoji_v1 (
+                guild_id    TEXT,
+                emoji       TEXT,
+                threshold   INTEGER NOT NULL DEFAULT 3,
+                color       INTEGER NOT NULL DEFAULT 16755216,
+                channel_id  TEXT,
+                PRIMARY KEY (guild_id, emoji)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_message_v1 (
+                original_msg_id     TEXT,
+                starboard_msg_id    TEXT,
+                guild_id            TEXT,
+                emoji               TEXT,
+                author_id           TEXT,
+                star_count          INTEGER DEFAULT 0,
+                channel_id          TEXT,
+                PRIMARY KEY (original_msg_id, emoji)
+            )
+        ''')
+        # Starboard reactors — tracks which users reacted with which emoji
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_reactors (
+                original_msg_id TEXT,
+                emoji           TEXT,
+                user_id         TEXT,
+                PRIMARY KEY (original_msg_id, emoji, user_id)
+            )
+        ''')
+        # Starboard emoji aliases — alias emojis that count toward the main emoji
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_alias (
+                guild_id    TEXT,
+                alias_emoji TEXT,
+                main_emoji  TEXT,
+                PRIMARY KEY (guild_id, alias_emoji)
+            )
+        ''')
+        # Per-user default emoji for starboard leaderboard commands
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_starboard_default (
+                guild_id TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                emoji    TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+
     # --- Old starboard methods (kept for migration compatibility) ---
 
     def get_starboard(self, guild_id):
