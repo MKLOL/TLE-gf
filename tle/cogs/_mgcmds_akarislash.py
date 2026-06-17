@@ -11,7 +11,8 @@ from tle.util import discord_common
 
 from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_helpers import MinigameCogError, _SlashCtx
-from tle.cogs._minigame_queens_filters import _split_queens_weekday_filter
+from tle.cogs._minigame_queens_filters import (
+    _split_queens_weekday_filter, _split_queens_rating_date_filter)
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
