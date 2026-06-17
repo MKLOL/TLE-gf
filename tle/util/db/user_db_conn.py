@@ -198,6 +198,24 @@ class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
 
     # Helper functions.
 
+    def _get_channel_setting(self, table, guild_id):
+        """Read the channel_id from a ``(guild_id, channel_id)`` settings table.
+
+        ``table`` is always a hardcoded constant from the calling mixin (never
+        user input). Returns an int channel id, or None if unset.
+        """
+        row = self.conn.execute(
+            f'SELECT channel_id FROM {table} WHERE guild_id = ?', (guild_id,)
+        ).fetchone()
+        return int(row[0]) if row else None
+
+    def _set_channel_setting(self, table, guild_id, channel_id):
+        """Upsert the channel_id for a ``(guild_id, channel_id)`` settings table."""
+        with self.conn:
+            self.conn.execute(
+                f'INSERT OR REPLACE INTO {table} (guild_id, channel_id) VALUES (?, ?)',
+                (guild_id, channel_id))
+
     def _insert_one(self, table: str, columns, values: tuple):
         n = len(values)
         query = '''

@@ -144,18 +144,10 @@ class VcDbMixin:
         return ratings
 
     def set_rated_vc_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO rated_vc_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+        self._set_channel_setting('rated_vc_settings', guild_id, channel_id)
 
     def get_rated_vc_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM rated_vc_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
+        return self._get_channel_setting('rated_vc_settings', guild_id)
 
     def remove_last_ratedvc_participation(self, user_id: str):
         from tle.util.db.user_db_conn import namedtuple_factory

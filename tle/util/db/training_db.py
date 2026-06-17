@@ -47,18 +47,10 @@ class TrainingDbMixin:
         ''')
 
     def set_training_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO training_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+        self._set_channel_setting('training_settings', guild_id, channel_id)
 
     def get_training_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM training_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
+        return self._get_channel_setting('training_settings', guild_id)
 
     def new_training(self, user_id, issue_time, prob, mode, score, lives, time_left):
         from tle.util.db.user_db_conn import Training, TrainingProblemStatus

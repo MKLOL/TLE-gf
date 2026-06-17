@@ -46,18 +46,10 @@ class DuelDbMixin:
         ''')
 
     def set_duel_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO duel_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+        self._set_channel_setting('duel_settings', guild_id, channel_id)
 
     def get_duel_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM duel_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
+        return self._get_channel_setting('duel_settings', guild_id)
 
     def check_duel_challenge(self, userid, guild_id):
         from tle.util.db.user_db_conn import Duel

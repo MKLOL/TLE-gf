@@ -65,18 +65,10 @@ class MiscDbMixin:
         self.conn.commit()
 
     def get_rankup_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM rankup '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
+        return self._get_channel_setting('rankup', guild_id)
 
     def set_rankup_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO rankup '
-                 '(guild_id, channel_id) '
-                 'VALUES (?, ?)')
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+        self._set_channel_setting('rankup', guild_id, channel_id)
 
     def clear_rankup_channel(self, guild_id):
         query = ('DELETE FROM rankup '

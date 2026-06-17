@@ -53,18 +53,10 @@ class LockoutDbMixin:
             ''')
 
     def set_round_channel(self, guild_id, channel_id):
-        query = ('INSERT OR REPLACE INTO round_settings '
-                 ' (guild_id, channel_id) VALUES (?, ?)'
-                 )
-        with self.conn:
-            self.conn.execute(query, (guild_id, channel_id))
+        self._set_channel_setting('round_settings', guild_id, channel_id)
 
     def get_round_channel(self, guild_id):
-        query = ('SELECT channel_id '
-                 'FROM round_settings '
-                 'WHERE guild_id = ?')
-        channel_id = self.conn.execute(query, (guild_id,)).fetchone()
-        return int(channel_id[0]) if channel_id else None
+        return self._get_channel_setting('round_settings', guild_id)
 
     def create_ongoing_round(self, guild_id, timestamp, users, rating, points, problems, duration, repeat):
         query = f'''
