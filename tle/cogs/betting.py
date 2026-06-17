@@ -38,6 +38,7 @@ itself: the ``bet`` group and all ``@bet.command`` callbacks in one class body
 """
 import asyncio
 import logging
+import random
 
 import discord
 from discord.ext import commands
@@ -100,6 +101,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         self._close_timers = {}
         # market_id -> asyncio.Task: coalesced thread intro pool refresh.
         self._pool_refresh_timers = {}
+        self._steal_confirmations = {}  # (guild, user) -> pending steal target
 
     @commands.Cog.listener()
     @discord_common.once
@@ -133,6 +135,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             if not task.done():
                 task.cancel()
         self._pool_refresh_timers.clear()
+        self._steal_confirmations.clear()
 
     # ── Group ──────────────────────────────────────────────────────────
 
@@ -300,6 +303,14 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def daily(self, ctx):
         await self._cmd_daily(ctx)
 
+    @bet.group(name='steal', aliases=['rob'], invoke_without_command=True, brief='Stage a capped once/day steal attempt', usage='@user')
+    async def steal(self, ctx, member: discord.Member = None):
+        await self._cmd_steal(ctx, member)
+
+    @steal.command(name='confirm', aliases=['yes'])
+    async def steal_confirm(self, ctx):
+        await self._cmd_steal_confirm(ctx, random.random() < 0.5)
+
     @bet.command(name='transfer', aliases=['send', 'pay'],
                  brief='Move coins from one user to another (admin)',
                  usage='@from @to <amount|all|percent>')
@@ -325,6 +336,9 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             'mod_setbalance': 'mod set balance',
             'transfer_out': 'transfer sent',
             'transfer_in': 'transfer received',
+            'steal_success': 'steal success',
+            'steal_victim': 'stolen from',
+            'steal_caught': 'caught stealing',
             'adjust': 'adjustment',
             'setbalance': 'set balance',
         }
@@ -343,6 +357,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             note = f' · to <@{row.note}>'
         elif row.action == 'transfer_in' and row.note:
             note = f' · from <@{row.note}>'
+        elif row.action in ('steal_success', 'steal_caught') and row.note:
+            note = f' · target <@{row.note}>'
+        elif row.action == 'steal_victim' and row.note:
+            note = f' · thief <@{row.note}>'
         else:
             note = f' · {discord.utils.escape_markdown(str(row.note))}' if row.note else ''
         label = labels.get(row.action, row.action.replace('_', ' '))

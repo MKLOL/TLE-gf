@@ -24,6 +24,9 @@ from tle.cogs._betting_helpers import (
 logger = logging.getLogger(__name__)
 
 _LB_PER_PAGE = 15
+_STEAL_CONFIRM_TIMEOUT = 60
+_STEAL_COUNTRY = 'romania'
+_STEAL_COUNTRY_MESSAGE = 'You need to be from :flag_ro: Romania to steal.'
 
 
 class BetWalletCmdImplMixin:
@@ -324,3 +327,125 @@ class BetWalletCmdImplMixin:
         name = discord.utils.escape_markdown(member.display_name)
         await ctx.send(embed=discord_common.embed_success(
             f'Set `{name}`\'s balance to **{new}** {_COIN}.'))
+
+    # ── Steal ──────────────────────────────────────────────────────────
+
+    def _steal_pending_key(self, ctx):
+        return (str(ctx.guild.id), str(ctx.author.id))
+
+    def _clear_expired_steal_confirmations(self):
+        now = time.time()
+        expired = [
+            key for key, pending in self._steal_confirmations.items()
+            if now - pending['created_at'] > _STEAL_CONFIRM_TIMEOUT
+        ]
+        for key in expired:
+            self._steal_confirmations.pop(key, None)
+
+    def _require_romanian_stealer(self, ctx):
+        handle = cf_common.user_db.get_handle(ctx.author.id, ctx.guild.id)
+        user = cf_common.user_db.fetch_cf_user(handle) if handle else None
+        country = getattr(user, 'country', None)
+        if not country or country.casefold() != _STEAL_COUNTRY:
+            raise BettingCogError(_STEAL_COUNTRY_MESSAGE)
+
+    async def _cmd_steal(self, ctx, member):
+        if getattr(ctx, 'invoked_subcommand', None) is not None:
+            return
+        self._require_romanian_stealer(ctx)
+        if member is None:
+            raise BettingCogError('Usage: `;bet steal @user`.')
+        if member.id == ctx.author.id:
+            raise BettingCogError('You cannot steal from yourself.')
+        if getattr(member, 'bot', False):
+            raise BettingCogError('You cannot steal from a bot.')
+
+        self._clear_expired_steal_confirmations()
+        allowed, reason, thief_balance, victim_balance, max_stolen = (
+            cf_common.user_db.bet_steal_preview(
+                ctx.guild.id, ctx.author.id, member.id, _utc_today(),
+                constants.BET_START_BALANCE))
+        victim = discord.utils.escape_markdown(member.display_name)
+        if not allowed:
+            if reason == 'already':
+                await ctx.send(embed=discord_common.embed_alert(
+                    f'You already tried to steal today. Balance: '
+                    f'**{thief_balance}** {_COIN}. Resets at 00:00 UTC.'))
+                return
+            if reason == 'missing':
+                await ctx.send(embed=discord_common.embed_alert(
+                    f'`{victim}` does not have a betting wallet yet.'),
+                    allowed_mentions=_no_mentions())
+                return
+            if reason == 'empty':
+                await ctx.send(embed=discord_common.embed_alert(
+                    'There is nothing worth stealing here. You need at least '
+                    f'**2** {_COIN}, and the target must have at least '
+                    f'**2** {_COIN}.'))
+                return
+            raise BettingCogError('You cannot steal from yourself.')
+
+        self._steal_confirmations[self._steal_pending_key(ctx)] = {
+            'victim_id': str(member.id),
+            'victim_name': member.display_name,
+            'created_at': time.time(),
+        }
+        prefix = _bot_prefix()
+        await ctx.send(embed=discord_common.embed_alert(
+            f'You are about to try stealing from `{victim}`.\n'
+            f'If it works, you steal up to **{max_stolen}** {_COIN}. The steal '
+            'is capped by half of your wallet and half of their wallet.\n'
+            'If you get caught by police, your balance becomes **0**.\n'
+            f'This uses your one steal attempt for today. Run '
+            f'`{prefix}bet steal confirm` within '
+            f'{_STEAL_CONFIRM_TIMEOUT} seconds to continue.'),
+            allowed_mentions=_no_mentions())
+
+    async def _cmd_steal_confirm(self, ctx, success):
+        self._require_romanian_stealer(ctx)
+        self._clear_expired_steal_confirmations()
+        pending = self._steal_confirmations.pop(self._steal_pending_key(ctx), None)
+        if pending is None:
+            raise BettingCogError(
+                f'No pending steal attempt. Start with `{_bot_prefix()}bet steal @user`.')
+
+        victim_id = pending['victim_id']
+        get_member = getattr(ctx.guild, 'get_member', lambda _: None)
+        victim_member = get_member(int(victim_id))
+        victim_name = (victim_member.display_name if victim_member is not None
+                       else pending['victim_name'])
+        attempted, reason, thief_balance, victim_balance, stolen = (
+            cf_common.user_db.bet_attempt_steal(
+                ctx.guild.id, ctx.author.id, victim_id, _utc_today(), success,
+                constants.BET_START_BALANCE))
+        thief = discord.utils.escape_markdown(ctx.author.display_name)
+        victim = discord.utils.escape_markdown(victim_name)
+        if not attempted:
+            if reason == 'already':
+                await ctx.send(embed=discord_common.embed_alert(
+                    f'You already tried to steal today. Balance: '
+                    f'**{thief_balance}** {_COIN}. Resets at 00:00 UTC.'))
+                return
+            if reason == 'missing':
+                await ctx.send(embed=discord_common.embed_alert(
+                    f'`{victim}` does not have a betting wallet yet.'),
+                    allowed_mentions=_no_mentions())
+                return
+            if reason == 'empty':
+                await ctx.send(embed=discord_common.embed_alert(
+                    'The steal is no longer possible because the capped amount '
+                    f'is **0** {_COIN}. No attempt was used.'))
+                return
+            raise BettingCogError('You cannot steal from yourself.')
+
+        if reason == 'ok':
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{thief}` stole **{stolen}** {_COIN} from `{victim}`. '
+                f'`{thief}`: **{thief_balance}** {_COIN}. '
+                f'`{victim}`: **{victim_balance}** {_COIN}.'),
+                allowed_mentions=_no_mentions())
+        else:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'`{thief}` got caught by police. Their balance is now '
+                f'**0** {_COIN}.'),
+                allowed_mentions=_no_mentions())
