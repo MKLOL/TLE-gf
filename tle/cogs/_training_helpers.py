@@ -5,13 +5,11 @@ Split out of ``training.py`` to keep each module under the line limit. The
 """
 import html
 import io
-import random
 from enum import IntEnum
 
 import discord
 from discord.ext import commands
 
-from tle.util.db.user_db_conn import TrainingProblemStatus
 from tle.util import codeforces_common as cf_common
 
 # stuff for drawing image

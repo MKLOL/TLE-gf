@@ -3,7 +3,7 @@ from collections import namedtuple
 
 from discord.ext import commands
 
-from tle.util.db.user_db_conn import DuelType, Winner
+from tle.util.db.user_db_conn import DuelType
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.elo import _ELO_CONSTANT

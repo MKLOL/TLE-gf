@@ -6,7 +6,6 @@ import json
 import re
 
 from tle.cogs.starboard import _starboard_content
-from tle import constants
 
 _OLD_BOT_RE = re.compile(
     r'^(.+?)\s+\*\*(\d+)\*\*\s*(?:·\s*.+?\s*)?\|\s*(https://discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+))'

@@ -20,7 +20,7 @@ from tle.util import discord_common
 from tle.cogs._minigame_common import (
     format_duration, normalize_puzzle_date, pick_best_results,
 )
-from tle.cogs._minigame_queens import QUEENS_GAME, normalize_queens_name
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_helpers import MinigameCogError
 
 

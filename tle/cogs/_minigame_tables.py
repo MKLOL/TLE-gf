@@ -23,7 +23,7 @@ from gi.repository import Pango, PangoCairo
 from tle.util import codeforces_common as cf_common
 from tle.util import table
 from tle.util.akari_rating import rank_for_rating
-from tle.cogs._minigame_common import format_duration, normalize_puzzle_date
+from tle.cogs._minigame_common import format_duration
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
 
 

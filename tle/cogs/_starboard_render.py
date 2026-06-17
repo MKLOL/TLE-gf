@@ -12,7 +12,6 @@ import discord
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
-from tle.cogs._starboard_helpers import _emoji_str
 
 logger = logging.getLogger(__name__)
 

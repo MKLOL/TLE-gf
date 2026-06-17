@@ -18,8 +18,6 @@ from tle.util import graph_common as gc
 from tle.cogs._contests_helpers import (
     ContestCogError,
     _apply_vc_deltas,
-    _contest_duration_format,
-    _contest_start_time_format,
     _get_ongoing_vc_participants,
     _MIN_RATED_CONTESTANTS_FOR_RATED_VC,
     _RATED_VC_EXTRA_TIME,

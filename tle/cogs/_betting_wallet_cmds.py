@@ -4,7 +4,6 @@ Plain mixin (not a ``commands.Cog``); mixed into ``Betting``. Holds the
 bet-placing, withdraw and leaderboard flows. The command callbacks live in
 ``betting.py`` and delegate here.
 """
-import asyncio
 import logging
 import time
 

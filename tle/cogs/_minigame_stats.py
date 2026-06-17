@@ -8,7 +8,6 @@ from matplotlib import pyplot as plt
 from matplotlib import dates as mdates
 
 from tle.util import graph_common as gc
-from tle.util.akari_rating import AKARI_RANKS
 from tle.cogs._minigame_common import (
     compute_streak, compute_longest_streak, pick_best_results,
     normalize_puzzle_date, format_duration,
