@@ -303,6 +303,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def daily(self, ctx):
         await self._cmd_daily(ctx)
 
+    # Provenance: the gated `;bet steal` / `;bet rob` command was originally
+    # authored by robert9524 <robertkocharyan9524@gmail.com> in commit d4307ec
+    # ("Add gated betting steal command", 2026-06-17) and ported onto the split
+    # betting cog here. Credit where due. :)
     @bet.group(name='steal', aliases=['rob'], invoke_without_command=True, brief='Stage a capped once/day steal attempt', usage='@user')
     async def steal(self, ctx, member: discord.Member = None):
         await self._cmd_steal(ctx, member)
