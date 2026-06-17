@@ -181,10 +181,18 @@ class BetWalletCmdImplMixin:
 
     # ── Wallet accounts ────────────────────────────────────────────────
 
+    def _bet_start_balance(self, guild_id):
+        """The balance a first-time wallet in this guild is seeded with: the
+        base start balance plus any ``;bet grantall`` bonus the guild has
+        accumulated. Used everywhere a wallet may be lazily created so a member
+        who joins the economy after a grantall starts at the raised amount."""
+        return (constants.BET_START_BALANCE
+                + cf_common.user_db.bet_get_start_bonus(guild_id))
+
     async def _cmd_balance(self, ctx, member):
         target = member or ctx.author
         bal = cf_common.user_db.bet_ensure_wallet(
-            ctx.guild.id, target.id, constants.BET_START_BALANCE)
+            ctx.guild.id, target.id, self._bet_start_balance(ctx.guild.id))
         who = 'You have' if target == ctx.author else \
             f'{discord.utils.escape_markdown(target.display_name)} has'
         await ctx.send(embed=discord_common.embed_neutral(
@@ -192,7 +200,7 @@ class BetWalletCmdImplMixin:
 
     async def _cmd_me(self, ctx):
         balance = cf_common.user_db.bet_ensure_wallet(
-            ctx.guild.id, ctx.author.id, constants.BET_START_BALANCE)
+            ctx.guild.id, ctx.author.id, self._bet_start_balance(ctx.guild.id))
         wallet = cf_common.user_db.bet_wallet_get(ctx.guild.id, ctx.author.id)
         wallet_rank = rank_line(
             cf_common.user_db.bet_balance_leaderboard(ctx.guild.id),
@@ -243,7 +251,7 @@ class BetWalletCmdImplMixin:
     async def _cmd_daily(self, ctx):
         granted, balance, reason = cf_common.user_db.bet_claim_daily(
             ctx.guild.id, ctx.author.id, _utc_today(),
-            constants.BET_DAILY_AMOUNT, constants.BET_START_BALANCE)
+            constants.BET_DAILY_AMOUNT, self._bet_start_balance(ctx.guild.id))
         if granted:
             await ctx.send(embed=discord_common.embed_success(
                 f'Claimed **+{constants.BET_DAILY_AMOUNT}** {_COIN}. '
@@ -259,7 +267,7 @@ class BetWalletCmdImplMixin:
         if getattr(from_member, 'bot', False) or getattr(to_member, 'bot', False):
             raise BettingCogError('You cannot transfer coins to or from a bot.')
         balance = cf_common.user_db.bet_ensure_wallet(
-            ctx.guild.id, from_member.id, constants.BET_START_BALANCE)
+            ctx.guild.id, from_member.id, self._bet_start_balance(ctx.guild.id))
         amount_value = parse_amount(amount, balance, 1)
         if amount_value is None:
             raise BettingCogError(
@@ -267,7 +275,7 @@ class BetWalletCmdImplMixin:
                 '`50%`, or `all`.')
         ok, reason, sender_balance, receiver_balance = cf_common.user_db.bet_transfer(
             ctx.guild.id, from_member.id, to_member.id, amount_value,
-            constants.BET_START_BALANCE, actor_id=ctx.author.id)
+            self._bet_start_balance(ctx.guild.id), actor_id=ctx.author.id)
         if not ok:
             if reason == 'insufficient':
                 raise BettingCogError(
@@ -301,7 +309,7 @@ class BetWalletCmdImplMixin:
         if amount <= 0:
             raise BettingCogError('Amount must be a positive whole number.')
         new = cf_common.user_db.bet_adjust_balance(
-            ctx.guild.id, member.id, amount, constants.BET_START_BALANCE,
+            ctx.guild.id, member.id, amount, self._bet_start_balance(ctx.guild.id),
             actor_id=ctx.author.id, action='admin_grant')
         name = discord.utils.escape_markdown(member.display_name)
         await ctx.send(embed=discord_common.embed_success(
@@ -311,7 +319,7 @@ class BetWalletCmdImplMixin:
         if amount <= 0:
             raise BettingCogError('Amount must be a positive whole number.')
         new = cf_common.user_db.bet_adjust_balance(
-            ctx.guild.id, member.id, -amount, constants.BET_START_BALANCE,
+            ctx.guild.id, member.id, -amount, self._bet_start_balance(ctx.guild.id),
             actor_id=ctx.author.id, action='admin_take')
         name = discord.utils.escape_markdown(member.display_name)
         await ctx.send(embed=discord_common.embed_success(
@@ -321,11 +329,36 @@ class BetWalletCmdImplMixin:
         if amount < 0:
             raise BettingCogError('Balance cannot be negative.')
         new = cf_common.user_db.bet_set_balance(
-            ctx.guild.id, member.id, amount, constants.BET_START_BALANCE,
+            ctx.guild.id, member.id, amount, self._bet_start_balance(ctx.guild.id),
             actor_id=ctx.author.id, action='admin_setbalance')
         name = discord.utils.escape_markdown(member.display_name)
         await ctx.send(embed=discord_common.embed_success(
             f'Set `{name}`\'s balance to **{new}** {_COIN}.'))
+
+    async def _cmd_grant_all(self, ctx, amount, *, revert=False):
+        """Give every existing wallet `amount` coins and raise the guild's
+        starting balance by the same, so members who join later start higher
+        too. `revert=True` claws the same amount back (floored at 0)."""
+        if amount <= 0:
+            raise BettingCogError('Amount must be a positive whole number.')
+        signed = -amount if revert else amount
+        changed, new_bonus = cf_common.user_db.bet_grant_all(
+            ctx.guild.id, signed, actor_id=ctx.author.id)
+        start = constants.BET_START_BALANCE + new_bonus
+        prefix = _bot_prefix()
+        if revert:
+            tail = (f'New members now start with **{start}** {_COIN}'
+                    + (f' (base {constants.BET_START_BALANCE} + {new_bonus} '
+                       'bonus).' if new_bonus else ', back to the base.'))
+            await ctx.send(embed=discord_common.embed_success(
+                f'Clawed back **{amount}** {_COIN} from **{changed}** wallet(s). '
+                f'{tail}'))
+        else:
+            await ctx.send(embed=discord_common.embed_success(
+                f'Granted **+{amount}** {_COIN} to **{changed}** wallet(s). '
+                f'New members now start with **{start}** {_COIN} '
+                f'(base {constants.BET_START_BALANCE} + {new_bonus} bonus). '
+                f'Undo with `{prefix}bet ungrantall {amount}`.'))
 
     # ── Steal ──────────────────────────────────────────────────────────
 
@@ -363,7 +396,7 @@ class BetWalletCmdImplMixin:
         allowed, reason, thief_balance, victim_balance, max_stolen = (
             cf_common.user_db.bet_steal_preview(
                 ctx.guild.id, ctx.author.id, member.id, _utc_today(),
-                constants.BET_START_BALANCE))
+                self._bet_start_balance(ctx.guild.id)))
         victim = discord.utils.escape_markdown(member.display_name)
         if not allowed:
             if reason == 'already':
@@ -416,7 +449,7 @@ class BetWalletCmdImplMixin:
         attempted, reason, thief_balance, victim_balance, stolen = (
             cf_common.user_db.bet_attempt_steal(
                 ctx.guild.id, ctx.author.id, victim_id, _utc_today(), success,
-                constants.BET_START_BALANCE))
+                self._bet_start_balance(ctx.guild.id)))
         thief = discord.utils.escape_markdown(ctx.author.display_name)
         victim = discord.utils.escape_markdown(victim_name)
         if not attempted:

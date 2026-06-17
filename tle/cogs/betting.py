@@ -145,7 +145,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def bet(self, ctx):
         """Show the active market here and your balance."""
         balance = cf_common.user_db.bet_ensure_wallet(
-            ctx.guild.id, ctx.author.id, constants.BET_START_BALANCE)
+            ctx.guild.id, ctx.author.id, self._bet_start_balance(ctx.guild.id))
         market = self._find_market(ctx)
         if market is None:
             configured = cf_common.user_db.get_guild_config(
@@ -323,54 +323,6 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                        to_member: discord.Member, amount: str):
         await self._cmd_transfer(ctx, from_member, to_member, amount)
 
-    def _wallet_txn_line(self, row):
-        labels = {
-            'init': 'wallet opened',
-            'daily': 'daily claim',
-            'wager_refund': 're-bet refund',
-            'wager_stake': 'wager',
-            'payout': 'payout',
-            'resettle_delta': 'correction',
-            'void_refund': 'void refund',
-            'admin_grant': 'admin grant',
-            'admin_take': 'admin take',
-            'admin_setbalance': 'admin set balance',
-            'mod_grant': 'mod grant',
-            'mod_take': 'mod take',
-            'mod_setbalance': 'mod set balance',
-            'transfer_out': 'transfer sent',
-            'transfer_in': 'transfer received',
-            'steal_success': 'steal success',
-            'steal_victim': 'stolen from',
-            'steal_caught': 'caught stealing',
-            'adjust': 'adjustment',
-            'setbalance': 'set balance',
-        }
-        sign = '+' if row.amount > 0 else ''
-        actor = ''
-        if row.action == 'transfer_out':
-            if row.actor_id and str(row.actor_id) != str(row.user_id):
-                actor = f' by <@{row.actor_id}>'
-        elif row.action == 'transfer_in':
-            if row.actor_id and row.note and str(row.actor_id) != str(row.note):
-                actor = f' by <@{row.actor_id}>'
-        elif row.actor_id and str(row.actor_id) != str(row.user_id):
-            actor = f' by <@{row.actor_id}>'
-        market = f' · market #{row.market_id}' if row.market_id is not None else ''
-        if row.action == 'transfer_out' and row.note:
-            note = f' · to <@{row.note}>'
-        elif row.action == 'transfer_in' and row.note:
-            note = f' · from <@{row.note}>'
-        elif row.action in ('steal_success', 'steal_caught') and row.note:
-            note = f' · target <@{row.note}>'
-        elif row.action == 'steal_victim' and row.note:
-            note = f' · thief <@{row.note}>'
-        else:
-            note = f' · {discord.utils.escape_markdown(str(row.note))}' if row.note else ''
-        label = labels.get(row.action, row.action.replace('_', ' '))
-        return (f'<t:{int(row.created_at)}:R> — **{sign}{row.amount}** {_COIN} '
-                f'({label}{actor}{market}{note}) → **{row.balance_after}**')
-
     @bet.command(name='history', aliases=['walletlog', 'ledger'],
                  brief='Show wallet audit history', usage='[@user]')
     async def history(self, ctx, member: discord.Member = None):
@@ -433,6 +385,19 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @commands.has_role(constants.TLE_ADMIN)
     async def setbalance(self, ctx, member: discord.Member, amount: int):
         await self._cmd_setbalance(ctx, member, amount)
+
+    @bet.command(name='grantall', aliases=['granteveryone', 'allgrant'],
+                 brief='Give every wallet coins and raise the start balance (admin)',
+                 usage='<amount>')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def grantall(self, ctx, amount: int):
+        await self._cmd_grant_all(ctx, amount)
+
+    @bet.command(name='ungrantall', aliases=['revertgrantall', 'grantallundo'],
+                 brief='Reverse a ;bet grantall (admin)', usage='<amount>')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def ungrantall(self, ctx, amount: int):
+        await self._cmd_grant_all(ctx, amount, revert=True)
 
     @bet.command(name='pause', brief='Stop auto-opening new markets (admin)')
     @commands.has_role(constants.TLE_ADMIN)

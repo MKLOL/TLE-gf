@@ -379,3 +379,68 @@ class TestHistoryCommand:
 
         assert len(ctx.sent) == 1
         assert ctx.sent[0].title == 'Wallet history — Bob'
+
+
+class TestGrantAllCommand:
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def _ctx(self):
+        admin = type('Member', (), {'id': '999', 'display_name': 'Admin'})()
+
+        class _Ctx:
+            def __init__(self):
+                self.guild = type('G', (), {'id': int(GUILD)})()
+                self.author = admin
+                self.sent = []
+
+            async def send(self, embed=None, **kw):
+                self.sent.append(embed)
+
+        return _Ctx()
+
+    def _setup(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.util import discord_common
+        from tle import constants
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(discord_common, '_BOT_PREFIX', ';', raising=False)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+
+    def test_grantall_pays_everyone_and_raises_seed(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        self._setup(db, monkeypatch)
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        db.bet_ensure_wallet(GUILD, USER_B, 1000)
+        ctx = self._ctx()
+        cog = Betting(bot=None)
+
+        self._run(Betting.grantall.__wrapped__(cog, ctx, 500))
+
+        assert db.bet_get_balance(GUILD, USER_A) == 1500
+        assert db.bet_get_balance(GUILD, USER_B) == 1500
+        # A member who joins the economy later now seeds at the raised amount.
+        assert cog._bet_start_balance(int(GUILD)) == 1500
+        assert len(ctx.sent) == 1
+
+    def test_ungrantall_reverts_the_grant(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        self._setup(db, monkeypatch)
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        ctx = self._ctx()
+        cog = Betting(bot=None)
+
+        self._run(Betting.grantall.__wrapped__(cog, ctx, 500))
+        self._run(Betting.ungrantall.__wrapped__(cog, ctx, 500))
+
+        assert db.bet_get_balance(GUILD, USER_A) == 1000
+        assert cog._bet_start_balance(int(GUILD)) == 1000
+
+    def test_grantall_rejects_non_positive(self, db, monkeypatch):
+        from tle.cogs.betting import Betting, BettingCogError
+        self._setup(db, monkeypatch)
+        ctx = self._ctx()
+        cog = Betting(bot=None)
+        with pytest.raises(BettingCogError):
+            self._run(Betting.grantall.__wrapped__(cog, ctx, 0))

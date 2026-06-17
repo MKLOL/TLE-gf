@@ -241,7 +241,7 @@ class TestBettingStaffPermissions:
         from pathlib import Path
         source = Path('tle/cogs/betting.py').read_text()
         block = source[source.index("@bet.command(name='transfer'"):
-                       source.index('    def _wallet_txn_line')]
+                       source.index("@bet.command(name='history'")]
         assert '@commands.has_role(constants.TLE_ADMIN)' in block
 
 

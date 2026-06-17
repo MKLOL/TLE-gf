@@ -24,6 +24,7 @@ from tle.util.db.greatday_db import GreatdayDbMixin
 from tle.util.db.kvs_db import KvsDbMixin
 from tle.util.db.misc_db import MiscDbMixin
 from tle.util.db.betting_wallet_db import BettingWalletDbMixin
+from tle.util.db.betting_steal_db import BettingStealDbMixin
 from tle.util.db.betting_market_db import BettingMarketDbMixin
 from tle.util.db.betting_wager_db import BettingWagerDbMixin
 
@@ -142,7 +143,8 @@ def namedtuple_factory(cursor, row):
 class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
                  VcDbMixin, LockoutDbMixin, RpollDbMixin, ComplaintDbMixin,
                  GreatdayDbMixin, KvsDbMixin, MiscDbMixin,
-                 BettingWalletDbMixin, BettingMarketDbMixin, BettingWagerDbMixin,
+                 BettingWalletDbMixin, BettingStealDbMixin, BettingMarketDbMixin,
+                 BettingWagerDbMixin,
                  MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def __init__(self, dbfile):
         logger.info(f'Opening user database: {dbfile}')

@@ -304,3 +304,71 @@ class TestPool:
         assert rows[0].market_id == mid
         assert rows[0].thread_id == THREAD
         assert rows[0].pick == 'home'
+
+
+USER_C = '300'
+
+
+class TestGrantAll:
+    def test_no_bonus_by_default(self, db):
+        assert db.bet_get_start_bonus(GUILD) == 0
+
+    def test_grants_all_existing_wallets_and_raises_bonus(self, db):
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        db.bet_ensure_wallet(GUILD, USER_B, 1000)
+        changed, bonus = db.bet_grant_all(GUILD, 500, actor_id='999')
+        assert (changed, bonus) == (2, 500)
+        assert db.bet_get_balance(GUILD, USER_A) == 1500
+        assert db.bet_get_balance(GUILD, USER_B) == 1500
+        assert db.bet_get_start_bonus(GUILD) == 500
+
+    def test_future_joiner_seeds_at_raised_balance(self, db):
+        db.bet_grant_all(GUILD, 500)
+        # The cog seeds new wallets at base + bonus; a member who never
+        # participated keeps no row until then.
+        assert db.bet_get_balance(GUILD, USER_C) is None
+        seed = 1000 + db.bet_get_start_bonus(GUILD)
+        assert db.bet_ensure_wallet(GUILD, USER_C, seed) == 1500
+
+    def test_bonus_accumulates_across_grants(self, db):
+        db.bet_grant_all(GUILD, 500)
+        _, bonus = db.bet_grant_all(GUILD, 250)
+        assert bonus == 750
+
+    def test_only_touches_wallets_never_creates_them(self, db):
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        changed, _ = db.bet_grant_all(GUILD, 500)
+        assert changed == 1
+        assert db.bet_get_balance(GUILD, USER_B) is None
+
+    def test_revert_subtracts_and_lowers_bonus(self, db):
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        db.bet_grant_all(GUILD, 500)            # A -> 1500, bonus 500
+        changed, bonus = db.bet_grant_all(GUILD, -500)
+        assert (changed, bonus) == (1, 0)
+        assert db.bet_get_balance(GUILD, USER_A) == 1000
+
+    def test_revert_floors_wallets_and_bonus_at_zero(self, db):
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        db.bet_grant_all(GUILD, 500)
+        db.bet_set_balance(GUILD, USER_A, 200, 1000)   # spent most of it
+        _, bonus = db.bet_grant_all(GUILD, -800)       # over-claw
+        assert db.bet_get_balance(GUILD, USER_A) == 0  # floored, not negative
+        assert bonus == 0                              # floored, not -300
+
+    def test_logs_ledger_entries(self, db):
+        db.bet_ensure_wallet(GUILD, USER_A, 1000)
+        db.bet_grant_all(GUILD, 500, actor_id='999')
+        db.bet_grant_all(GUILD, -200, actor_id='999')
+        hist = db.bet_wallet_history(GUILD, USER_A)
+        actions = [(h.action, h.amount, h.balance_after) for h in hist]
+        assert ('grantall', 500, 1500) in actions
+        assert ('grantall_revert', -200, 1300) in actions
+
+    def test_guild_isolation(self, db):
+        db.bet_ensure_wallet('111', USER_A, 1000)
+        db.bet_ensure_wallet('222', USER_A, 1000)
+        db.bet_grant_all('111', 500)
+        assert db.bet_get_balance('111', USER_A) == 1500
+        assert db.bet_get_balance('222', USER_A) == 1000
+        assert db.bet_get_start_bonus('222') == 0

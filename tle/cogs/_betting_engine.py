@@ -250,7 +250,7 @@ class BetEngineMixin:
                 'stake': refunded, 'pick': pick, 'label': label,
                 'balance': new_balance})
         balance = cf_common.user_db.bet_ensure_wallet(
-            guild_id, user.id, constants.BET_START_BALANCE)
+            guild_id, user.id, self._bet_start_balance(guild_id))
         existing = cf_common.user_db.bet_get_wager(market.market_id, user.id, pick)
         available = balance + (existing.stake if existing else 0)
         stake = parse_amount(amount_str, available, constants.BET_MIN_STAKE)
@@ -263,7 +263,7 @@ class BetEngineMixin:
             return ('invalid_pick', None)
         ok, reason, new_balance = cf_common.user_db.bet_place(
             guild_id, market.market_id, user.id, pick, stake,
-            time.time(), constants.BET_START_BALANCE)
+            time.time(), self._bet_start_balance(guild_id))
         if ok and reason == 'unchanged':
             return ('unchanged', {
                 'stake': stake, 'odds': odds, 'pick': pick, 'label': label,

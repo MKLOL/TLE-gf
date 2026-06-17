@@ -278,3 +278,53 @@ class BetFormatMixin:
             description='\n'.join(lines), color=0x2ecc71)
         embed.set_footer(text=tag)
         return embed
+
+    def _wallet_txn_line(self, row):
+        labels = {
+            'init': 'wallet opened',
+            'daily': 'daily claim',
+            'wager_refund': 're-bet refund',
+            'wager_stake': 'wager',
+            'payout': 'payout',
+            'resettle_delta': 'correction',
+            'void_refund': 'void refund',
+            'admin_grant': 'admin grant',
+            'admin_take': 'admin take',
+            'admin_setbalance': 'admin set balance',
+            'grantall': 'grant-all',
+            'grantall_revert': 'grant-all revert',
+            'mod_grant': 'mod grant',
+            'mod_take': 'mod take',
+            'mod_setbalance': 'mod set balance',
+            'transfer_out': 'transfer sent',
+            'transfer_in': 'transfer received',
+            'steal_success': 'steal success',
+            'steal_victim': 'stolen from',
+            'steal_caught': 'caught stealing',
+            'adjust': 'adjustment',
+            'setbalance': 'set balance',
+        }
+        sign = '+' if row.amount > 0 else ''
+        actor = ''
+        if row.action == 'transfer_out':
+            if row.actor_id and str(row.actor_id) != str(row.user_id):
+                actor = f' by <@{row.actor_id}>'
+        elif row.action == 'transfer_in':
+            if row.actor_id and row.note and str(row.actor_id) != str(row.note):
+                actor = f' by <@{row.actor_id}>'
+        elif row.actor_id and str(row.actor_id) != str(row.user_id):
+            actor = f' by <@{row.actor_id}>'
+        market = f' · market #{row.market_id}' if row.market_id is not None else ''
+        if row.action == 'transfer_out' and row.note:
+            note = f' · to <@{row.note}>'
+        elif row.action == 'transfer_in' and row.note:
+            note = f' · from <@{row.note}>'
+        elif row.action in ('steal_success', 'steal_caught') and row.note:
+            note = f' · target <@{row.note}>'
+        elif row.action == 'steal_victim' and row.note:
+            note = f' · thief <@{row.note}>'
+        else:
+            note = f' · {discord.utils.escape_markdown(str(row.note))}' if row.note else ''
+        label = labels.get(row.action, row.action.replace('_', ' '))
+        return (f'<t:{int(row.created_at)}:R> — **{sign}{row.amount}** {_COIN} '
+                f'({label}{actor}{market}{note}) → **{row.balance_after}**')
