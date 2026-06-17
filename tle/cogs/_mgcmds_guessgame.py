@@ -1,49 +1,14 @@
 """GuessGame text command group + the ;minigames parent group (Minigames cog command mixin; see minigames.py)."""
 
-from typing import Optional
 
-import asyncio
-import datetime as dt
-import json
-import os
-import sys
-import time
 
-import discord
-from discord import app_commands
 from discord.ext import commands
 
 from tle import constants
-from tle.util import codeforces_common as cf_common
-from tle.util import discord_common
-from tle.util import paginator
 
-from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
-from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
-    _SlashCtx, _safe_member_name, _safe_user_name, _format_akari_ban_line,
-)
-from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
-from tle.cogs._minigame_queens_cog import (
-    _QueensAnonymousRegisterView, _QUEENS_ANONYMOUS_FLAGS,
-    _QUEENS_HISTORY_PER_PAGE, _QUEENS_UPDATE_THROTTLE_SECONDS,
-    _QUEENS_DAILY_UPDATE_TIME, _QUEENS_DAILY_UPDATE_TZ,
-    _QUEENS_LINKEDIN_NAME_KEY, _QUEENS_UPDATE_THROTTLE_PREFIX,
-    _QUEENS_STATE_PATH_KEY, _QUEENS_DEFAULT_STATE_PATH,
-    _QUEENS_PLAYWRIGHT_PLATFORM, _QUEENS_STATE_MAX_BYTES,
-    _QUEENS_IMPORTER_KEY, _QUEENS_BACKFILL_MAX_BYTES,
-    _is_queens_anonymous_modal_request, _split_queens_anonymous_flag,
-    _split_queens_connection_account_text, _queens_public_link_name,
-    _parse_queens_update_args,
-)
-from tle.cogs._minigame_queens_filters import (
-    _split_queens_weekday_filter, _split_queens_rating_date_filter,
-    _format_queens_weekday_filter, _format_queens_date_filter,
-)
-from tle.cogs._minigame_slash_consts import (
-    _TIMEFRAME_CHOICES, _MODE_CHOICES,
+    ChannelOrThread, CaseInsensitiveMember,
 )
 
 logger = __import__('logging').getLogger(__name__)

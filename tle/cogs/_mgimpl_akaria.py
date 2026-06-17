@@ -1,100 +1,26 @@
 """Akari add/ratings and rating-replay helpers. (Minigames cog impl mixin; see minigames.py)."""
 
-import asyncio
 import datetime as dt
-import io
-import json
 import logging
-import os
-import pathlib
-import sqlite3
-import sys
-import time
-import zipfile
-from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
-import discord
-from discord import app_commands
-from discord.ext import commands
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-from tle.util import paginator
-from tle.util import tasks
-from tle.util.akari_rating import rank_for_rating
 from tle.util.minigame_rating import compute_ratings
-from tle.util.db.minigame_db import (
-    merged_minigame_winners, diff_merged_winners,
-)
 
-from tle.cogs._migrate_retry import discord_retry, RetryExhaustedError
 from tle.cogs._minigame_common import (
-    compute_vs, compute_vs_matchups, compute_streak, compute_longest_streak,
-    compute_top, pick_best_results, format_duration, normalize_puzzle_date,
-    parse_date_args, resolve_scoring, strip_codeblock, _NO_TIME_BOUND,
+    format_duration,
 )
 from tle.cogs._minigame_akari import (
-    AKARI_GAME, akari_date_number_mismatch, expected_puzzle_number,
-    looks_like_non_pro_akari, puzzle_date_for,
-)
-from tle.cogs._minigame_guessgame import GUESSGAME_GAME
-from tle.cogs._minigame_queens import (
-    QUEENS_GAME, normalize_queens_name, parse_queens_leaderboard,
-    parse_queens_time, queens_status_flags,
-)
-from tle.cogs._minigame_stats import (
-    plot_akari_performance, plot_akari_rating,
-    plot_akari_stats, plot_guessgame_stats, plot_queens_stats,
+    AKARI_GAME, puzzle_date_for,
 )
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, CaseInsensitiveMember, _mg, _safe_member_name,
-    _safe_user_name, _safe_cf_handle,
-    _legend_name_for, _format_score, _format_akari_history_line,
-    _format_minigame_history_line, _format_akari_ban_line, _ScheduledCtx,
+    MinigameCogError, _mg, _safe_member_name,
 )
 from tle.cogs._minigame_tables import (
-    _PuzzlePlayerInfo, _maybe_parse_puzzle_selector,
-    _get_akari_puzzle_table_image_file, _get_akari_rating_table_image_file,
-    _get_queens_results_table_image_file,
+    _PuzzlePlayerInfo,
 )
-from tle.cogs._minigame_queens_filters import (
-    _split_queens_weekday_filter, _filter_queens_weekday_rows,
-    _split_queens_rating_date_filter, _split_queens_recalculate_filter,
-    _filter_queens_rating_date_rows, _filter_queens_rating_date_history,
-    _format_queens_weekday_filter, _queens_weekday_filter_suffix,
-    _format_queens_date_filter, _queens_filter_suffix,
-    _filter_queens_contested_rating_history,
-)
-from tle.cogs._minigame_queens_cog import (
-    _QueensResolvedEntry, _QueensImportPreview, _QueensImportSaveResult,
-    _QueensBackfillResult, _QueensPendingRegistration,
-    _QUEENS_CONNECTION_ACCOUNT_KEY, _QUEENS_DEFAULT_CONNECTION_ACCOUNT,
-    _QUEENS_ANONYMOUS_LINK_MARKER, _QUEENS_ANONYMOUS_LABEL,
-    _QUEENS_ANONYMOUS_FLAGS, _QUEENS_PENDING_REGISTRATION_DELAY,
-    _QUEENS_CONNECT_TIMEOUT, _QUEENS_IMPORTER_KEY, _QUEENS_LINKEDIN_NAME_KEY,
-    _QUEENS_ADMINS_KEY, _QUEENS_STATE_PATH_KEY, _QUEENS_UPDATE_THROTTLE_PREFIX,
-    _QUEENS_UPDATE_THROTTLE_SECONDS, _QUEENS_DAILY_UPDATE_LAST_PREFIX,
-    _QUEENS_DAILY_UPDATE_CHECK_INTERVAL, _QUEENS_DAILY_UPDATE_PRECISE_WINDOW,
-    _QUEENS_DAILY_UPDATE_TIME, _QUEENS_DAILY_UPDATE_TZ,
-    _QUEENS_AUTO_PLAY_MIN_SECONDS, _QUEENS_SCRAPER_TIMEOUT,
-    _QUEENS_WHOAMI_TIMEOUT, _QUEENS_PLAYWRIGHT_PLATFORM,
-    _QUEENS_STATE_MAX_BYTES, _QUEENS_BACKFILL_MAX_BYTES, _QUEENS_HISTORY_PER_PAGE,
-    _parse_queens_date, _queens_puzzle_number_for_date,
-    _queens_date_for_puzzle_number, _parse_queens_date_or_number,
-    _queens_update_target_date, _queens_daily_update_target_datetime,
-    _parse_queens_update_args, _queens_puzzle_numbers_for_date,
-    _queens_puzzle_date_text, _queens_result_message_id, _format_queens_date,
-    _is_queens_link_anonymous, _queens_public_link_name,
-    _split_queens_anonymous_flag, _is_queens_anonymous_modal_request,
-    _clean_queens_linkedin_name, _split_queens_connection_account_text,
-    _format_queens_result, _queens_best_results_by_date, _queens_streak_info,
-    _QueensAnonymousRegisterModal, _QueensAnonymousRegisterView,
-    _QUEENS_SCRAPER_SCRIPT, _QUEENS_DEFAULT_STATE_PATH,
-    _AKARI_DIFF_MAX_BYTES, _IMPORT_BATCH_SIZE, _IMPORT_RATE_DELAY,
-)
-from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
 
 logger = logging.getLogger(__name__)
 

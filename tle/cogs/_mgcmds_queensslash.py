@@ -7,13 +7,9 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from tle import constants
-from tle.util import discord_common
 
-from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_queens import QUEENS_GAME
-from tle.cogs._minigame_helpers import MinigameCogError, _mg, _SlashCtx
-from tle.cogs._minigame_queens_filters import _split_queens_weekday_filter
+from tle.cogs._minigame_helpers import _SlashCtx
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
