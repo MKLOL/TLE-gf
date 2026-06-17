@@ -9,28 +9,34 @@ imports by name or monkeypatches via ``tle.cogs.minigames``.
 
 import logging
 
-# Module objects the test suite patches attributes on
-# (``minigames_module.cairo``/``Pango``/``PangoCairo``/``discord``); importing
-# them here makes those names resolve to the shared module objects, so the
-# patches propagate to the table renderers in ``_minigame_tables``.
-import cairo
-import discord
+# Module objects / names the test suite patches as attributes of this module
+# (``minigames_module.cairo``/``Pango``/``PangoCairo``/``discord``/``ZoneInfo``);
+# importing them here makes those names resolve to the shared module objects, so
+# the patches propagate to the table renderers in ``_minigame_tables``.  They are
+# unused in this module's own body, hence the per-line F401 suppressions — keep
+# them; an auto-import-pruner (ruff --fix / autoflake) would otherwise silently
+# remove these patch points and break the tests and table rendering.
+import cairo  # noqa: F401
+import discord  # noqa: F401
 import gi
 gi.require_version('Pango', '1.0')
 gi.require_version('PangoCairo', '1.0')
-from gi.repository import Pango, PangoCairo
-from zoneinfo import ZoneInfo
+from gi.repository import Pango, PangoCairo  # noqa: F401
+from zoneinfo import ZoneInfo  # noqa: F401
 
 from discord.ext import commands
 
-from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-from tle.util import paginator
+# Kept so tests can patch ``minigames_module.paginator.paginate``.
+from tle.util import paginator  # noqa: F401
 
-from tle.cogs._minigame_akari import AKARI_GAME, expected_puzzle_number
+# ``expected_puzzle_number`` is reached via the ``_mg()`` indirection and
+# ``normalize_puzzle_date`` via ``minigames_module.normalize_puzzle_date`` in
+# tests, so both must stay module attributes here even though unused in-body.
+from tle.cogs._minigame_akari import AKARI_GAME, expected_puzzle_number  # noqa: F401
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
 from tle.cogs._minigame_queens import QUEENS_GAME
-from tle.cogs._minigame_common import normalize_puzzle_date
+from tle.cogs._minigame_common import normalize_puzzle_date  # noqa: F401
 
 # ── Re-exports for the test suite and downstream importers ──────────────
 from tle.cogs._minigame_helpers import (  # noqa: F401

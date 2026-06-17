@@ -412,14 +412,6 @@ def _akari_rating_table_rows(guild, rating_rows, registrants, *,
     return rows
 
 
-# History-line and ban-line formatters moved to _minigame_helpers; re-exported
-# here for any caller that still imports them from this module.
-from tle.cogs._minigame_helpers import (  # noqa: E402,F401
-    _format_akari_history_line, _format_minigame_history_line,
-    _format_akari_ban_line,
-)
-
-
 def _akari_row_text_color(rating):
     """Per-row text colour for the rating leaderboard image.
 

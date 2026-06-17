@@ -15,7 +15,7 @@ from tle.cogs._minigame_common import (
 # Re-exported so callers (and the test suite) keep importing the rating /
 # performance line plots from this module after they moved to _stats_plots.
 from tle.cogs._minigame_stats_plots import (  # noqa: F401
-    _plot_akari_multi, plot_akari_rating, plot_akari_performance,
+    plot_akari_rating, plot_akari_performance,
 )
 
 # ── Akari ──────────────────────────────────────────────────────────────
