@@ -75,21 +75,27 @@ async def fetch_akari_difficulties(puzzle_numbers, *, session=None):
             entries = payload.get('entries') or []
             if not entries:
                 break
+            page_numbers = []
             for entry in entries:
                 try:
                     number = int(entry['dailyNumber'])
                     difficulty = int(entry['difficulty'])
                 except (KeyError, TypeError, ValueError):
                     continue
+                page_numbers.append(number)
                 if number in remaining and 1 <= difficulty <= 5:
                     found[number] = difficulty
             remaining = wanted - set(found)
-            oldest = min(int(entry.get('dailyNumber', 10 ** 12))
-                         for entry in entries)
             if not payload.get('areMore', payload.get('are_more', True)):
                 break
-            if oldest <= min(remaining, default=oldest):
-                break
+            # The archive is sorted newest-first; once a page's oldest puzzle
+            # has dropped below every number we still want, nothing deeper can
+            # match.  Derive ``oldest`` from the numbers we actually parsed so a
+            # single malformed entry can't abort the whole fetch.
+            if page_numbers:
+                oldest = min(page_numbers)
+                if oldest <= min(remaining, default=oldest):
+                    break
             page += 1
     finally:
         if own_session:

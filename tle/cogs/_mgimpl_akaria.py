@@ -126,12 +126,17 @@ class ImplAkariAMixin:
         filtered out — they're never a real player, just a stale row.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
+        registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
                 ctx.guild.id,
                 excluded_ids=excluded_ids,
                 included_ids=included_ids,
             )
+            # The public board honours the rating opt-out: unregistered
+            # players are dropped from the provisional scores table too, not
+            # just from the rating table (the debug command shows everyone).
+            standings = [s for s in standings if s.user_id in registrants]
         elif excluded_ids or included_ids or test_decay:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
@@ -142,7 +147,6 @@ class ImplAkariAMixin:
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} ratings yet. They appear once '
                 f'players post results.')
-        registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         registered = [r for r in rows if r.user_id in registrants]
         if not registered and not (weekly and standings):
             raise MinigameCogError(
@@ -239,10 +243,12 @@ class ImplAkariAMixin:
             logger.warning('Could not refresh Daily Akari difficulties',
                            exc_info=True)
             return cached
-        if fetched:
+        valid = {number: difficulty for number, difficulty in fetched.items()
+                 if 1 <= int(difficulty) <= 5}
+        if valid:
             cf_common.user_db.upsert_akari_puzzle_difficulties(
-                fetched, time.time())
-            cached.update(fetched)
+                valid, time.time())
+            cached.update(valid)
         return cached
 
     @staticmethod

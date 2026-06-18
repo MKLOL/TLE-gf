@@ -54,3 +54,33 @@ def test_fetches_current_and_paginates_archive():
     assert found == {529: 4, 527: 2, 526: 5}
     assert [url.rsplit('/', 1)[-1] for url, _params in session.calls] == [
         'dailypuzzle', 'archivelist', 'archivelist']
+
+
+class _MalformedSession:
+    """An archive page with a null / non-numeric ``dailyNumber`` entry."""
+
+    def get(self, url, params=None):
+        if url.endswith('/dailypuzzle'):
+            return _Response({'dailyNumber': 0, 'difficulty': 0})
+        page = int(params['page'])
+        if page == 1:
+            return _Response({
+                'entries': [
+                    {'dailyNumber': 600, 'difficulty': 3},
+                    {'dailyNumber': None, 'difficulty': 4},
+                    {'dailyNumber': 'oops', 'difficulty': 2},
+                ],
+                'areMore': True,
+            })
+        return _Response({
+            'entries': [{'dailyNumber': 598, 'difficulty': 5}],
+            'areMore': False,
+        })
+
+
+def test_malformed_archive_entry_does_not_abort_fetch():
+    # A bad entry must be skipped, not crash the whole paginated fetch, so the
+    # good puzzles on the same and later pages are still returned.
+    found = asyncio.run(fetch_akari_difficulties(
+        {600, 598}, session=_MalformedSession()))
+    assert found == {600: 3, 598: 5}

@@ -194,3 +194,61 @@ class TestWeeklyCommand:
         assert 'weekly preview' in sent[0]['file'][1]
         assert sent[1]['file'][0] == 'weekly'
         assert sent[1]['file'][2] == ['20', '10']
+
+    def test_public_weekly_scores_hide_opted_out_players(
+            self, db, monkeypatch):
+        """An unregistered player must not leak into the public scores table."""
+        from tle.cogs import minigames as minigames_module
+        from tle.cogs._minigame_akari import expected_puzzle_number
+        from tle.util import codeforces_common as cf_common
+
+        db.set_guild_config(1, 'akari', '1')
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        today = dt.date.today()
+        monday = today - dt.timedelta(days=today.weekday())
+        previous = monday - dt.timedelta(days=7)
+
+        def save(message, user, day, seconds):
+            db.save_minigame_result(
+                message, 1, 'akari', 10, user,
+                expected_puzzle_number(day), day.isoformat(),
+                100, seconds, True, 'raw')
+
+        save(1, 10, previous, 60)
+        save(2, 20, previous, 120)
+        save(3, 10, monday, 120)
+        save(4, 20, monday, 60)
+        db.unregister_akari_user(1, 10, 1.0)
+
+        cog = minigames_module.Minigames(bot=None)
+
+        async def no_fetch(_numbers):
+            return {}
+
+        monkeypatch.setattr(cog, '_akari_difficulty_map', no_fetch)
+        weekly_sent = []
+        monkeypatch.setattr(
+            minigames_module, '_get_akari_rating_table_image_file',
+            lambda *args, **kwargs: ('ratings', kwargs['title']))
+        monkeypatch.setattr(
+            minigames_module, '_get_akari_weekly_table_image_file',
+            lambda _guild, standings, *, title:
+                ('weekly', [s.user_id for s in standings]))
+
+        async def send(**kwargs):
+            weekly_sent.append(kwargs)
+
+        ctx = SimpleNamespace(guild=_FakeGuild(1), send=send)
+
+        asyncio.run(cog._cmd_akari_ratings(ctx, weekly=True))
+        public_scores = [k['file'] for k in weekly_sent
+                         if k.get('file', (None,))[0] == 'weekly']
+        assert public_scores == [('weekly', ['20'])]
+
+        # The admin debug board is an explicit "show everyone" view and must
+        # still include the opted-out player.
+        weekly_sent.clear()
+        asyncio.run(cog._cmd_akari_ratings_debug(ctx, weekly=True))
+        debug_scores = [k['file'] for k in weekly_sent
+                        if k.get('file', (None,))[0] == 'weekly']
+        assert debug_scores == [('weekly', ['20', '10'])]
