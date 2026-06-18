@@ -228,6 +228,14 @@ class FakeMinigameDb(MinigameDbMixin):
                 PRIMARY KEY (guild_id, user_id)
             )
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS akari_puzzle_difficulty (
+                puzzle_number INTEGER NOT NULL PRIMARY KEY,
+                difficulty    INTEGER NOT NULL,
+                fetched_at    REAL NOT NULL,
+                CHECK (difficulty BETWEEN 1 AND 5)
+            )
+        ''')
         self.conn.commit()
 
     def get_guild_config(self, guild_id, key):

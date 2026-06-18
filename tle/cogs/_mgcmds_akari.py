@@ -233,15 +233,18 @@ class AkariCmdsMixin:
         await self._cmd_akari_diff(ctx, AKARI_GAME)
 
     @akari.group(name='ratings', brief='Show Akari rating leaderboard',
-                 usage='[+test] [+inactive] [+exclude=…] [+include=…]',
+                 usage='[+weekly] [+test] [+inactive] [+exclude=…] [+include=…]',
                  invoke_without_command=True)
     async def akari_ratings(self, ctx, *args):
+        weekly = '+weekly' in args
+        args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, _include_decay, excluded_ids, included_ids,
          include_inactive, test_decay) = await self._extract_akari_filters(
             ctx, args)
         await self._cmd_akari_ratings(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-            include_inactive=include_inactive, test_decay=test_decay)
+            include_inactive=include_inactive, test_decay=test_decay,
+            weekly=weekly)
 
     @akari.group(name='rating',
                  brief='Show registered users\' Akari rating graph',
@@ -337,12 +340,15 @@ class AkariCmdsMixin:
 
     @akari_ratings.command(name='debug', aliases=['all'],
                            brief='(Mod) Leaderboard incl. shadow-rated (unopted-in) users',
-                           usage='[+test] [+inactive] [+exclude=…] [+include=…]')
+                           usage='[+weekly] [+test] [+inactive] [+exclude=…] [+include=…]')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def akari_ratings_debug(self, ctx, *args):
+        weekly = '+weekly' in args
+        args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, _include_decay, excluded_ids, included_ids,
          include_inactive, test_decay) = await self._extract_akari_filters(
             ctx, args)
         await self._cmd_akari_ratings_debug(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-            include_inactive=include_inactive, test_decay=test_decay)
+            include_inactive=include_inactive, test_decay=test_decay,
+            weekly=weekly)

@@ -170,10 +170,14 @@ class AkariSlashMixin:
             await self._slash_send_error(interaction, e)
 
     @akari_slash.command(name='ratings', description='Show Akari rating leaderboard')
-    async def slash_akari_ratings(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        weekly='Preview weekly-contest ratings and this week\'s scores')
+    async def slash_akari_ratings(self, interaction: discord.Interaction,
+                                  weekly: bool = False):
         await interaction.response.defer()
         try:
-            await self._cmd_akari_ratings(_SlashCtx(interaction))
+            await self._cmd_akari_ratings(
+                _SlashCtx(interaction), weekly=weekly)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

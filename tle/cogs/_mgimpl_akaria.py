@@ -2,12 +2,17 @@
 
 import datetime as dt
 import logging
+import time
 
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.minigame_rating import compute_ratings
+from tle.util.akari_difficulty import fetch_akari_difficulties
+from tle.util.akari_weekly import (
+    compute_weekly_ratings, current_week_standings, week_start,
+)
 
 from tle.cogs._minigame_common import (
     format_duration,
@@ -106,7 +111,7 @@ class ImplAkariAMixin:
 
     async def _cmd_akari_ratings(self, ctx, *, excluded_ids=None,
                                   included_ids=None, include_inactive=False,
-                                  test_decay=False):
+                                  test_decay=False, weekly=False):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -121,25 +126,31 @@ class ImplAkariAMixin:
         filtered out — they're never a real player, just a stale row.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if excluded_ids or included_ids or test_decay:
+        if weekly:
+            rows, standings = await self._akari_weekly_preview(
+                ctx.guild.id,
+                excluded_ids=excluded_ids,
+                included_ids=included_ids,
+            )
+        elif excluded_ids or included_ids or test_decay:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
                 included_ids=included_ids, test_decay=test_decay)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
-        if not rows:
+        if not rows and not (weekly and standings):
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} ratings yet. They appear once '
                 f'players post results.')
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         registered = [r for r in rows if r.user_id in registrants]
-        if not registered:
+        if not registered and not (weekly and standings):
             raise MinigameCogError(
                 f'No registered {AKARI_GAME.display_name} players yet. '
                 f'Players opt in with `;mg akari register`.')
         shown = self._active_ranking_rows(
             registered, include_inactive=include_inactive)
-        if not shown:
+        if not shown and not (weekly and standings):
             if include_inactive:
                 raise MinigameCogError(
                     f'No registered {AKARI_GAME.display_name} players yet.')
@@ -150,11 +161,80 @@ class ImplAkariAMixin:
         # All shown users are registered, so the ✓ marker is redundant noise.
         title = ('Daily Akari Ratings (incl. inactive)'
                  if include_inactive else 'Daily Akari Ratings')
-        if test_decay:
+        if test_decay and not weekly:
             title += ' [test decay]'
-        discord_file = _mg()._get_akari_rating_table_image_file(
-            ctx.guild, shown, registrants, title=title, mark_registered=False)
-        await ctx.send(file=discord_file)
+        if weekly:
+            title += ' [weekly preview]'
+        if shown:
+            table_kwargs = {'games_label': 'Weeks'} if weekly else {}
+            discord_file = _mg()._get_akari_rating_table_image_file(
+                ctx.guild, shown, registrants, title=title,
+                mark_registered=False,
+                **table_kwargs)
+            await ctx.send(file=discord_file)
+        if weekly:
+            if not standings:
+                await ctx.send(embed=discord_common.embed_neutral(
+                    'No Daily Akari scores have been posted this week yet.'))
+                return
+            start = standings[0].week_start
+            end = standings[0].week_end
+            score_title = (
+                f'Daily Akari Weekly Scores · {start:%b %d}–{end:%b %d} '
+                f'(in progress)')
+            score_file = _mg()._get_akari_weekly_table_image_file(
+                ctx.guild, standings, title=score_title)
+            await ctx.send(file=score_file)
+
+    async def _akari_weekly_preview(self, guild_id, *, excluded_ids=None,
+                                    included_ids=None):
+        """Build weekly ratings plus provisional current-week standings."""
+        result_rows = cf_common.user_db.get_minigame_results_for_guild(
+            guild_id, AKARI_GAME.name)
+        result_rows = self._filter_akari_rows(
+            result_rows, excluded_ids=excluded_ids,
+            included_ids=included_ids)
+        today = dt.date.today()
+        current_puzzle = _mg().expected_puzzle_number(today)
+        wanted = set()
+        for row in result_rows:
+            try:
+                row_date = dt.date.fromisoformat(str(row.puzzle_date))
+            except ValueError:
+                continue
+            monday_number = int(row.puzzle_number) - row_date.weekday()
+            wanted.update(range(monday_number, monday_number + 7))
+        current_monday = week_start(today)
+        monday_number = _mg().expected_puzzle_number(current_monday)
+        wanted.update(range(monday_number, current_puzzle + 1))
+        difficulties = await self._akari_difficulty_map(wanted)
+        states = compute_weekly_ratings(
+            result_rows, difficulties, as_of_date=today)
+        rating_rows = sorted(
+            states.values(), key=lambda s: (-s.rating, -s.games, int(s.user_id)))
+        standings = current_week_standings(
+            result_rows, difficulties, as_of_date=today)
+        return rating_rows, standings
+
+    @staticmethod
+    async def _akari_difficulty_map(puzzle_numbers):
+        """Read cached difficulties and best-effort fetch any missing values."""
+        puzzle_numbers = {int(number) for number in puzzle_numbers if int(number) > 0}
+        cached = cf_common.user_db.get_akari_puzzle_difficulties(puzzle_numbers)
+        missing = puzzle_numbers - set(cached)
+        if not missing:
+            return cached
+        try:
+            fetched = await fetch_akari_difficulties(missing)
+        except Exception:
+            logger.warning('Could not refresh Daily Akari difficulties',
+                           exc_info=True)
+            return cached
+        if fetched:
+            cf_common.user_db.upsert_akari_puzzle_difficulties(
+                fetched, time.time())
+            cached.update(fetched)
+        return cached
 
     @staticmethod
     def _akari_test_decay_kwargs(test_decay):

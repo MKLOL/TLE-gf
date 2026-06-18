@@ -37,6 +37,7 @@ _AKARI_IMAGE_COLUMN_MARGIN = 10
 # and Time columns; Queens omits Result because the day leaderboard is ranked
 # by time only.  Widths sum to ``_AKARI_IMAGE_WIDTH − 2 × MARGIN`` (860).
 _AKARI_RATING_COLS = (54, 300, 260, 150, 96)
+_AKARI_WEEKLY_COLS = (54, 360, 340, 106)
 _AKARI_PUZZLE_COLS = (54, 300, 260, 150, 96)
 _AKARI_PUZZLE_DELTA_COLS = (54, 316, 230, 90, 90, 80)
 _QUEENS_RESULTS_COLS = (54, 360, 340, 106)
@@ -426,6 +427,7 @@ def _akari_row_text_color(rating):
 def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
                                        *, title='Daily Akari Ratings',
                                        mark_registered=True,
+                                       games_label='Games',
                                        identity_label='Handle',
                                        identity_fn=None,
                                        name_fn=None):
@@ -439,6 +441,44 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
         footer = f'Showing top {len(table_rows)} of {len(rating_rows)} rated players'
     return _mg()._get_akari_puzzle_table_image(
         table_rows, title=title, footer=footer,
-        header=('#', 'Name', identity_label, 'Rating', 'Games'),
+        header=('#', 'Name', identity_label, 'Rating', games_label),
         cols=_AKARI_RATING_COLS,
         row_colors=row_colors)
+
+
+def _akari_weekly_table_rows(guild, standings, *, identity_fn=None):
+    """Compact current-week rows: rank, player, handle, rounded score."""
+    if identity_fn is None:
+        identity_fn = lambda g, row: _safe_cf_handle(g, row.user_id)
+    rows = []
+    previous_score = None
+    rank = 0
+    for index, standing in enumerate(standings, start=1):
+        rounded_score = round(standing.score * 1000)
+        if previous_score is None or rounded_score != previous_score:
+            rank = index
+            previous_score = rounded_score
+        rows.append((
+            rank,
+            _safe_user_name(guild, standing.user_id),
+            identity_fn(guild, standing),
+            rounded_score,
+        ))
+    return rows
+
+
+def _get_akari_weekly_table_image_file(guild, standings, *, title):
+    displayed = standings[:_AKARI_IMAGE_MAX_ROWS]
+    table_rows = _akari_weekly_table_rows(guild, displayed)
+    footer = None
+    if len(standings) > len(displayed):
+        footer = f'Showing top {len(displayed)} of {len(standings)} players'
+    return _mg()._get_akari_puzzle_table_image(
+        table_rows,
+        title=title,
+        footer=footer,
+        header=('#', 'Player', 'Handle', 'Score'),
+        cols=_AKARI_WEEKLY_COLS,
+        right_align_cols=(0, 3),
+        filename='akari-weekly-scores.png',
+    )

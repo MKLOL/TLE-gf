@@ -241,7 +241,7 @@ class ImplAkariBMixin:
     async def _cmd_akari_ratings_debug(self, ctx, *, excluded_ids=None,
                                         included_ids=None,
                                         include_inactive=False,
-                                        test_decay=False):
+                                        test_decay=False, weekly=False):
         """Admin view: leaderboard image including shadow-rated (unopted-in) users.
 
         Same image as ``;mg akari ratings`` but without the registration filter —
@@ -250,19 +250,23 @@ class ImplAkariBMixin:
         way as the public command.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if excluded_ids or included_ids or test_decay:
+        if weekly:
+            rows, standings = await self._akari_weekly_preview(
+                ctx.guild.id, excluded_ids=excluded_ids,
+                included_ids=included_ids)
+        elif excluded_ids or included_ids or test_decay:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
                 included_ids=included_ids, test_decay=test_decay)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
-        if not rows:
+        if not rows and not (weekly and standings):
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} ratings yet. They appear once '
                 f'players post results.')
         shown = self._active_ranking_rows(
             rows, include_inactive=include_inactive)
-        if not shown:
+        if not shown and not (weekly and standings):
             if include_inactive:
                 raise MinigameCogError(
                     f'No {AKARI_GAME.display_name} players yet.')
@@ -273,12 +277,28 @@ class ImplAkariBMixin:
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         title = ('Daily Akari Ratings (all, incl. inactive)'
                  if include_inactive else 'Daily Akari Ratings (all)')
-        if test_decay:
+        if test_decay and not weekly:
             title += ' [test decay]'
-        discord_file = _mg()._get_akari_rating_table_image_file(
-            ctx.guild, shown, registrants,
-            title=title, mark_registered=True)
-        await ctx.send(file=discord_file)
+        if weekly:
+            title += ' [weekly preview]'
+        if shown:
+            table_kwargs = {'games_label': 'Weeks'} if weekly else {}
+            discord_file = _mg()._get_akari_rating_table_image_file(
+                ctx.guild, shown, registrants,
+                title=title, mark_registered=True,
+                **table_kwargs)
+            await ctx.send(file=discord_file)
+        if weekly and standings:
+            start = standings[0].week_start
+            end = standings[0].week_end
+            score_file = _mg()._get_akari_weekly_table_image_file(
+                ctx.guild, standings,
+                title=(f'Daily Akari Weekly Scores · {start:%b %d}–'
+                       f'{end:%b %d} (in progress)'))
+            await ctx.send(file=score_file)
+        elif weekly:
+            await ctx.send(embed=discord_common.embed_neutral(
+                'No Daily Akari scores have been posted this week yet.'))
 
     async def _cmd_akari_history(self, ctx, member, *, require_registered=True,
                                  excluded_ids=None, included_ids=None,

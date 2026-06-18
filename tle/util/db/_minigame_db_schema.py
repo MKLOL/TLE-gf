@@ -206,3 +206,11 @@ class MinigameSchemaDbMixin:
             CREATE INDEX IF NOT EXISTS idx_akari_rating_guild
                 ON akari_rating (guild_id, rating DESC)
         ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS akari_puzzle_difficulty (
+                puzzle_number INTEGER NOT NULL PRIMARY KEY,
+                difficulty    INTEGER NOT NULL,
+                fetched_at    REAL NOT NULL,
+                CHECK (difficulty BETWEEN 1 AND 5)
+            )
+        ''')
