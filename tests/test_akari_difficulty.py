@@ -17,7 +17,7 @@ class _Response:
     async def __aexit__(self, *_args):
         return None
 
-    async def json(self):
+    async def json(self, *, content_type='application/json'):
         return self.payload
 
     async def text(self):
@@ -84,3 +84,32 @@ def test_malformed_archive_entry_does_not_abort_fetch():
     found = asyncio.run(fetch_akari_difficulties(
         {600, 598}, session=_MalformedSession()))
     assert found == {600: 3, 598: 5}
+
+
+class _TextPlainResponse(_Response):
+    """Mimics aiohttp refusing a text/plain body unless content_type=None.
+
+    Daily Akari serves JSON with a ``text/plain`` content type, so a default
+    ``response.json()`` raises ContentTypeError in production.
+    """
+
+    async def json(self, *, content_type='application/json'):
+        if content_type is not None:
+            raise ValueError(
+                'Attempt to decode JSON with unexpected mimetype: text/plain')
+        return self.payload
+
+
+class _TextPlainSession:
+    def get(self, url, params=None):
+        if url.endswith('/dailypuzzle'):
+            return _TextPlainResponse({'dailyNumber': 529, 'difficulty': 4})
+        return _TextPlainResponse({'entries': [], 'areMore': False})
+
+
+def test_parses_json_served_as_text_plain():
+    # Regression: the endpoint mislabels JSON as text/plain; we must still
+    # decode it rather than silently fall back to neutral difficulty.
+    found = asyncio.run(fetch_akari_difficulties(
+        {529}, session=_TextPlainSession()))
+    assert found == {529: 4}

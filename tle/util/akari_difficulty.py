@@ -24,7 +24,11 @@ async def _get_json(session, path, params):
             body = await response.text()
             raise RuntimeError(
                 f'Daily Akari {path} returned HTTP {response.status}: {body[:160]}')
-        return await response.json()
+        # Daily Akari serves its JSON as ``text/plain``; without
+        # ``content_type=None`` aiohttp raises ContentTypeError and refuses to
+        # decode it.  A genuinely non-JSON body still raises ValueError, which
+        # callers already treat as a soft failure.
+        return await response.json(content_type=None)
 
 
 async def fetch_akari_difficulties(puzzle_numbers, *, session=None):
