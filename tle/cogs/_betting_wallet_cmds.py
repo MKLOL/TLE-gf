@@ -303,24 +303,23 @@ class BetWalletCmdImplMixin:
         await ctx.send(embed=embed, allowed_mentions=_no_mentions())
 
     async def _cmd_grant(self, ctx, member, amount):
-        if amount <= 0:
-            raise BettingCogError('Amount must be a positive whole number.')
+        """Give a member coins, or take them with a negative amount."""
+        if amount == 0:
+            raise BettingCogError(
+                'Amount must be a non-zero whole number (negative takes coins).')
         new = cf_common.user_db.bet_adjust_balance(
             ctx.guild.id, member.id, amount, self._bet_start_balance(ctx.guild.id),
-            actor_id=ctx.author.id, action='admin_grant')
+            actor_id=ctx.author.id,
+            action='admin_grant' if amount > 0 else 'admin_take')
         name = discord.utils.escape_markdown(member.display_name)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Gave **{amount}** {_COIN} to `{name}`. New balance: **{new}** {_COIN}.'))
-
-    async def _cmd_take(self, ctx, member, amount):
-        if amount <= 0:
-            raise BettingCogError('Amount must be a positive whole number.')
-        new = cf_common.user_db.bet_adjust_balance(
-            ctx.guild.id, member.id, -amount, self._bet_start_balance(ctx.guild.id),
-            actor_id=ctx.author.id, action='admin_take')
-        name = discord.utils.escape_markdown(member.display_name)
-        await ctx.send(embed=discord_common.embed_success(
-            f'Took **{amount}** {_COIN} from `{name}`. New balance: **{new}** {_COIN}.'))
+        if amount > 0:
+            await ctx.send(embed=discord_common.embed_success(
+                f'Gave **{amount}** {_COIN} to `{name}`. '
+                f'New balance: **{new}** {_COIN}.'))
+        else:
+            await ctx.send(embed=discord_common.embed_success(
+                f'Took **{-amount}** {_COIN} from `{name}`. '
+                f'New balance: **{new}** {_COIN}.'))
 
     async def _cmd_setbalance(self, ctx, member, amount):
         if amount < 0:
@@ -332,27 +331,27 @@ class BetWalletCmdImplMixin:
         await ctx.send(embed=discord_common.embed_success(
             f'Set `{name}`\'s balance to **{new}** {_COIN}.'))
 
-    async def _cmd_grant_all(self, ctx, amount, *, revert=False):
-        """Give every existing wallet `amount` coins and raise the guild's
+    async def _cmd_grant_all(self, ctx, amount):
+        """Shift every existing wallet by `amount` coins and move the guild's
         starting balance by the same, so members who join later start higher
-        too. `revert=True` claws the same amount back (floored at 0)."""
-        if amount <= 0:
-            raise BettingCogError('Amount must be a positive whole number.')
-        signed = -amount if revert else amount
+        too. A negative amount claws the grant back (floored at 0)."""
+        if amount == 0:
+            raise BettingCogError(
+                'Amount must be a non-zero whole number (negative reverts a grant).')
         changed, new_bonus = cf_common.user_db.bet_grant_all(
-            ctx.guild.id, signed, actor_id=ctx.author.id)
+            ctx.guild.id, amount, actor_id=ctx.author.id)
         start = constants.BET_START_BALANCE + new_bonus
         prefix = _bot_prefix()
-        if revert:
+        if amount < 0:
             tail = (f'New members now start with **{start}** {_COIN}'
                     + (f' (base {constants.BET_START_BALANCE} + {new_bonus} '
                        'bonus).' if new_bonus else ', back to the base.'))
             await ctx.send(embed=discord_common.embed_success(
-                f'Clawed back **{amount}** {_COIN} from **{changed}** wallet(s). '
+                f'Clawed back **{-amount}** {_COIN} from **{changed}** wallet(s). '
                 f'{tail}'))
         else:
             await ctx.send(embed=discord_common.embed_success(
                 f'Granted **+{amount}** {_COIN} to **{changed}** wallet(s). '
                 f'New members now start with **{start}** {_COIN} '
                 f'(base {constants.BET_START_BALANCE} + {new_bonus} bonus). '
-                f'Undo with `{prefix}bet ungrantall {amount}`.'))
+                f'Undo with `{prefix}bet grantall -{amount}`.'))

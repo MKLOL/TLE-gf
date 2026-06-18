@@ -10,23 +10,30 @@ At kickoff betting closes; at full time the bot reads the final score and
 auto-settles, paying winners stake × odds. Everyone starts at 1000 coins and
 claims +100/day with `;bet daily`.
 
-Commands (group `;bet`, alias `;prediction`):
-  ;prediction here          set this channel for auto-opened markets       (admin)
-  ;bet matches [query]      list upcoming World Cup matches with odds
-  ;bet open <n|event_id>    manually open a market early                    (admin)
+Core commands (group `;bet`, alias `;prediction`) shown in `;help bet`:
   ;bet home|draw|away <amt> stake on an outcome (also: reply in the thread)
-  ;bet me                  show your betting summary
+  ;bet mybet / withdraw     show / remove your bets on the active market
+  ;bet me                   show your betting summary
   ;bet balance [@user]      show a wallet balance
   ;bet daily                claim the daily allowance
-  ;bet transfer @from @to <amt> move coins between users                 (admin)
-  ;bet notify               toggle the configured notification role
-  ;bet notifyrole @role     set role pinged when markets open             (admin)
   ;bet leaderboard [profit] richest wallets / net profit
-  ;bet mybet                show your bet on the active market
-  ;bet withdraw             remove all your bets on the active match
-  ;bet pending              list markets stuck open past kickoff
+  ;bet matches [query]      list upcoming World Cup matches with odds
+  ;bet notify               toggle the configured notification role
+  ;prediction here          set this channel for auto-opened markets       (admin)
+  ;bet notifyrole [@role|off]  set/clear the ping role for open markets     (admin)
   ;bet settle <home|draw|away|2-1>  settle the active market manually       (admin)
   ;bet cancel               cancel the active market, refund stakes         (admin)
+  ;bet grant @user <±amt>   give (or, negative, take) a user's coins        (admin)
+  ;bet grantall <±amt>      grant/raise every wallet (negative reverts)     (admin)
+
+To keep `;help bet` small, several niche/advanced subcommands are registered
+with ``hidden=True`` — they still work and respond to `;help bet <name>`, they
+just don't clutter the group listing: ``open``, ``not``, ``book``, ``pending``,
+``correct``, ``setbalance``, ``transfer``, ``history``, ``odds``, ``pause``,
+``resume``, ``close`` and ``check``. ``grant`` absorbs the old ``take`` and
+``grantall`` absorbs ``ungrantall`` via negative amounts; ``notifyrole off``
+replaces the old ``clearnotifyrole``. ``here`` hides itself from the listing
+once a channel is configured (see ``_bet_channel_is_set``).
 
 The implementation is split across helper modules to keep every file under 500
 lines: pure helpers in ``_betting_helpers``, presentation in ``_betting_format``,
@@ -79,6 +86,17 @@ _SETTLE_INTERVAL = 5 * 60
 _CHANNEL_CONFIG_KEY = 'bet_channel'
 _PAUSED_CONFIG_KEY = 'bet_paused'
 _NOTIFY_ROLE_CONFIG_KEY = 'bet_notify_role'
+
+
+def _bet_channel_is_set(ctx):
+    """Help predicate: hide `;bet here` from `;help bet` once a channel is
+    already configured (setup is done — only an unconfigured guild needs it)."""
+    try:
+        return bool(ctx and ctx.guild and cf_common.user_db is not None
+                    and cf_common.user_db.get_guild_config(
+                        ctx.guild.id, _CHANNEL_CONFIG_KEY))
+    except Exception:
+        return False
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────
@@ -160,33 +178,26 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         await ctx.send(embed=embed)
 
     @bet.command(name='here',
-                 brief='Set this channel for auto-opened World Cup markets (admin)')
+                 brief='Set this channel for auto-opened World Cup markets (admin)',
+                 extras={'help_hidden_when': _bet_channel_is_set})
     @commands.has_role(constants.TLE_ADMIN)
     async def here(self, ctx):
         """Designate this channel as where the bot auto-posts markets."""
         await self._cmd_here(ctx)
 
     @bet.command(name='notifyrole', aliases=['pingrole'],
-                 brief='Set the role pinged when a market opens (admin)',
-                 usage='[@role]')
+                 brief='Set/clear the role pinged when a market opens (admin)',
+                 usage='[@role | off]')
     @commands.has_role(constants.TLE_ADMIN)
-    async def notifyrole(self, ctx, role: discord.Role = None):
+    async def notifyrole(self, ctx, role: str = None):
         await self._cmd_notifyrole(ctx, role)
-
-    @bet.command(name='clearnotifyrole', aliases=['notifyroleoff', 'pingroleoff'],
-                 brief='Stop pinging a role when markets open (admin)')
-    @commands.has_role(constants.TLE_ADMIN)
-    async def clearnotifyrole(self, ctx):
-        cf_common.user_db.delete_guild_config(ctx.guild.id, _NOTIFY_ROLE_CONFIG_KEY)
-        await ctx.send(embed=discord_common.embed_success(
-            'Betting notification role cleared.'))
 
     @bet.command(name='notify', aliases=['notifications'],
                  brief='Toggle betting notifications for yourself')
     async def notify(self, ctx):
         await self._cmd_notify(ctx)
 
-    @bet.command(name='check',
+    @bet.command(name='check', hidden=True,
                  brief='Check betting API keys without exposing secrets (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def check(self, ctx):
@@ -202,7 +213,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         """List upcoming World Cup matches (optionally filtered by team)."""
         await self._cmd_matches(ctx, query)
 
-    @bet.command(name='open', brief='Manually open a market early (admin)',
+    @bet.command(name='open', hidden=True,
+                 brief='Manually open a market early (admin)',
                  usage='<number from ;bet matches | event_id>')
     @commands.has_role(constants.TLE_ADMIN)
     async def open_market(self, ctx, *, ref: str):
@@ -226,7 +238,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def bet_away(self, ctx, amount: str):
         await self._place(ctx, 'away', amount)
 
-    @bet.command(name='not', aliases=['no'], brief='Bet that an outcome will not happen',
+    @bet.command(name='not', aliases=['no'], hidden=True,
+                 brief='Bet that an outcome will not happen',
                  usage='<team|home|draw|away> <amount | 50% | all | 0 to remove>')
     async def bet_not(self, ctx, *, text: str):
         await self._cmd_bet_not(ctx, text)
@@ -300,7 +313,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def daily(self, ctx):
         await self._cmd_daily(ctx)
 
-    @bet.command(name='transfer', aliases=['send', 'pay'],
+    @bet.command(name='transfer', aliases=['send', 'pay'], hidden=True,
                  brief='Move coins from one user to another (admin)',
                  usage='@from @to <amount|all|percent>')
     @commands.has_role(constants.TLE_ADMIN)
@@ -308,7 +321,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                        to_member: discord.Member, amount: str):
         await self._cmd_transfer(ctx, from_member, to_member, amount)
 
-    @bet.command(name='history', aliases=['walletlog', 'ledger'],
+    @bet.command(name='history', aliases=['walletlog', 'ledger'], hidden=True,
                  brief='Show wallet audit history', usage='[@user]')
     async def history(self, ctx, member: discord.Member = None):
         await self._cmd_history(ctx, member)
@@ -335,7 +348,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def cancel(self, ctx):
         await self._cmd_cancel(ctx)
 
-    @bet.command(name='pending', aliases=['stuck'],
+    @bet.command(name='pending', aliases=['stuck'], hidden=True,
                  brief='List open markets past kickoff awaiting a result')
     async def pending(self, ctx):
         """Show markets that have kicked off but not yet settled — e.g. a
@@ -344,7 +357,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         """
         await self._cmd_pending(ctx)
 
-    @bet.command(name='correct', aliases=['fix', 'resettle'],
+    @bet.command(name='correct', aliases=['fix', 'resettle'], hidden=True,
                  brief='Fix a wrongly-settled result (admin)',
                  usage='<home|draw|away|2-1|team>')
     @commands.has_role(constants.TLE_ADMIN)
@@ -353,38 +366,28 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         result, reversing the wrong payouts and applying the right ones."""
         await self._cmd_correct(ctx, result)
 
-    @bet.command(name='grant', brief='Give a user coins (admin)',
-                 usage='@user <amount>')
+    @bet.command(name='grant',
+                 brief='Give a user coins; a negative amount takes (admin)',
+                 usage='@user <amount | -amount>')
     @commands.has_role(constants.TLE_ADMIN)
     async def grant(self, ctx, member: discord.Member, amount: int):
         await self._cmd_grant(ctx, member, amount)
 
-    @bet.command(name='take', brief='Remove coins from a user (admin)',
-                 usage='@user <amount>')
-    @commands.has_role(constants.TLE_ADMIN)
-    async def take(self, ctx, member: discord.Member, amount: int):
-        await self._cmd_take(ctx, member, amount)
-
-    @bet.command(name='setbalance', aliases=['setbal'],
+    @bet.command(name='setbalance', aliases=['setbal'], hidden=True,
                  brief='Set a user\'s balance (admin)', usage='@user <amount>')
     @commands.has_role(constants.TLE_ADMIN)
     async def setbalance(self, ctx, member: discord.Member, amount: int):
         await self._cmd_setbalance(ctx, member, amount)
 
     @bet.command(name='grantall', aliases=['granteveryone', 'allgrant'],
-                 brief='Give every wallet coins and raise the start balance (admin)',
-                 usage='<amount>')
+                 brief='Give every wallet coins; a negative amount reverts (admin)',
+                 usage='<amount | -amount>')
     @commands.has_role(constants.TLE_ADMIN)
     async def grantall(self, ctx, amount: int):
         await self._cmd_grant_all(ctx, amount)
 
-    @bet.command(name='ungrantall', aliases=['revertgrantall', 'grantallundo'],
-                 brief='Reverse a ;bet grantall (admin)', usage='<amount>')
-    @commands.has_role(constants.TLE_ADMIN)
-    async def ungrantall(self, ctx, amount: int):
-        await self._cmd_grant_all(ctx, amount, revert=True)
-
-    @bet.command(name='pause', brief='Stop auto-opening new markets (admin)')
+    @bet.command(name='pause', hidden=True,
+                 brief='Stop auto-opening new markets (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def pause(self, ctx):
         cf_common.user_db.set_guild_config(ctx.guild.id, _PAUSED_CONFIG_KEY, '1')
@@ -392,7 +395,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             'Auto-open **paused** — no new markets will open. Existing markets '
             'still settle. `;bet resume` to re-enable.'))
 
-    @bet.command(name='resume', aliases=['unpause'],
+    @bet.command(name='resume', aliases=['unpause'], hidden=True,
                  brief='Resume auto-opening markets (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def resume(self, ctx):
@@ -400,17 +403,20 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         await ctx.send(embed=discord_common.embed_success(
             'Auto-open **resumed** — markets will open ~2h before kickoff again.'))
 
-    @bet.command(name='book', brief='Show all bets on the active market')
+    @bet.command(name='book', hidden=True,
+                 brief='Show all bets on the active market')
     async def book(self, ctx):
         await self._cmd_book(ctx)
 
-    @bet.command(name='odds', brief='Re-line a market before any bets (admin)',
+    @bet.command(name='odds', hidden=True,
+                 brief='Re-line a market before any bets (admin)',
                  usage='<home> <draw> <away>')
     @commands.has_role(constants.TLE_ADMIN)
     async def setodds(self, ctx, home: float, draw: float, away: float):
         await self._cmd_setodds(ctx, home, draw, away)
 
-    @bet.command(name='close', brief='Close betting early on the active market (admin)')
+    @bet.command(name='close', hidden=True,
+                 brief='Close betting early on the active market (admin)')
     @commands.has_role(constants.TLE_ADMIN)
     async def close(self, ctx):
         await self._cmd_close(ctx)

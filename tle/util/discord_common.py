@@ -179,6 +179,29 @@ async def presence(bot):
     presence_task.start()
 
 class TleHelp(commands.DefaultHelpCommand):
+    async def filter_commands(self, cmds, *, sort=False, key=None):
+        """Like the default, but also drops commands whose ``extras`` declares a
+        ``help_hidden_when`` predicate that returns truthy for this invocation.
+
+        This lets a command hide itself from the listing based on runtime state
+        (e.g. ``;bet here`` once a channel is configured) without making it
+        permanently ``hidden`` — it still works and ``;help <group> <name>``
+        still shows it.
+        """
+        filtered = await super().filter_commands(cmds, sort=sort, key=key)
+        ctx = self.context
+        result = []
+        for command in filtered:
+            predicate = (command.extras or {}).get('help_hidden_when')
+            if predicate is not None:
+                try:
+                    if predicate(ctx):
+                        continue
+                except Exception:
+                    pass
+            result.append(command)
+        return result
+
     def add_command_formatting(self, command):
         """A utility function to format the non-indented block of commands and groups.
 

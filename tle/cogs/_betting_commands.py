@@ -9,6 +9,7 @@ import logging
 import time
 
 import discord
+from discord.ext import commands
 
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
@@ -51,14 +52,35 @@ class BetCommandImplMixin:
                                'failed', exc_info=True)
 
     async def _cmd_notifyrole(self, ctx, role):
+        # `role` arrives as a raw string from the command (or None). `off`/`none`
+        # /`clear` removes the configured role; no arg shows the current one;
+        # anything else resolves to a Role. Tests pass a Role object directly,
+        # so a non-str value is taken as an already-resolved role.
+        if isinstance(role, str):
+            token = role.strip()
+            if token.lower() in ('off', 'none', 'clear', 'remove'):
+                cf_common.user_db.delete_guild_config(
+                    ctx.guild.id, _NOTIFY_ROLE_CONFIG_KEY)
+                await ctx.send(embed=discord_common.embed_success(
+                    'Betting notification role cleared.'))
+                return
+            try:
+                role = await commands.RoleConverter().convert(ctx, token)
+            except commands.BadArgument:
+                raise BettingCogError(
+                    f'No role matching “{discord.utils.escape_markdown(token)}”. '
+                    'Use `;bet notifyrole @role` to set one or '
+                    '`;bet notifyrole off` to clear it.')
         if role is None:
             role_id = self._configured_notify_role_id(ctx.guild.id)
             if role_id is None:
                 await ctx.send(embed=discord_common.embed_neutral(
-                    'No betting notification role is configured.'))
+                    'No betting notification role is configured. Set one with '
+                    '`;bet notifyrole @role`.'))
             else:
                 await ctx.send(embed=discord_common.embed_neutral(
-                    f'Betting notification role: <@&{role_id}>.'))
+                    f'Betting notification role: <@&{role_id}>. '
+                    'Clear it with `;bet notifyrole off`.'))
             return
         self._validate_notify_role(ctx, role)
         cf_common.user_db.set_guild_config(

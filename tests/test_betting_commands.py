@@ -278,3 +278,30 @@ class TestBettingSurfaceUX:
 
         assert msg.reactions == []
         assert db.bet_get_wager(mid, msg.author.id) is None
+
+
+class TestHereHelpVisibility:
+    """`;bet here` hides itself from `;help bet` once a channel is configured."""
+
+    def _ctx(self):
+        return type('Ctx', (), {'guild': type('G', (), {'id': int(GUILD)})()})()
+
+    def test_hidden_predicate_false_when_unconfigured(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import _bet_channel_is_set
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        assert _bet_channel_is_set(self._ctx()) is False
+
+    def test_hidden_predicate_true_once_channel_set(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import _bet_channel_is_set
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'bet_channel', str(int(CH)))
+        assert _bet_channel_is_set(self._ctx()) is True
+
+    def test_hidden_predicate_safe_without_db(self, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import _bet_channel_is_set
+        monkeypatch.setattr(cf_common, 'user_db', None)
+        assert _bet_channel_is_set(self._ctx()) is False
+        assert _bet_channel_is_set(None) is False
