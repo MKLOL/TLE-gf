@@ -400,3 +400,17 @@ def upgrade_1_37_0(db):
         if started_transaction:
             db.rollback()
         raise
+
+
+@registry.register('1.38.0', 'Daily Akari puzzle difficulty cache')
+def upgrade_1_38_0(db):
+    logger.info('1.38.0: Creating Daily Akari puzzle difficulty cache')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS akari_puzzle_difficulty (
+            puzzle_number INTEGER NOT NULL PRIMARY KEY,
+            difficulty    INTEGER NOT NULL,
+            fetched_at    REAL NOT NULL,
+            CHECK (difficulty BETWEEN 1 AND 5)
+        )
+    ''')
+    db.commit()

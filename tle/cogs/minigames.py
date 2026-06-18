@@ -53,6 +53,7 @@ from tle.cogs._minigame_tables import (  # noqa: F401
     _get_akari_puzzle_table_image_file, _queens_results_table_rows,
     _get_queens_results_table_image_file, _akari_rating_table_rows,
     _akari_row_text_color, _get_akari_rating_table_image_file,
+    _akari_weekly_table_rows, _get_akari_weekly_table_image_file,
     _AKARI_HISTORY_PER_PAGE,
 )
 from tle.cogs._minigame_stats import (  # noqa: F401

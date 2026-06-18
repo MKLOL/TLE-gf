@@ -202,6 +202,24 @@ class TestUpgrade131:
         db.execute('SELECT * FROM minigame_ban').fetchall()
 
 
+class TestUpgrade138:
+    def test_creates_akari_difficulty_cache(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_38_0
+        upgrade_1_38_0(db)
+        db.execute(
+            'INSERT INTO akari_puzzle_difficulty '
+            '(puzzle_number, difficulty, fetched_at) VALUES (529, 4, 123.0)')
+        row = db.execute(
+            'SELECT puzzle_number, difficulty, fetched_at '
+            'FROM akari_puzzle_difficulty').fetchone()
+        assert (row.puzzle_number, row.difficulty) == (529, 4)
+
+    def test_idempotent(self, db):
+        from tle.util.db.user_db_upgrades import upgrade_1_38_0
+        upgrade_1_38_0(db)
+        upgrade_1_38_0(db)
+
+
 class TestUpgrade132:
     def test_creates_unresolved_minigame_result_table(self, db):
         from tle.util.db.user_db_upgrades import upgrade_1_32_0
@@ -359,6 +377,8 @@ class TestFreshDbSchema:
                               'FROM minigame_unresolved_result').fetchall()
             conn.conn.execute('SELECT guild_id, game, user_id, banned_at, '
                               'banned_by, reason FROM minigame_ban').fetchall()
+            conn.conn.execute('SELECT puzzle_number, difficulty, fetched_at '
+                              'FROM akari_puzzle_difficulty').fetchall()
             # And the legacy table must NOT be created by the fresh path.
             legacy = conn.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
