@@ -25,17 +25,22 @@ class BettingWagerDbMixin:
         return row is not None and row.status == 'open' and not row.bets_closed
 
     def bet_place(self, guild_id, market_id, user_id, pick, stake,
-                  placed_at, start_balance):
+                  placed_at, start_balance, actor_id=None):
         """Place or replace a user's wager on one pick, escrowing the stake
         from their wallet. Re-betting the same pick refunds the previous stake
         first; other picks by the same user stay in place. Odds are not stored
         — they are the market's frozen odds_<pick>.
+
+        ``actor_id`` records who placed the bet in the wallet audit log; it
+        defaults to the bettor (a normal self-bet) but an admin placing a bet
+        on someone's behalf passes their own id.
 
         Returns (ok, reason, new_balance) where reason is 'ok', 'unchanged',
         'invalid', 'closed', or 'insufficient'. Atomic: wallet debit and wager
         write commit together.
         """
         guild_id, user_id = str(guild_id), str(user_id)
+        actor = user_id if actor_id is None else str(actor_id)
         pick = str(pick)
         stake = int(stake)
         if stake <= 0:
@@ -74,7 +79,7 @@ class BettingWagerDbMixin:
             new_balance = available - stake
             if prev:
                 self._bet_log_wallet_txn(
-                    guild_id, user_id, user_id, 'wager_refund', prev.stake,
+                    guild_id, user_id, actor, 'wager_refund', prev.stake,
                     available, market_id=market_id, note=pick,
                     created_at=placed_at)
             self.conn.execute(
@@ -88,17 +93,23 @@ class BettingWagerDbMixin:
                 (new_balance, guild_id, user_id)
             )
             self._bet_log_wallet_txn(
-                guild_id, user_id, user_id, 'wager_stake', -stake, new_balance,
+                guild_id, user_id, actor, 'wager_stake', -stake, new_balance,
                 market_id=market_id, note=pick, created_at=placed_at)
             return (True, 'ok', new_balance)
 
-    def bet_remove_wager(self, guild_id, market_id, user_id, pick, removed_at):
+    def bet_remove_wager(self, guild_id, market_id, user_id, pick, removed_at,
+                         actor_id=None):
         """Remove one wager pick for a user and refund its stake.
+
+        ``actor_id`` records who removed the bet in the wallet audit log,
+        defaulting to the bettor; an admin removing on someone's behalf passes
+        their own id.
 
         Returns (ok, reason, new_balance, refunded) where reason is 'removed',
         'missing', or 'closed'. Other picks by the same user stay in place.
         """
         guild_id, user_id, pick = str(guild_id), str(user_id), str(pick)
+        actor = user_id if actor_id is None else str(actor_id)
         with self.conn:
             balance_row = self.conn.execute(
                 'SELECT balance FROM bet_wallet WHERE guild_id = ? AND user_id = ?',
@@ -132,7 +143,7 @@ class BettingWagerDbMixin:
                 (new_balance, guild_id, user_id)
             )
             self._bet_log_wallet_txn(
-                guild_id, user_id, user_id, 'wager_refund', prev.stake,
+                guild_id, user_id, actor, 'wager_refund', prev.stake,
                 new_balance, market_id=market_id, note=pick,
                 created_at=removed_at)
             return (True, 'removed', new_balance, prev.stake)

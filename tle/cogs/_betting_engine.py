@@ -239,8 +239,13 @@ class BetEngineMixin:
 
     # ── Placing bets ───────────────────────────────────────────────────
 
-    async def _execute_bet(self, guild_id, market, user, pick, amount_str):
-        """Core bet placement. Returns (status, data):
+    async def _execute_bet(self, guild_id, market, user, pick, amount_str,
+                           *, actor_id=None):
+        """Core bet placement. ``user`` is the bettor whose wallet is charged;
+        ``actor_id`` (default: the bettor) records who placed it in the wallet
+        audit log so an admin betting on someone's behalf is attributable.
+
+        Returns (status, data):
           'closed'       — kickoff passed
           'invalid'      — amount didn't parse / below minimum
           'insufficient' — not enough balance (data={'balance': N})
@@ -255,7 +260,8 @@ class BetEngineMixin:
         label = self._pick_label(market, pick)
         if is_remove_amount(amount_str):
             ok, reason, new_balance, refunded = cf_common.user_db.bet_remove_wager(
-                guild_id, market.market_id, user.id, pick, time.time())
+                guild_id, market.market_id, user.id, pick, time.time(),
+                actor_id=actor_id)
             if not ok:
                 if reason == 'closed':
                     return ('closed', None)
@@ -277,7 +283,7 @@ class BetEngineMixin:
             return ('invalid_pick', None)
         ok, reason, new_balance = cf_common.user_db.bet_place(
             guild_id, market.market_id, user.id, pick, stake,
-            time.time(), self._bet_start_balance(guild_id))
+            time.time(), self._bet_start_balance(guild_id), actor_id=actor_id)
         if ok and reason == 'unchanged':
             return ('unchanged', {
                 'stake': stake, 'odds': odds, 'pick': pick, 'label': label,

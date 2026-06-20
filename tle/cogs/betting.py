@@ -29,8 +29,8 @@ Core commands (group `;bet`, alias `;prediction`) shown in `;help bet`:
 To keep `;help bet` small, several niche/advanced subcommands are registered
 with ``hidden=True`` — they still work and respond to `;help bet <name>`, they
 just don't clutter the group listing: ``open``, ``not``, ``book``, ``pending``,
-``correct``, ``setbalance``, ``transfer``, ``history``, ``odds``, ``pause``,
-``resume``, ``close`` and ``check``. ``grant`` absorbs the old ``take`` and
+``correct``, ``setbalance``, ``transfer``, ``for``, ``history``, ``odds``,
+``pause``, ``resume``, ``close`` and ``check``. ``grant`` absorbs the old ``take`` and
 ``grantall`` absorbs ``ungrantall`` via negative amounts; ``notifyrole off``
 replaces the old ``clearnotifyrole``. ``here`` hides itself from the listing
 once a channel is configured (see ``_bet_channel_is_set``).
@@ -252,6 +252,16 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                  brief='Remove all your bets on the active match')
     async def withdraw(self, ctx):
         await self._withdraw_match(ctx)
+
+    @bet.command(name='for', aliases=['forcebet', 'betfor', 'placefor'], hidden=True,
+                 brief='Place a bet on behalf of a user (admin)',
+                 usage='@user <home|draw|away|team> <amount | 50% | all | 0 to remove>')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def bet_for(self, ctx, member: discord.Member, *, text: str):
+        """Place (or, with `0`, remove) a bet for another member — for when
+        they're away but have told you what they want to wager. Spends their
+        own wallet; you're recorded as the actor in the wallet history."""
+        await self._cmd_place_for(ctx, member, text)
 
     # ── Thread bet listener ────────────────────────────────────────────
 

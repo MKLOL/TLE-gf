@@ -89,6 +89,66 @@ class BetWalletCmdImplMixin:
             raise BettingCogError('That outcome is not available for this market.')
         await self._place(ctx, pick, amount)
 
+    async def _cmd_place_for(self, ctx, member, text):
+        """Admin: place (or, with `0`, remove) a bet on behalf of another
+        member — for when they're away but have said what they want to wager.
+        Spends the member's own wallet exactly as if they'd bet themselves; the
+        admin is recorded as the actor in the wallet audit log."""
+        if getattr(member, 'bot', False):
+            raise BettingCogError('You cannot place a bet for a bot.')
+        market = self._find_market(ctx, require_unambiguous=True, bettable_only=True)
+        if market is None:
+            raise BettingCogError(
+                'No open market here. Run this in the match thread the bot opens '
+                '~2h before kickoff.')
+        tokens = extract_bet_tokens(text)
+        if tokens is None:
+            raise BettingCogError(
+                'Use `;bet for @user <home|draw|away|team> <amount>`, e.g. '
+                '`;bet for @alice home 100` (or `0` to remove their bet).')
+        pick_text, amount = tokens
+        pick = resolve_bet_pick(
+            pick_text, market.home_team, market.away_team,
+            allow_draw=self._market_allows_draw(market))
+        if pick is None or not self._pick_allowed(market, pick):
+            raise BettingCogError('That outcome is not available for this market.')
+        status, data = await self._execute_bet(
+            ctx.guild.id, market, member, pick, amount, actor_id=ctx.author.id)
+        name = discord.utils.escape_markdown(member.display_name)
+        if status == 'closed':
+            raise BettingCogError('Betting is closed — kickoff has passed.')
+        if status == 'invalid':
+            raise BettingCogError(
+                f'Invalid amount. Use a whole number (min {constants.BET_MIN_STAKE}), '
+                'a percentage like `50%`, or `all`.')
+        if status == 'invalid_pick':
+            raise BettingCogError('That outcome is not available for this market.')
+        if status == 'insufficient':
+            raise BettingCogError(
+                f'`{name}` only has **{data["balance"]}** {_COIN}.')
+        if status == 'missing':
+            raise BettingCogError(
+                f'`{name}` has no bet on **{data["label"]}** to remove.')
+        if status == 'removed':
+            self._schedule_pool_refresh(market.market_id)
+            await ctx.send(embed=discord_common.embed_success(
+                f'Removed `{name}`\'s bet on **{data["label"]}** and refunded '
+                f'**{data["stake"]}** {_COIN}.\n'
+                f'`{name}`\'s balance: **{data["balance"]}** {_COIN}.'))
+            return
+        if status == 'unchanged':
+            await ctx.send(embed=discord_common.embed_neutral(
+                f'`{name}` already has **{data["stake"]}** {_COIN} on '
+                f'**{data["label"]}** @ **{data["odds"]:.2f}**.\n'
+                f'`{name}`\'s balance: **{data["balance"]}** {_COIN}.'))
+            return
+        self._schedule_pool_refresh(market.market_id)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Placed **{data["stake"]}** {_COIN} for `{name}` on '
+            f'**{data["label"]}** @ **{data["odds"]:.2f}** — returns '
+            f'**{data["potential"]}** {_COIN} if it hits.\n'
+            f'`{name}`\'s balance: **{data["balance"]}** {_COIN}.'))
+
     async def _cmd_mybet(self, ctx):
         market = self._find_market(ctx, require_unambiguous=True)
         if market is None:
