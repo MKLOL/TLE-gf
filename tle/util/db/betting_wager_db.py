@@ -243,6 +243,22 @@ class BettingWagerDbMixin:
             (str(guild_id), str(user_id), limit)
         ).fetchall()
 
+    def bet_has_wagered(self, guild_id, user_id):
+        """True if the user has at least one wager on any market in this guild.
+
+        This is the same participation test the balance leaderboard uses, so a
+        user counts as an active bettor here exactly when they'd appear there.
+        Gitgud coin credits only touch ``bet_wallet`` (never ``bet_wager``), so
+        a user who has only ever earned coins this way reads as False.
+        """
+        row = self.conn.execute(
+            'SELECT 1 FROM bet_wager w '
+            'JOIN bet_market m ON m.market_id = w.market_id '
+            'WHERE m.guild_id = ? AND w.user_id = ? LIMIT 1',
+            (str(guild_id), str(user_id))
+        ).fetchone()
+        return row is not None
+
     def bet_pool(self, market_id):
         """Return (pick, count, total_stake) grouped by pick for a market."""
         return self.conn.execute(

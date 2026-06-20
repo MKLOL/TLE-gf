@@ -9,6 +9,7 @@ import random
 
 import discord
 
+from tle import constants
 from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
@@ -21,6 +22,7 @@ from tle.cogs._codeforces_helpers import (
     _GITGUD_NO_SKIP_TIME,
     _ONE_WEEK_DURATION,
     _GITGUD_MORE_POINTS_START_TIME,
+    _GITGUD_COIN_MULTIPLIER,
 )
 
 
@@ -34,6 +36,23 @@ class CodeforcesGitgudMixin:
         if start_time >= _GITGUD_MORE_POINTS_START_TIME and now_time >= morePointsTime:
             morePointsActive = True
         return morePointsActive
+
+    def _award_gitgud_coins(self, ctx, user_id, score):
+        """Credit the betting wallet with ``_GITGUD_COIN_MULTIPLIER`` coins per
+        base gitgud point. The rate is a flat 5x of the *base* score and never
+        gets the end-of-month doubling the monthly ranklist points do. Returns
+        the coins awarded, or None when there's no guild (e.g. a DM) so the
+        caller can omit the wallet line."""
+        guild = ctx.guild
+        if guild is None:
+            return None
+        coins = _GITGUD_COIN_MULTIPLIER * score
+        start_balance = (constants.BET_START_BALANCE
+                         + cf_common.user_db.bet_get_start_bonus(guild.id))
+        cf_common.user_db.bet_adjust_balance(
+            guild.id, user_id, coins, start_balance,
+            actor_id=user_id, action='gitgud', note=str(score))
+        return coins
 
     async def _validate_gitgud_status(self, ctx):
         user_id = ctx.message.author.id
@@ -308,7 +327,17 @@ class CodeforcesGitgudMixin:
 
         if rc == 1:
             duration = cf_common.pretty_time_format(finish_time - issue_time)
-            await ctx.send(f'Challenge completed in {duration}. {handle} gained {score} alltime ranklist points and {monthlyPoints} monthly ranklist points.')
+            msg = (f'Challenge completed in {duration}. {handle} gained {score} '
+                   f'alltime ranklist points and {monthlyPoints} monthly ranklist points.')
+            # Coins are always credited to the betting wallet, but we only
+            # mention them to users who are already playing the betting game
+            # (have placed at least one bet) — same bar as showing up on the
+            # ;bet leaderboard. Everyone else just banks them silently.
+            coins = self._award_gitgud_coins(ctx, user_id, score)
+            if coins is not None and \
+                    cf_common.user_db.bet_has_wagered(ctx.guild.id, user_id):
+                msg += f' You also earned {coins} 🪙.'
+            await ctx.send(msg)
         else:
             await ctx.send('You have already claimed your points')
 

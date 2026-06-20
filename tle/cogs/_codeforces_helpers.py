@@ -12,6 +12,10 @@ _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX = 300
 _ONE_WEEK_DURATION = 7 * 24 * 60 * 60
 _GITGUD_MORE_POINTS_START_TIME = 1680300000
+# Completing a gitgud challenge also credits the betting wallet with this many
+# coins per base gitgud point. Always applied to the *base* score, never the
+# end-of-month-doubled monthly points — the coin rate is a flat 5x.
+_GITGUD_COIN_MULTIPLIER = 5
 
 
 def _calculateGitgudScoreForDelta(delta):
