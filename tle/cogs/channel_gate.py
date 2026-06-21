@@ -1,10 +1,11 @@
 """Channel command gate: ``;disallow`` / ``;allow``.
 
-``;disallow`` blocks bot (prefix) commands in the current channel.
-``;disallow thread`` creates a thread and blocks commands everywhere in the
-channel except inside that thread. A global check enforces the gate for every
-prefix command; on a blocked attempt it drops a short, auto-deleting notice
-(linking the thread when there is one). ``;allow`` reverts.
+``;disallow`` blocks bot (prefix) commands in the current channel (and its
+threads). ``;disallow thread`` creates a thread and blocks commands in the
+channel's main timeline only — commands stay allowed in *any* thread of that
+channel, not just the bot-created one. A global check enforces the gate for
+every prefix command; on a blocked attempt it drops a short, auto-deleting
+notice (linking the thread when there is one). ``;allow`` reverts.
 
 Only prefix commands are gated — the minigame slash commands run through a
 separate app-command path that ``bot.add_check`` does not cover.
@@ -65,7 +66,7 @@ class ChannelGate(commands.Cog):
     async def _notify_blocked(self, ctx, allowed_thread_id):
         if allowed_thread_id is not None:
             text = (f'{ctx.author.mention} bot commands here only work in '
-                    f'<#{allowed_thread_id}>.')
+                    f'threads — try <#{allowed_thread_id}>.')
         else:
             text = (f'{ctx.author.mention} bot commands are disabled in this '
                     f'channel.')
@@ -95,9 +96,9 @@ class ChannelGate(commands.Cog):
     async def disallow(self, ctx, mode: str = None):
         """Disallow bot commands in this channel.
 
-        `;disallow` blocks bot commands in this channel.
-        `;disallow thread` creates a thread and blocks commands everywhere in
-        this channel except inside that thread.
+        `;disallow` blocks bot commands in this channel and its threads.
+        `;disallow thread` creates a thread and blocks commands in the channel's
+        main timeline only — commands stay allowed in any thread of the channel.
         """
         make_thread = mode is not None and mode.lower() == 'thread'
         if mode is not None and not make_thread:
@@ -117,8 +118,8 @@ class ChannelGate(commands.Cog):
 
         if thread is not None:
             await ctx.send(embed=discord_common.embed_success(
-                f'Bot commands are now disabled in {channel.mention} — use '
-                f'{thread.mention} instead.'))
+                f'Bot commands are now disabled in {channel.mention} — use a '
+                f'thread (e.g. {thread.mention}) instead.'))
         else:
             await ctx.send(embed=discord_common.embed_success(
                 f'Bot commands are now disabled in {channel.mention}.'))

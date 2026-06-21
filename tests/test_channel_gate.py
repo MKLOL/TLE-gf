@@ -98,18 +98,18 @@ class TestGateDecision:
     def test_plain_gate_blocks_threads_too(self):
         assert gate_decision(_gate(None), '777') == (False, None)
 
-    def test_thread_gate_allows_designated_thread(self):
-        assert gate_decision(_gate('777'), '777') == (True, '777')
-
-    def test_thread_gate_blocks_parent_with_link(self):
+    def test_thread_mode_blocks_main_channel_with_link(self):
         assert gate_decision(_gate('777'), None) == (False, '777')
 
-    def test_thread_gate_blocks_other_threads_with_link(self):
-        assert gate_decision(_gate('777'), '888') == (False, '777')
+    def test_thread_mode_allows_the_created_thread(self):
+        assert gate_decision(_gate('777'), '777') == (True, '777')
 
-    def test_ids_compared_as_strings(self):
-        # DB stores TEXT; an int current-thread id must still match.
-        assert gate_decision(_gate('777'), 777) == (True, '777')
+    def test_thread_mode_allows_any_other_thread(self):
+        # The point of ;disallow thread: commands work in *every* thread of the
+        # channel, not just the bot-created one. The link still points at the
+        # created thread. The current-thread id type doesn't matter.
+        assert gate_decision(_gate('777'), '888') == (True, '777')
+        assert gate_decision(_gate('777'), 999) == (True, '777')
 
 
 # ── cog global check ────────────────────────────────────────────────────────
@@ -180,20 +180,30 @@ class TestGateCheck:
         assert '<#t9>' in ctx.sent[0][0]
         assert ctx.sent[0][1]['delete_after'] == 15
 
-    def test_designated_thread_allowed(self, db, cog):
+    def test_created_thread_allowed(self, db, cog):
         db.set_command_gate('g1', 'c1', 't9')
         ctx = self._ctx(command_name='gitgud',
                         channel=self._thread(parent_id='c1', thread_id='t9'))
         assert asyncio.run(cog._gate_check(ctx)) is True
         assert ctx.sent == []
 
-    def test_other_thread_blocked_with_link(self, db, cog):
+    def test_any_other_thread_also_allowed(self, db, cog):
+        # ;disallow thread allows commands in every thread of the channel,
+        # not only the bot-created one.
         db.set_command_gate('g1', 'c1', 't9')
+        ctx = self._ctx(command_name='gitgud',
+                        channel=self._thread(parent_id='c1', thread_id='tX'))
+        assert asyncio.run(cog._gate_check(ctx)) is True
+        assert ctx.sent == []
+
+    def test_plain_gate_still_blocks_threads(self, db, cog):
+        # Plain ;disallow (no thread) gates the channel *and* its threads.
+        db.set_command_gate('g1', 'c1')
         ctx = self._ctx(command_name='gitgud',
                         channel=self._thread(parent_id='c1', thread_id='tX'))
         with pytest.raises(discord_common.FeatureDisabledSilent):
             asyncio.run(cog._gate_check(ctx))
-        assert '<#t9>' in ctx.sent[0][0]
+        assert ctx.sent[0][0].endswith('disabled in this channel.')
 
     def test_disallow_thread_rejects_non_text_channel(self, cog):
         # A forum/voice/category channel is not a TextChannel: reject cleanly
