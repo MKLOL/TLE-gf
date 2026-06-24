@@ -221,9 +221,15 @@ class BetSchedulerMixin:
                         event.get('event_id'), event.get('home_team'),
                         event.get('away_team'), guild_id)
             return
+        # Several games can kick off at the same time in one channel; ping the
+        # notify role only on the first market opened for that kickoff so members
+        # aren't tagged once per simultaneous game.
+        suppress_mention = cf_common.user_db.bet_market_has_earlier_open_at_kickoff(
+            guild_id, channel_id, event['commence_time'], market_id)
         try:
             msg = await channel.send(
-                **self._open_announcement_kwargs(guild_id, event))
+                **self._open_announcement_kwargs(
+                    guild_id, event, suppress_mention=suppress_mention))
         except discord.HTTPException:
             logger.warning('failed to post auto market for %s in guild %s',
                            event.get('event_id'), guild_id, exc_info=True)

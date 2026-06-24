@@ -100,9 +100,10 @@ class BetFormatMixin:
         role_id = self._configured_notify_role_id(guild_id)
         return f'<@&{role_id}>' if role_id is not None else None
 
-    def _open_announcement_kwargs(self, guild_id, event):
+    def _open_announcement_kwargs(self, guild_id, event, *,
+                                  suppress_mention=False):
         kwargs = {'embed': self._open_announce_embed(event)}
-        mention = self._notify_role_mention(guild_id)
+        mention = None if suppress_mention else self._notify_role_mention(guild_id)
         if mention is not None:
             kwargs['content'] = mention
             kwargs['allowed_mentions'] = _role_mentions()

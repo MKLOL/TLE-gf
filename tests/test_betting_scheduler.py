@@ -9,6 +9,12 @@ from tests.betting_test_utils import (  # noqa: F401
 )
 
 
+class _AllowedMentions:
+    """Stub for discord.AllowedMentions so notify-role pings are inspectable."""
+    def __init__(self, **kw):
+        self.kw = kw
+
+
 class TestAutoOpen:
     def _run(self, coro):
         import asyncio
@@ -40,6 +46,11 @@ class TestAutoOpen:
             return events
         monkeypatch.setattr(cog, '_ensure_wc_events', _fake_ensure)
 
+    def _patch_allowed_mentions(self, monkeypatch):
+        import discord
+        monkeypatch.setattr(discord, 'AllowedMentions', _AllowedMentions,
+                            raising=False)
+
     def test_opens_market_and_thread_for_due_game(self, setup, monkeypatch):
         import time as _t
         cog, db, channel = setup
@@ -69,17 +80,11 @@ class TestAutoOpen:
     def test_open_announcement_pings_configured_notify_role(self, setup,
                                                             monkeypatch):
         import time as _t
-        import discord
         cog, db, channel = setup
         db.set_guild_config(GUILD, 'bet_notify_role', '444')
         ev = _wc_event(commence=_t.time() + 3600)
         self._arm_events(cog, [ev], monkeypatch)
-
-        class _AllowedMentions:
-            def __init__(self, **kw):
-                self.kw = kw
-        monkeypatch.setattr(discord, 'AllowedMentions', _AllowedMentions,
-                            raising=False)
+        self._patch_allowed_mentions(monkeypatch)
 
         async def scenario():
             await cog._refresh_schedule()
@@ -91,6 +96,54 @@ class TestAutoOpen:
             assert allowed.kw['everyone'] is False
             market = db.bet_market_get_active(GUILD, '222')
             cog._close_timers[market.market_id].cancel()
+
+        self._run(scenario())
+
+    def test_simultaneous_kickoffs_ping_role_only_once(self, setup, monkeypatch):
+        """Two games kicking off at the same time both get a market + thread,
+        but the notify role is tagged in only one of the announcements."""
+        import time as _t
+        cog, db, channel = setup
+        db.set_guild_config(GUILD, 'bet_notify_role', '444')
+        kickoff = _t.time() + 3600  # both due (within the 2h window)
+        ev1 = _wc_event(event_id='wc1', home='Spain', away='Cape Verde',
+                        commence=kickoff)
+        ev2 = _wc_event(event_id='wc2', home='France', away='Argentina',
+                        commence=kickoff)
+        self._arm_events(cog, [ev1, ev2], monkeypatch)
+        self._patch_allowed_mentions(monkeypatch)
+
+        async def scenario():
+            await cog._refresh_schedule()
+            assert len(channel.sent) == 2                       # both announced
+            assert all(m.thread is not None for m in channel.sent)  # both threaded
+            pinged = [m for m in channel.sent if m.content == '<@&444>']
+            silent = [m for m in channel.sent if m.content is None]
+            assert len(pinged) == 1   # role tagged exactly once
+            assert len(silent) == 1   # the simultaneous game stays quiet
+            for market in db.bet_markets_open(GUILD):
+                cog._close_timers[market.market_id].cancel()
+
+        self._run(scenario())
+
+    def test_staggered_kickoffs_each_ping(self, setup, monkeypatch):
+        """Games at different kickoff times are independent — each pings."""
+        import time as _t
+        cog, db, channel = setup
+        db.set_guild_config(GUILD, 'bet_notify_role', '444')
+        ev1 = _wc_event(event_id='wc1', home='Spain', away='Cape Verde',
+                        commence=_t.time() + 3600)
+        ev2 = _wc_event(event_id='wc2', home='France', away='Argentina',
+                        commence=_t.time() + 3600 + 1800)  # 30 min later
+        self._arm_events(cog, [ev1, ev2], monkeypatch)
+        self._patch_allowed_mentions(monkeypatch)
+
+        async def scenario():
+            await cog._refresh_schedule()
+            pinged = [m for m in channel.sent if m.content == '<@&444>']
+            assert len(pinged) == 2  # different kickoffs → both ping
+            for market in db.bet_markets_open(GUILD):
+                cog._close_timers[market.market_id].cancel()
 
         self._run(scenario())
 

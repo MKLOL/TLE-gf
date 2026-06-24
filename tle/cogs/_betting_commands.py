@@ -234,9 +234,12 @@ class BetCommandImplMixin:
         market_id = self._create_market(ctx.guild.id, ctx.channel.id, event)
         if market_id is None:
             raise BettingCogError('There is already an open market on that match.')
+        suppress_mention = cf_common.user_db.bet_market_has_earlier_open_at_kickoff(
+            ctx.guild.id, ctx.channel.id, event['commence_time'], market_id)
         try:
             msg = await ctx.send(
-                **self._open_announcement_kwargs(ctx.guild.id, event))
+                **self._open_announcement_kwargs(
+                    ctx.guild.id, event, suppress_mention=suppress_mention))
         except discord.HTTPException:
             cf_common.user_db.bet_void(ctx.guild.id, market_id, time.time())
             raise

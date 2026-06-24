@@ -87,6 +87,58 @@ class TestFindMarket:
             cog._find_market(self._ctx(CH), require_unambiguous=True)
 
 
+class TestBetGroupUnknownSubcommand:
+    """`;bet <unknown>` should tell the user it isn't a command rather than
+    silently behaving like a bare `;bet`."""
+
+    @pytest.fixture
+    def cog(self, db, monkeypatch):
+        from tle.util import codeforces_common as cf_common
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        return Betting(bot=None)
+
+    def _ctx(self, subcommand_passed):
+        sent = []
+
+        class _Ctx:
+            class guild:
+                id = GUILD
+
+            class channel:
+                id = CH
+
+            class author:
+                id = USER_A
+                roles = []
+
+            async def send(self_, embed=None, **kw):
+                sent.append(embed)
+                return None
+
+        ctx = _Ctx()
+        ctx.subcommand_passed = subcommand_passed
+        ctx.sent = sent
+        return ctx
+
+    def test_unknown_subcommand_raises(self, cog):
+        import asyncio
+        from tle.cogs.betting import Betting, BettingCogError
+        ctx = self._ctx('wrongcommand')
+        with pytest.raises(BettingCogError):
+            asyncio.run(Betting.bet.__wrapped__(cog, ctx))
+        assert ctx.sent == []  # never fell through to the market summary
+
+    def test_bare_bet_still_shows_summary(self, cog, monkeypatch):
+        import asyncio
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        ctx = self._ctx(None)
+        asyncio.run(Betting.bet.__wrapped__(cog, ctx))
+        assert len(ctx.sent) == 1  # neutral "no open market" embed, no error
+
+
 class TestWithdrawCommand:
     @pytest.fixture
     def cog(self, db, monkeypatch):

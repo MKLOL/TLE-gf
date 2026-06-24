@@ -159,6 +159,14 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                     brief='World Cup betting', invoke_without_command=True)
     async def bet(self, ctx):
         """Show the active market here and your balance."""
+        # `invoke_without_command=True` routes `;bet <unknown>` here too. If a
+        # token was passed it was an attempted subcommand that didn't resolve —
+        # tell the user instead of silently acting like a bare `;bet`.
+        attempted = getattr(ctx, 'subcommand_passed', None)
+        if attempted:
+            raise BettingCogError(
+                f'`{discord.utils.escape_markdown(attempted)}` isn\'t a `;bet` '
+                'command. See `;help bet` for the full list.')
         balance = cf_common.user_db.bet_ensure_wallet(
             ctx.guild.id, ctx.author.id, self._bet_start_balance(ctx.guild.id))
         market = self._find_market(ctx)
