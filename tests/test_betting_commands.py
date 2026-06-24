@@ -98,8 +98,15 @@ class TestBetGroupUnknownSubcommand:
         monkeypatch.setattr(cf_common, 'user_db', db)
         return Betting(bot=None)
 
-    def _ctx(self, subcommand_passed):
+    def _ctx(self, content):
+        """A ctx shaped like discord.py delivers to the bare group callback:
+        `subcommand_passed` is already wiped, so detection must come from the
+        raw message. `command.all_commands` carries the real subcommand names."""
         sent = []
+
+        class _Cmd:
+            all_commands = {'home': 1, 'draw': 1, 'away': 1, '1': 1, 'x': 1,
+                            '2': 1, 'mybet': 1, 'matches': 1, 'settle': 1}
 
         class _Ctx:
             class guild:
@@ -112,29 +119,45 @@ class TestBetGroupUnknownSubcommand:
                 id = USER_A
                 roles = []
 
+            prefix = ';'
+            invoked_with = 'bet'
+            command = _Cmd()
+            subcommand_passed = None  # discord.py has already reset this
+
+            class message:
+                pass
+
             async def send(self_, embed=None, **kw):
                 sent.append(embed)
                 return None
 
         ctx = _Ctx()
-        ctx.subcommand_passed = subcommand_passed
+        ctx.message.content = content
         ctx.sent = sent
         return ctx
 
     def test_unknown_subcommand_raises(self, cog):
         import asyncio
         from tle.cogs.betting import Betting, BettingCogError
-        ctx = self._ctx('wrongcommand')
-        with pytest.raises(BettingCogError):
-            asyncio.run(Betting.bet.__wrapped__(cog, ctx))
-        assert ctx.sent == []  # never fell through to the market summary
+        for content in (';bet wrongcommand', ';bet all34', ';bet all 1'):
+            ctx = self._ctx(content)
+            with pytest.raises(BettingCogError):
+                asyncio.run(Betting.bet.__wrapped__(cog, ctx))
+            assert ctx.sent == []  # never fell through to the market summary
+
+    def test_valid_subcommand_alias_does_not_raise(self, cog, monkeypatch):
+        # `;bet 1 50` (alias for home) must NOT be treated as junk. The bare
+        # callback only runs in tests here; the token must be recognized.
+        from tle.cogs._betting_helpers import unknown_subcommand_token
+        ctx = self._ctx(';bet 1 50')
+        assert unknown_subcommand_token(ctx) is None
 
     def test_bare_bet_still_shows_summary(self, cog, monkeypatch):
         import asyncio
         from tle import constants
         from tle.cogs.betting import Betting
         monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
-        ctx = self._ctx(None)
+        ctx = self._ctx(';bet')
         asyncio.run(Betting.bet.__wrapped__(cog, ctx))
         assert len(ctx.sent) == 1  # neutral "no open market" embed, no error
 

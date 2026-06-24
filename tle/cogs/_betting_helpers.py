@@ -343,6 +343,36 @@ def _bot_prefix():
     return getattr(discord_common, '_BOT_PREFIX', ';')
 
 
+def unknown_subcommand_token(ctx):
+    """The first token after the group name that isn't a registered subcommand
+    (so ``;bet junk`` -> ``'junk'``), or None for a bare ``;bet`` or a real
+    subcommand/alias.
+
+    Why parse the raw message instead of reading ``ctx.subcommand_passed``:
+    discord.py sets ``subcommand_passed`` on the group but then resets it to
+    None in ``Command.invoke`` *before* a group's own callback runs (the
+    ``invoke_without_command`` fall-through). So inside the ``bet`` callback it
+    is always None — we recover the attempted subcommand from the content.
+    """
+    content = getattr(getattr(ctx, 'message', None), 'content', '') or ''
+    prefix = getattr(ctx, 'prefix', '') or ''
+    if prefix and content.startswith(prefix):
+        content = content[len(prefix):]
+    content = content.lstrip()
+    invoked = getattr(ctx, 'invoked_with', '') or ''
+    if invoked and content[:len(invoked)].lower() == invoked.lower():
+        content = content[len(invoked):]
+    parts = content.split()
+    if not parts:
+        return None
+    token = parts[0]
+    group = getattr(ctx, 'command', None)
+    known = getattr(group, 'all_commands', None) or {}
+    if token.lower() in {name.lower() for name in known}:
+        return None
+    return token
+
+
 def _no_mentions():
     allowed = getattr(discord, 'AllowedMentions', None)
     return allowed.none() if allowed is not None and hasattr(allowed, 'none') else None

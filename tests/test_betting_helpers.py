@@ -491,3 +491,4 @@ class TestSecondsUntilOpen:
         from tle.cogs.betting import seconds_until_open
         # kickoff in 1h, lead 2h → already past the open moment → 0.
         assert seconds_until_open(3600, 7200, 0) == 0
+

@@ -66,6 +66,7 @@ from tle.cogs._betting_helpers import (  # noqa: F401
     normalize_pick, normalized_market_odds, outcome_from_score, parse_amount,
     parse_settle_arg, payout_amount, pick_is_negative, pick_wins, positive_pick,
     rank_line, resolve_bet_pick, resolve_pick, seconds_until_open,
+    unknown_subcommand_token,
     _COIN, _api_key, _bot_prefix, _football_data_key, _no_mentions,
     _role_mentions, _short_error, _utc_today,
 )
@@ -159,10 +160,12 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                     brief='World Cup betting', invoke_without_command=True)
     async def bet(self, ctx):
         """Show the active market here and your balance."""
-        # `invoke_without_command=True` routes `;bet <unknown>` here too. If a
-        # token was passed it was an attempted subcommand that didn't resolve —
-        # tell the user instead of silently acting like a bare `;bet`.
-        attempted = getattr(ctx, 'subcommand_passed', None)
+        # `invoke_without_command=True` routes `;bet <unknown>` here too. NOTE:
+        # discord.py wipes `ctx.subcommand_passed` before this callback runs, so
+        # we recover the attempted subcommand from the raw message instead. Any
+        # leftover token means `;bet <unknown>` — error rather than silently
+        # acting like a bare `;bet`.
+        attempted = unknown_subcommand_token(ctx)
         if attempted:
             raise BettingCogError(
                 f'`{discord.utils.escape_markdown(attempted)}` isn\'t a `;bet` '
