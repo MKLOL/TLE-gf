@@ -101,7 +101,46 @@ def parse_match(raw):
         'away_score': away_score,
         'winner': _winner(score.get('winner')),
         'duration': score.get('duration'),
+        'stage': raw.get('stage'),
     }
+
+
+def is_knockout_stage(stage):
+    """True when a football-data ``stage`` denotes a knockout round.
+
+    Defined as "any known stage that is not the group phase", so a new
+    knockout label (e.g. ``LAST_32`` for the 48-team 2026 format) is treated as
+    knockout with no code change. The one load-bearing assumption is that the
+    group phase is spelled exactly ``GROUP_STAGE`` — football-data v4 uses that
+    literal for the World Cup (``LEAGUE_STAGE`` is the separate UCL value). A
+    missing/unknown stage returns False, so the caller fails safe to a 1X2
+    market that still offers a draw — the conservative direction, since a draw
+    can always be settled but cannot be un-stripped from a group market."""
+    return bool(stage) and stage != 'GROUP_STAGE'
+
+
+def find_match_stage(home_team, away_team, commence_time, fd_matches,
+                     *, max_time_diff=86400):
+    """Return the tournament ``stage`` (e.g. 'GROUP_STAGE', 'LAST_16') for the
+    fixture matching (home vs away) near commence_time, or None when no fixture
+    matches.
+
+    Order-insensitive and date-windowed, mirroring :func:`find_match_result`,
+    but it does NOT require the match to have finished — it runs at market-open
+    time to decide whether a market is 1X2 (group) or to-advance (knockout).
+    """
+    h, a = _canon_key(home_team), _canon_key(away_team)
+    if h == a:
+        return None
+    for m in fd_matches:
+        mh, ma = _canon_key(m['home']), _canon_key(m['away'])
+        if {mh, ma} != {h, a}:
+            continue
+        if (commence_time is not None and m['commence_time'] is not None
+                and abs(commence_time - m['commence_time']) > max_time_diff):
+            continue
+        return m.get('stage')
+    return None
 
 
 def find_result(home_team, away_team, commence_time, fd_matches,

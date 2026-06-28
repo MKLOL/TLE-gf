@@ -209,18 +209,22 @@ class BetSchedulerMixin:
                                fixture_key, guild_id, exc_info=True)
 
     async def _open_market_auto(self, guild_id, channel_id, event):
+        """Open + announce + thread a market headlessly. Returns the new
+        market_id on success, or None if it could not be posted (channel gone,
+        duplicate, or the announcement failed) — callers that void-then-reopen
+        rely on this to tell a real repost from a no-op."""
         channel = self.bot.get_channel(int(channel_id)) if self.bot else None
         if channel is None:
             logger.warning('configured bet channel %s missing for guild %s',
                            channel_id, guild_id)
-            return
+            return None
         market_id = self._create_market(guild_id, channel_id, event)
         if market_id is None:
             logger.info('Auto-open skipped duplicate fixture %s (%s vs %s) '
                         'in guild %s',
                         event.get('event_id'), event.get('home_team'),
                         event.get('away_team'), guild_id)
-            return
+            return None
         # Several games can kick off at the same time in one channel; ping the
         # notify role only on the first market opened for that kickoff so members
         # aren't tagged once per simultaneous game.
@@ -234,13 +238,14 @@ class BetSchedulerMixin:
             logger.warning('failed to post auto market for %s in guild %s',
                            event.get('event_id'), guild_id, exc_info=True)
             cf_common.user_db.bet_void(guild_id, market_id, time.time())
-            return
+            return None
         cf_common.user_db.bet_market_set_message(market_id, msg.id)
         market = cf_common.user_db.bet_market_get(market_id)
         await self._create_thread(market_id, msg, market)
         self._schedule_close(market)
         logger.info('Auto-opened market %s (%s vs %s) in guild %s',
                     market_id, event['home_team'], event['away_team'], guild_id)
+        return market_id
 
     async def _ensure_thread(self, market):
         if not market.message_id or not self.bot:

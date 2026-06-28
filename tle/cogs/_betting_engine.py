@@ -53,9 +53,44 @@ class BetEngineMixin:
         except odds_api.OddsApiError as e:
             logger.warning('World Cup odds fetch failed: %s', e)
             raise BettingCogError(f'Could not fetch World Cup odds: {e}')
-        self._wc_events = [normalize_event(event) for event in events]
+        fd_matches = await self._ensure_fd_matches(max_age)
+        self._wc_events = [
+            normalize_event(event, knockout=self._event_knockout(event, fd_matches))
+            for event in events]
         self._wc_fetched_at = now
         return self._wc_events
+
+    async def _ensure_fd_matches(self, max_age):
+        """Return the football-data World Cup fixture list (which carries each
+        match's tournament ``stage``), refetching only if the cache is stale.
+
+        Best-effort: with no token or on a fetch failure it returns the last
+        good list (or ``[]``), so a football-data outage degrades to "no stage
+        info" rather than breaking odds. Callers fail safe to a 1X2 market."""
+        now = time.time()
+        if (self._fd_matches is not None and self._fd_fetched_at is not None
+                and now - self._fd_fetched_at <= max_age):
+            return self._fd_matches
+        token = _football_data_key()
+        if not token:
+            return self._fd_matches or []
+        try:
+            matches = await football_data.fetch_wc_matches(token)
+        except football_data.FootballDataError as e:
+            logger.warning('stage lookup: football-data fetch failed: %s', e)
+            return self._fd_matches or []
+        self._fd_matches = matches
+        self._fd_fetched_at = now
+        return matches
+
+    def _event_knockout(self, event, fd_matches):
+        """Whether a market for this fixture should be a 2-way 'to advance'
+        market, decided from the authoritative competition stage rather than a
+        hardcoded date. Unknown stage / no data → False (offer a draw)."""
+        stage = football_data.find_match_stage(
+            event.get('home_team'), event.get('away_team'),
+            event.get('commence_time'), fd_matches)
+        return football_data.is_knockout_stage(stage)
 
     # ── Notify-role validation ─────────────────────────────────────────
 

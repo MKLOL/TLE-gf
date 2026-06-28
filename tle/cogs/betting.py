@@ -57,6 +57,7 @@ from tle.util import tasks
 from tle.cogs._betting_commands import BetCommandImplMixin
 from tle.cogs._betting_engine import BetEngineMixin, BettingCogError
 from tle.cogs._betting_format import BetFormatMixin
+from tle.cogs._betting_remediation import BetRemediationMixin
 from tle.cogs._betting_scheduler import BetSchedulerMixin
 from tle.cogs._betting_wallet_cmds import BetWalletCmdImplMixin
 # Re-export the pure helpers so `from tle.cogs.betting import <helper>` keeps
@@ -103,7 +104,8 @@ def _bet_channel_is_set(ctx):
 # ── Cog ────────────────────────────────────────────────────────────────────
 
 class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
-              BetEngineMixin, BetSchedulerMixin, commands.Cog):
+              BetEngineMixin, BetSchedulerMixin, BetRemediationMixin,
+              commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         # channel_id -> events shown by the last `;bet matches` (for `;bet open <n>`)
@@ -112,6 +114,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         # odds), reused by the scheduler, open timers and `;bet matches`.
         self._wc_events = None
         self._wc_fetched_at = None
+        # Cache of the football-data fixture list, which carries each match's
+        # tournament stage (group vs knockout) — used to shape new markets.
+        self._fd_matches = None
+        self._fd_fetched_at = None
         # fixture_key -> asyncio.Task: precise per-fixture "open at kickoff − 2h"
         # timers. Provider event ids can drift, so timers use canonical fixtures.
         self._open_timers = {}
@@ -134,6 +140,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             return
         await self._refresh_schedule()   # arm open timers + catch in-window games
         await self._arm_close_timers()   # restore close timers after restart
+        await self._run_draw_refixture()  # one-time: fix mislabelled no-draw markets
         self._safety_net_task.start()
         self._settle_task.start()
 

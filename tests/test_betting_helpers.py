@@ -169,13 +169,55 @@ class TestNormalizedOdds:
         assert abs((1 / fair['home']) + (1 / fair['away']) - 1.0) < 1e-9
         assert abs(fair['home'] - 1.5) < 1e-3
 
-    def test_normalize_event_marks_knockout(self):
+    def test_normalize_event_knockout_drops_draw(self):
         event = {'commence_time': datetime(2026, 6, 28, 19, 0,
                                            tzinfo=timezone.utc).timestamp(),
                  'odds': {'home': 2.0, 'draw': 4.0, 'away': 4.0}}
-        out = normalize_event(event)
+        out = normalize_event(event, knockout=True)
         assert out['market_type'] == 'advance'
         assert out['odds']['draw'] == 0.0
+
+    def test_normalize_event_group_keeps_draw(self):
+        # A late group game (any date) must stay 1X2 — the date no longer
+        # decides knockout; the caller passes the stage-derived flag.
+        event = {'commence_time': datetime(2026, 6, 28, 19, 0,
+                                           tzinfo=timezone.utc).timestamp(),
+                 'odds': {'home': 2.0, 'draw': 4.0, 'away': 4.0}}
+        out = normalize_event(event)  # knockout defaults to False (fail-safe)
+        assert out['market_type'] == 'result'
+        assert out['odds']['draw'] > 1
+
+
+class TestStageDetection:
+    def test_is_knockout_stage(self):
+        assert football_data.is_knockout_stage('LAST_16') is True
+        assert football_data.is_knockout_stage('QUARTER_FINALS') is True
+        assert football_data.is_knockout_stage('GROUP_STAGE') is False
+        assert football_data.is_knockout_stage(None) is False
+        assert football_data.is_knockout_stage('') is False
+
+    def test_find_match_stage_matches_either_orientation(self):
+        matches = [{'home': 'Austria', 'away': 'Algeria',
+                    'commence_time': 1000.0, 'stage': 'GROUP_STAGE'},
+                   {'home': 'France', 'away': 'Brazil',
+                    'commence_time': 2000.0, 'stage': 'LAST_16'}]
+        # Query flipped vs the feed orientation still resolves.
+        assert football_data.find_match_stage(
+            'Algeria', 'Austria', 1000.0, matches) == 'GROUP_STAGE'
+        assert football_data.find_match_stage(
+            'Brazil', 'France', 2000.0, matches) == 'LAST_16'
+
+    def test_find_match_stage_unknown_fixture(self):
+        matches = [{'home': 'Austria', 'away': 'Algeria',
+                    'commence_time': 1000.0, 'stage': 'GROUP_STAGE'}]
+        assert football_data.find_match_stage(
+            'Spain', 'Japan', 1000.0, matches) is None
+
+    def test_find_match_stage_out_of_window(self):
+        matches = [{'home': 'Austria', 'away': 'Algeria',
+                    'commence_time': 1000.0, 'stage': 'GROUP_STAGE'}]
+        assert football_data.find_match_stage(
+            'Algeria', 'Austria', 1000.0 + 10 * 86400, matches) is None
 
 
 class TestParseSettleArg:

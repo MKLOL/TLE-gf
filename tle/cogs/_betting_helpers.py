@@ -22,7 +22,6 @@ _PICK_ALIASES = {
 }
 _AMOUNT_WORDS = ('all', 'max', 'allin', 'all-in', 'everything')
 _DIRECT_PICKS = ('home', 'draw', 'away')
-_KNOCKOUT_START_TS = datetime(2026, 6, 28, tzinfo=timezone.utc).timestamp()
 # Provider event ids can drift. Treat the same team pair near the same kickoff
 # as the same market so the 15-minute safety net cannot open a duplicate thread.
 _DUPLICATE_MATCH_WINDOW = 6 * 3600
@@ -254,14 +253,17 @@ def normalized_market_odds(odds, *, knockout=False):
             for pick in _DIRECT_PICKS}
 
 
-def _event_is_knockout(event):
-    return (event.get('commence_time') or 0) >= _KNOCKOUT_START_TS
+def normalize_event(event, *, knockout=False):
+    """Normalise a raw odds event into market-ready form.
 
-
-def normalize_event(event):
+    ``knockout`` is decided by the caller from the authoritative competition
+    stage (football-data), NOT from the kickoff date — a knockout match folds
+    the draw into the two teams to form a 2-way 'to advance' market, while a
+    group match stays 1X2. Defaults to False so an unknown stage fails safe to
+    a market that still offers a draw.
+    """
     out = dict(event)
-    out['odds'] = normalized_market_odds(
-        event['odds'], knockout=_event_is_knockout(event))
+    out['odds'] = normalized_market_odds(event['odds'], knockout=knockout)
     out['market_type'] = 'advance' if not _odds_allow_draw(out['odds']) else 'result'
     return out
 
