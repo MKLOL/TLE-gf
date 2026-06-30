@@ -17,8 +17,8 @@ from tle.util import codeforces_common as cf_common
 from tle.util import football_data
 from tle.util import odds_api
 from tle.cogs._betting_helpers import (
-    is_remove_amount, normalize_event, outcome_from_score, parse_amount,
-    parse_settle_arg, payout_amount, resolve_pick,
+    fd_settle_outcome, is_remove_amount, normalize_event, outcome_from_score,
+    parse_amount, parse_settle_arg, payout_amount, resolve_pick,
     _api_key, _event_fixture_key, _football_data_key, _no_mentions,
     _same_match_market_event,
 )
@@ -396,7 +396,8 @@ class BetEngineMixin:
         if not token:
             return
         # Any market past kickoff is eligible — football-data tells us whether
-        # the game has actually FINISHED, so no fixed buffer is needed.
+        # the game has actually FINISHED. (Beyond-regulation results are held one
+        # extra poll for confirmation; see the loop below.)
         markets = cf_common.user_db.bet_markets_pending_settlement(time.time())
         if not markets:
             return
@@ -410,22 +411,29 @@ class BetEngineMixin:
                 m.home_team, m.away_team, m.commence_time, fd_matches)
             if result is None:
                 continue
-            # football-data's `winner` is authoritative and already accounts for
-            # extra time and penalties: a knockout decided in a shootout reports
-            # a LEVEL `fullTime` score (e.g. 1-1) but winner=HOME/AWAY. Always
-            # prefer it over the scoreline so a shootout never settles as a draw
-            # — even on a market that was mistakenly opened as 1X2. Only fall
-            # back to the score when no winner is published (a plain result).
-            outcome = result.get('winner')
-            if outcome not in ('home', 'away', 'draw'):
-                if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
-                    # Beyond regulation but the decisive result isn't in the
-                    # feed yet — never invent a draw here; wait for next poll.
+            # fd_settle_outcome trusts football-data's authoritative `winner`
+            # (already accounts for ET/penalties) but returns None for a result
+            # we must NOT auto-settle — e.g. a shootout whose feed data is
+            # internally inconsistent — leaving it for a manual `;bet settle`.
+            outcome = fd_settle_outcome(result)
+            if outcome is None:
+                self._fd_pending_confirm.pop(m.market_id, None)
+                continue
+            if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
+                # The feed's beyond-regulation data has flip-flopped before (a
+                # wrong decisive winner that later vanished). Require the SAME
+                # result on two consecutive ~5-min polls before trusting it:
+                # hold on first sight, settle only when the next poll confirms.
+                key = (outcome, result['home_score'], result['away_score'])
+                if self._fd_pending_confirm.get(m.market_id) != key:
+                    self._fd_pending_confirm[m.market_id] = key
+                    logger.info('bet market %s: holding %s result (%s) one poll '
+                                'to confirm', m.market_id,
+                                result.get('duration'), outcome)
                     continue
-                outcome = outcome_from_score(
-                    result['home_score'], result['away_score'])
             await self._settle_market_with_score(
                 m, result['home_score'], result['away_score'], outcome=outcome)
+            self._fd_pending_confirm.pop(m.market_id, None)
 
     async def _settle_via_odds_api(self):
         api_key = _api_key()

@@ -133,9 +133,13 @@ class TestAutoSettleFootballData:
             return [{'home': 'Spain', 'away': 'Cape Verde',
                      'commence_time': _t.time() - 100, 'finished': True,
                      'home_score': 1, 'away_score': 1, 'winner': 'away',
-                     'duration': 'PENALTY_SHOOTOUT'}]
+                     'duration': 'PENALTY_SHOOTOUT',
+                     'penalties': {'home': 3, 'away': 4}}]
         monkeypatch.setattr(fd, 'fetch_wc_matches', _fake_fetch)
 
+        # A penalty result is held one poll for confirmation, then settled.
+        self._run(cog._settle_via_football_data())
+        assert db.bet_market_get(mid).status == 'open'   # first poll: held
         self._run(cog._settle_via_football_data())
         m = db.bet_market_get(mid)
         assert m.status == 'settled' and m.result == 'away'  # not 'draw'

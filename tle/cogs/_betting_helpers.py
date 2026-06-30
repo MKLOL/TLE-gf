@@ -38,6 +38,38 @@ def outcome_from_score(home, away):
     return 'draw'
 
 
+def fd_settle_outcome(result):
+    """The outcome a football-data result supports for auto-settlement, or None
+    when we must NOT settle it yet.
+
+    football-data's ``winner`` is authoritative — it already reflects extra time
+    and penalties — so it is trusted over the scoreline (a shootout reports a
+    LEVEL fullTime but a decisive winner). But the feed's beyond-regulation data
+    has proven unreliable, so a ``PENALTY_SHOOTOUT`` is only accepted when its
+    ``penalties`` tally has a clear leader that agrees with ``winner``; an
+    inconsistent reading (no winner, or a tied/garbage shootout) returns None and
+    is left for a manual ``;bet settle``. A plain in-regulation game with no
+    published winner falls back to the scoreline.
+    """
+    winner = result.get('winner')
+    duration = result.get('duration')
+    if duration == 'PENALTY_SHOOTOUT':
+        if winner not in ('home', 'away'):
+            return None
+        pens = result.get('penalties') or {}
+        ph, pa = pens.get('home'), pens.get('away')
+        if ph is None or pa is None or ph == pa:
+            return None
+        if ('home' if ph > pa else 'away') != winner:
+            return None
+        return winner
+    if winner in ('home', 'away', 'draw'):
+        return winner
+    if duration == 'EXTRA_TIME':
+        return None  # beyond regulation, no decisive winner yet — don't guess
+    return outcome_from_score(result.get('home_score'), result.get('away_score'))
+
+
 def pick_is_negative(pick):
     return isinstance(pick, str) and pick.startswith('not_')
 
