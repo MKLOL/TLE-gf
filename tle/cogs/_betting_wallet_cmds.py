@@ -34,7 +34,7 @@ class BetWalletCmdImplMixin:
         if market is None:
             raise BettingCogError(
                 'No open market here. Bets are placed in the match thread the '
-                'bot opens ~2h before kickoff.')
+                'bot opens ~6h before kickoff.')
         if not self._pick_allowed(market, pick):
             raise BettingCogError('That outcome is not available for this market.')
         status, data = await self._execute_bet(
@@ -100,7 +100,7 @@ class BetWalletCmdImplMixin:
         if market is None:
             raise BettingCogError(
                 'No open market here. Run this in the match thread the bot opens '
-                '~2h before kickoff.')
+                '~6h before kickoff.')
         tokens = extract_bet_tokens(text)
         if tokens is None:
             raise BettingCogError(

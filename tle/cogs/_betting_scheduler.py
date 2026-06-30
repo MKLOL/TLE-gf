@@ -45,7 +45,7 @@ class BetSchedulerMixin:
 
     async def _refresh_schedule(self):
         """Discover the fixture list (cached schedule, cheap) and, for each
-        upcoming game, either arm a precise open timer (kickoff − 2h still in
+        upcoming game, either arm a precise open timer (kickoff − 6h still in
         the future) or open it now (already inside the window — restart / missed
         timer catch-up). This is idempotent and safe to call often."""
         if not _api_key():
@@ -64,7 +64,7 @@ class BetSchedulerMixin:
             if seconds_until_open(event['commence_time'], lead, now) > 0:
                 self._schedule_open(event)
             else:
-                # Inside the 2h window already — open (or attach a thread) now.
+                # Inside the 6h window already — open (or attach a thread) now.
                 await self._fire_open(_event_fixture_key(event))
 
     def _schedule_open(self, event):

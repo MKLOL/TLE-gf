@@ -1,7 +1,7 @@
 """World Cup soccer betting minigame.
 
 Fully automated and World Cup–only. An admin points the bot at a channel with
-`;prediction here`; from then on the bot, on its own, ~2 hours before each
+`;prediction here`; from then on the bot, on its own, ~6 hours before each
 World Cup kickoff:
   1. reads the live 1X2 odds from The Odds API and **freezes** them,
   2. posts the market in the configured channel and opens a **thread**,
@@ -118,7 +118,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         # tournament stage (group vs knockout) — used to shape new markets.
         self._fd_matches = None
         self._fd_fetched_at = None
-        # fixture_key -> asyncio.Task: precise per-fixture "open at kickoff − 2h"
+        # fixture_key -> asyncio.Task: precise per-fixture "open at kickoff − 6h"
         # timers. Provider event ids can drift, so timers use canonical fixtures.
         self._open_timers = {}
         # market_id -> asyncio.Task: edit/announce exactly when betting closes.
@@ -189,7 +189,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         if market is None:
             configured = cf_common.user_db.get_guild_config(
                 ctx.guild.id, _CHANNEL_CONFIG_KEY)
-            hint = ('Markets auto-open ~2h before each World Cup kickoff'
+            hint = ('Markets auto-open ~6h before each World Cup kickoff'
                     if configured else
                     'An admin can run `;prediction here` to start auto-opening '
                     'World Cup markets in a channel')
@@ -435,7 +435,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def resume(self, ctx):
         cf_common.user_db.set_guild_config(ctx.guild.id, _PAUSED_CONFIG_KEY, '0')
         await ctx.send(embed=discord_common.embed_success(
-            'Auto-open **resumed** — markets will open ~2h before kickoff again.'))
+            'Auto-open **resumed** — markets will open ~6h before kickoff again.'))
 
     @bet.command(name='book', hidden=True,
                  brief='Show all bets on the active market')

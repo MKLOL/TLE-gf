@@ -70,8 +70,9 @@ BET_START_BALANCE = int(os.environ.get('BET_START_BALANCE', 1000))
 BET_DAILY_AMOUNT = int(os.environ.get('BET_DAILY_AMOUNT', 100))
 BET_MIN_STAKE = 1
 # The bot auto-opens a betting market this long before kickoff, freezing the
-# odds it reads at that moment for the life of the market. 2h, per spec.
-BET_OPEN_LEAD_SECONDS = 2 * 3600
+# odds it reads at that moment for the life of the market. 6h, to give members
+# more time to bet (odds barely move over the extra hours).
+BET_OPEN_LEAD_SECONDS = 6 * 3600
 # How long after kickoff before the auto-settle poller asks for a final score.
 # A World Cup match runs ~2h (group) and up to ~2h45 with extra time +
 # penalties (knockouts); 3h leaves margin for the final score to land.
