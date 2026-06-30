@@ -419,14 +419,19 @@ class TestFootballDataParse:
         assert p['winner'] == 'home'
 
     def test_finished_penalties_keeps_winner(self):
+        # Real football-data v4 shape for a shootout: `fullTime` holds the LEVEL
+        # regular+extra-time score (1-1), the shootout tally lives in a separate
+        # `penalties` node, and `winner` is the team that won on penalties.
         raw = {'status': 'FINISHED', 'utcDate': '2026-07-01T16:01:00Z',
                'homeTeam': {'name': 'Spain'}, 'awayTeam': {'name': 'Cape Verde'},
                'score': {'winner': 'AWAY_TEAM', 'duration': 'PENALTY_SHOOTOUT',
-                         'fullTime': {'homeTeam': 4, 'awayTeam': 5},
-                         'regularTime': {'homeTeam': 1, 'awayTeam': 1}}}
+                         'fullTime': {'home': 1, 'away': 1},
+                         'regularTime': {'home': 1, 'away': 1},
+                         'penalties': {'home': 3, 'away': 4}}}
         p = football_data.parse_match(raw)
         assert p['finished'] is True
-        assert p['home_score'] == 4 and p['away_score'] == 5
+        # The scoreline stays level; the WINNER carries the real result.
+        assert p['home_score'] == 1 and p['away_score'] == 1
         assert p['winner'] == 'away'
         assert p['duration'] == 'PENALTY_SHOOTOUT'
 

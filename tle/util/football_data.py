@@ -163,34 +163,51 @@ def find_result(home_team, away_team, commence_time, fd_matches,
 
 def find_match_result(home_team, away_team, commence_time, fd_matches,
                       *, max_time_diff=86400):
-    """Find a FINISHED football-data match and return a dict mapped to the
-    supplied home/away orientation, including the winner when available."""
+    """Find the FINISHED football-data match for this fixture and return a dict
+    mapped to the supplied home/away orientation, including the winner.
+
+    When several finished fixtures share the same team pair inside the window
+    (it shouldn't happen within one tournament, but a stale or duplicated feed
+    entry can do it), the one whose kickoff is NEAREST the expected commence
+    time wins — never just the first in feed order — so we always settle on the
+    intended game rather than some other meeting of the two teams.
+    """
     h, a = _canon_key(home_team), _canon_key(away_team)
+    if h == a:
+        return None
+    best, best_diff = None, None
     for m in fd_matches:
         if not m['finished']:
             continue
         mh, ma = _canon_key(m['home']), _canon_key(m['away'])
-        if {mh, ma} != {h, a} or h == a:
+        if {mh, ma} != {h, a}:
             continue
-        if (commence_time is not None and m['commence_time'] is not None
-                and abs(commence_time - m['commence_time']) > max_time_diff):
-            continue
-        if mh == h and ma == a:
-            return dict(m)
-        winner = m.get('winner')
-        if winner == 'home':
-            winner = 'away'
-        elif winner == 'away':
-            winner = 'home'
-        return {
-            **m,
-            'home': m['away'],
-            'away': m['home'],
-            'home_score': m['away_score'],
-            'away_score': m['home_score'],
-            'winner': winner,
-        }
-    return None
+        if (commence_time is not None and m['commence_time'] is not None):
+            diff = abs(commence_time - m['commence_time'])
+            if diff > max_time_diff:
+                continue
+        else:
+            diff = float('inf')  # no time to compare on — accept, lowest priority
+        if best_diff is None or diff < best_diff:
+            best, best_diff = m, diff
+    if best is None:
+        return None
+    mh, ma = _canon_key(best['home']), _canon_key(best['away'])
+    if mh == h and ma == a:
+        return dict(best)
+    winner = best.get('winner')
+    if winner == 'home':
+        winner = 'away'
+    elif winner == 'away':
+        winner = 'home'
+    return {
+        **best,
+        'home': best['away'],
+        'away': best['home'],
+        'home_score': best['away_score'],
+        'away_score': best['home_score'],
+        'winner': winner,
+    }
 
 
 async def fetch_wc_matches(token, *, session=None, base_url=BASE_URL):

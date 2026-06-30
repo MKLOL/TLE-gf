@@ -410,9 +410,20 @@ class BetEngineMixin:
                 m.home_team, m.away_team, m.commence_time, fd_matches)
             if result is None:
                 continue
-            outcome = None
-            if not self._market_allows_draw(m):
-                outcome = result.get('winner')
+            # football-data's `winner` is authoritative and already accounts for
+            # extra time and penalties: a knockout decided in a shootout reports
+            # a LEVEL `fullTime` score (e.g. 1-1) but winner=HOME/AWAY. Always
+            # prefer it over the scoreline so a shootout never settles as a draw
+            # — even on a market that was mistakenly opened as 1X2. Only fall
+            # back to the score when no winner is published (a plain result).
+            outcome = result.get('winner')
+            if outcome not in ('home', 'away', 'draw'):
+                if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
+                    # Beyond regulation but the decisive result isn't in the
+                    # feed yet — never invent a draw here; wait for next poll.
+                    continue
+                outcome = outcome_from_score(
+                    result['home_score'], result['away_score'])
             await self._settle_market_with_score(
                 m, result['home_score'], result['away_score'], outcome=outcome)
 
