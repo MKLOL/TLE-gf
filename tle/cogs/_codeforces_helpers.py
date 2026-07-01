@@ -27,6 +27,20 @@ def _calculateGitgudScoreForDelta(delta):
     return _GITGUD_SCORE_DISTRIB[index]
 
 
+def _gitgudPenalisedTagCount(tags, bantags):
+    """How many requested tags subtract points.
+
+    Every ``+`` require and ``~`` ban counts -- including ``+edu`` and
+    ``+div2``/``div3``/``div4``, which narrow the pool just as much as a topic
+    tag -- EXCEPT a bare ``+div1``: restricting to div1 (the hardest division)
+    is a legitimately harder ask, not cherry-picking an easy problem, so it
+    never subtracts points. Banning div1 (``~div1``) still counts, since that
+    only makes the pool easier.
+    """
+    return (sum(1 for tag in tags if tag.strip().lower() != 'div1')
+            + len(bantags))
+
+
 def _gitgudTagPenaltyDelta(base_delta, num_tags):
     """Shrink a challenge's payout by the number of requested tags.
 

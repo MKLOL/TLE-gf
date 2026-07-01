@@ -15,10 +15,10 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.db.user_db_conn import Gitgud
 from tle.util import paginator
-from tle.util import cache_system2
 from tle.cogs._codeforces_helpers import (
     _calculateGitgudScoreForDelta,
     _gitgudTagPenaltyDelta,
+    _gitgudPenalisedTagCount,
     CodeforcesCogError,
     _GITGUD_NO_SKIP_TIME,
     _ONE_WEEK_DURATION,
@@ -233,16 +233,13 @@ class CodeforcesGitgudMixin:
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
 
-        # remove division tags since we dont want them to reduce points
-        tags = [tag for tag in tags if tag not in cache_system2._DIV_TAGS]
-        bantags = [tag for tag in bantags if tag not in cache_system2._DIV_TAGS]
-
-        # Points are divided by (number of requested tags + 1), min 1 point, so
+        # Points are divided by (number of penalised tags + 1), min 1 point, so
         # even one tag halves the reward and tag-spamming an easy high-rated
-        # problem past the filters pays almost nothing. Division tags are
-        # already stripped above and don't count.
+        # problem past the filters pays almost nothing. Every requested tag
+        # counts -- +edu, +div2/3/4 and any ~ban included -- except a bare
+        # +div1 (see _gitgudPenalisedTagCount).
         delta = problems[choice].rating - rating
-        delta = _gitgudTagPenaltyDelta(delta, len(tags) + len(bantags))
+        delta = _gitgudTagPenaltyDelta(delta, _gitgudPenalisedTagCount(tags, bantags))
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
 
     async def _gitlog_impl(self, ctx, member):

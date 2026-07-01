@@ -13,6 +13,7 @@ import pytest  # noqa: F401
 
 from tle.cogs._codeforces_helpers import (
     _calculateGitgudScoreForDelta,
+    _gitgudPenalisedTagCount,
     _gitgudTagPenaltyDelta,
     _GITGUD_SCORE_DISTRIB,
 )
@@ -82,6 +83,39 @@ class TestDivisionByTagCountPlusOne:
         seventeen = 200
         assert _calculateGitgudScoreForDelta(seventeen) == 17
         assert _score(seventeen, 1) == 8
+
+
+class TestPenalisedTagCount:
+    """Which requested tags actually subtract points."""
+
+    def test_no_tags_is_zero(self):
+        assert _gitgudPenalisedTagCount([], []) == 0
+
+    def test_plain_topic_tags_all_count(self):
+        assert _gitgudPenalisedTagCount(['dp', 'graphs'], []) == 2
+
+    def test_bans_count(self):
+        assert _gitgudPenalisedTagCount([], ['fft', 'flows']) == 2
+
+    def test_require_div1_is_free(self):
+        # The whole point: +div1 (hardest division) never subtracts.
+        assert _gitgudPenalisedTagCount(['div1'], []) == 0
+
+    def test_require_div1_is_free_regardless_of_case_or_space(self):
+        assert _gitgudPenalisedTagCount([' Div1 ', 'DIV1'], []) == 0
+
+    def test_edu_and_other_divisions_still_count(self):
+        # These narrow to easier pools -- they were the dodge the user hit.
+        assert _gitgudPenalisedTagCount(['edu'], []) == 1
+        assert _gitgudPenalisedTagCount(['div2', 'div3', 'div4'], []) == 3
+
+    def test_banning_div1_still_counts(self):
+        # ~div1 removes the hardest problems, so it only makes things easier.
+        assert _gitgudPenalisedTagCount([], ['div1']) == 1
+
+    def test_div1_free_but_the_rest_of_the_mix_counts(self):
+        # +div1 exempt; +dp and ~fft still count -> 2.
+        assert _gitgudPenalisedTagCount(['div1', 'dp'], ['fft']) == 2
 
 
 class TestNeverBelowOne:
