@@ -27,6 +27,33 @@ def _calculateGitgudScoreForDelta(delta):
     return _GITGUD_SCORE_DISTRIB[index]
 
 
+def _gitgudTagPenaltyDelta(base_delta, num_tags):
+    """Shrink a challenge's payout by the number of requested tags.
+
+    Points are worth ``base_score // num_tags`` (floored, but never below 1).
+    This exists to defang tag-spam: banning every hard category so an easy
+    high-rated problem slips through used to still pay near-max points, so
+    piling on tags now collapses the reward toward the 1-point floor.
+
+    The whole system derives points from the stored ``rating_delta`` via
+    :func:`_calculateGitgudScoreForDelta`, so we translate the reduced score
+    back into a delta on that score ladder, rounding DOWN to the nearest
+    achievable rung (never inflating). Returns ``base_delta`` unchanged when no
+    tags were requested.
+    """
+    if num_tags <= 0:
+        return base_delta
+    target = max(1, _calculateGitgudScoreForDelta(base_delta) // num_tags)
+    # Walk the ascending score ladder and keep the delta of the largest rung
+    # whose score is still <= target. DISTRIB[i] is reached at this delta.
+    penalized = _GITGUD_SCORE_DISTRIB_MIN  # rung 0 -> 1 point, the floor
+    for i, score in enumerate(_GITGUD_SCORE_DISTRIB):
+        if score > target:
+            break
+        penalized = _GITGUD_SCORE_DISTRIB_MIN + i * 100
+    return penalized
+
+
 class CodeforcesCogError(commands.CommandError):
     pass
 

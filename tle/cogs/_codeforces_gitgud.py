@@ -18,6 +18,7 @@ from tle.util import paginator
 from tle.util import cache_system2
 from tle.cogs._codeforces_helpers import (
     _calculateGitgudScoreForDelta,
+    _gitgudTagPenaltyDelta,
     CodeforcesCogError,
     _GITGUD_NO_SKIP_TIME,
     _ONE_WEEK_DURATION,
@@ -236,9 +237,11 @@ class CodeforcesGitgudMixin:
         tags = [tag for tag in tags if tag not in cache_system2._DIV_TAGS]
         bantags = [tag for tag in bantags if tag not in cache_system2._DIV_TAGS]
 
+        # Points are divided by the number of requested tags (min 1 point), so
+        # tag-spamming an easy high-rated problem past the filters pays almost
+        # nothing. Division tags are already stripped above and don't count.
         delta = problems[choice].rating - rating
-        if tags or bantags:
-            delta = delta - 200
+        delta = _gitgudTagPenaltyDelta(delta, len(tags) + len(bantags))
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
 
     async def _gitlog_impl(self, ctx, member):
