@@ -10,6 +10,10 @@ _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX = 300
+# Flat delta penalty for constraining the search with any tags at all (applied
+# once, before the per-tag division). Matches the pre-division behaviour so a
+# single tag is never a free full-points pick.
+_GITGUD_TAG_BASE_PENALTY = 200
 _ONE_WEEK_DURATION = 7 * 24 * 60 * 60
 _GITGUD_MORE_POINTS_START_TIME = 1680300000
 # Completing a gitgud challenge also credits the betting wallet with this many
@@ -28,12 +32,18 @@ def _calculateGitgudScoreForDelta(delta):
 
 
 def _gitgudTagPenaltyDelta(base_delta, num_tags):
-    """Shrink a challenge's payout by the number of requested tags.
+    """Shrink a challenge's payout when tags are requested.
 
-    Points are worth ``base_score // num_tags`` (floored, but never below 1).
-    This exists to defang tag-spam: banning every hard category so an easy
-    high-rated problem slips through used to still pay near-max points, so
-    piling on tags now collapses the reward toward the 1-point floor.
+    Two stacked penalties:
+
+    * Any tags at all cost a flat ``_GITGUD_TAG_BASE_PENALTY`` off the delta --
+      the pre-division behaviour, so a single tag is never a free full-points
+      pick.
+    * From two tags up, points are then divided by the tag count:
+      ``base_score // num_tags`` (floored, never below 1). One tag divides by
+      one -- a no-op -- so the division only bites from the second tag on. This
+      defangs tag-spam: banning every hard category so an easy high-rated
+      problem slips through now collapses the reward toward the 1-point floor.
 
     The whole system derives points from the stored ``rating_delta`` via
     :func:`_calculateGitgudScoreForDelta`, so we translate the reduced score
@@ -43,6 +53,7 @@ def _gitgudTagPenaltyDelta(base_delta, num_tags):
     """
     if num_tags <= 0:
         return base_delta
+    base_delta -= _GITGUD_TAG_BASE_PENALTY
     target = max(1, _calculateGitgudScoreForDelta(base_delta) // num_tags)
     # Walk the ascending score ladder and keep the delta of the largest rung
     # whose score is still <= target. DISTRIB[i] is reached at this delta.

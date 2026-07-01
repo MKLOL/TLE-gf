@@ -1,12 +1,17 @@
 """Tests for the gitgud tag-count point penalty.
 
-``;gitgud`` divides a challenge's payout by the number of requested tags
-(``+tag`` filters and ``~tag`` bans, after division tags are stripped), never
-dropping below 1 point. This defangs tag-spam: banning every hard category so
-an easy high-rated problem slips past the filters used to still pay near-max
-points. The whole system derives points from the stored ``rating_delta``, so
-the penalty is expressed as a delta on the score ladder -- these tests pin the
-*resulting score* rather than the intermediate delta.
+``;gitgud`` penalises tags two ways (after division tags are stripped):
+
+* any tag at all costs a flat ``_GITGUD_TAG_BASE_PENALTY`` off the delta -- a
+  single tag is never a free full-points pick;
+* from the second tag on, points are additionally divided by the tag count,
+  never dropping below 1.
+
+This defangs tag-spam: banning every hard category so an easy high-rated
+problem slips past the filters used to still pay near-max points. The whole
+system derives points from the stored ``rating_delta``, so the penalty is
+expressed as a delta on the score ladder -- these tests pin the *resulting
+score* rather than the intermediate delta.
 """
 import pytest  # noqa: F401
 
@@ -14,6 +19,7 @@ from tle.cogs._codeforces_helpers import (
     _calculateGitgudScoreForDelta,
     _gitgudTagPenaltyDelta,
     _GITGUD_SCORE_DISTRIB,
+    _GITGUD_TAG_BASE_PENALTY,
 )
 
 
@@ -36,9 +42,9 @@ def _ladder_floor(target):
 
 
 # Deltas that land squarely on each rung of the score ladder.
-_MAX_DELTA = 300        # -> 23, the top rung
-_MID_DELTA = 0          # -> 8
-_LOW_DELTA = -100       # -> 5
+_MAX_DELTA = 300        # -> 23 raw; -> 12 after the flat -200
+_MID_DELTA = 0          # -> 8 raw;  -> 3 after the flat -200
+_LOW_DELTA = -100       # -> 5 raw;  -> 2 after the flat -200
 
 
 class TestNoTagsIsUntouched:
@@ -51,34 +57,49 @@ class TestNoTagsIsUntouched:
         assert _score(_MID_DELTA, 0) == 8
 
 
-class TestSingleTagIsFullPoints:
-    # points / 1 == points, and every base score is already on the ladder.
+class TestSingleTagAppliesFlatPenaltyOnly:
+    # One tag costs the flat -200 but is NOT divided (division starts at two).
     @pytest.mark.parametrize('delta,expected', [
-        (_MAX_DELTA, 23), (_MID_DELTA, 8), (_LOW_DELTA, 5), (-400, 1)])
-    def test_one_tag_does_not_reduce(self, delta, expected):
+        (_MAX_DELTA, 12),   # 300 - 200 -> 100 -> 12
+        (_MID_DELTA, 3),    # 0 - 200 -> -200 -> 3
+        (_LOW_DELTA, 2),    # -100 - 200 -> -300 -> 2
+        (-400, 1)])
+    def test_one_tag_is_flat_penalty_no_division(self, delta, expected):
         assert _score(delta, 1) == expected
 
+    def test_one_tag_matches_the_old_flat_penalty(self):
+        # A single tag reproduces the pre-division behaviour exactly.
+        for delta in (_MAX_DELTA, _MID_DELTA, _LOW_DELTA, 450, -50):
+            expected = _calculateGitgudScoreForDelta(
+                delta - _GITGUD_TAG_BASE_PENALTY)
+            assert _score(delta, 1) == expected
 
-class TestDivisionByTagCount:
+    def test_one_tag_is_never_the_free_full_score(self):
+        # The whole point of keeping the flat penalty: one tag < zero tags.
+        assert _score(_MAX_DELTA, 1) < _score(_MAX_DELTA, 0)
+
+
+class TestDivisionStartsAtTwoTags:
     @pytest.mark.parametrize('num_tags', range(1, 30))
     def test_matches_floored_division_rounded_to_ladder(self, num_tags):
-        base = _calculateGitgudScoreForDelta(_MAX_DELTA)  # 23
+        # Base for the division is the score AFTER the flat penalty.
+        base = _calculateGitgudScoreForDelta(
+            _MAX_DELTA - _GITGUD_TAG_BASE_PENALTY)  # 12
         expected = _ladder_floor(max(1, base // num_tags))
         assert _score(_MAX_DELTA, num_tags) == expected
 
-    def test_two_tags_halves_toward_the_ladder(self):
-        # 23 // 2 == 11 -> nearest rung at or below 11 is 8.
-        assert _score(_MAX_DELTA, 2) == 8
+    def test_two_tags_halves_the_penalised_score(self):
+        # 300 -> 100 -> 12, then 12 // 2 == 6 -> nearest rung at/below 6 is 5.
+        assert _score(_MAX_DELTA, 2) == 5
 
     def test_three_tags(self):
-        # 23 // 3 == 7 -> nearest rung at or below 7 is 5.
-        assert _score(_MAX_DELTA, 3) == 5
+        # 12 // 3 == 4 -> nearest rung at/below 4 is 3.
+        assert _score(_MAX_DELTA, 3) == 3
 
     def test_exact_ladder_hit_is_not_rounded(self):
-        # 17 // 2 == 8, which is itself a rung, so no rounding loss.
-        seventeen = -100 + 300  # delta 200 -> score 17
-        assert _calculateGitgudScoreForDelta(seventeen) == 17
-        assert _score(seventeen, 2) == 8
+        # delta 400 -> 200 -> 17, then 17 // 2 == 8, itself a rung.
+        assert _calculateGitgudScoreForDelta(400 - _GITGUD_TAG_BASE_PENALTY) == 17
+        assert _score(400, 2) == 8
 
 
 class TestNeverBelowOne:
@@ -87,8 +108,8 @@ class TestNeverBelowOne:
         assert _score(_MAX_DELTA, 23) == 1
 
     def test_more_tags_than_points_still_pays_one(self):
-        assert _score(_MID_DELTA, 100) == 1     # 8 // 100 == 0 -> floored to 1
-        assert _score(_LOW_DELTA, 9) == 1       # 5 // 9 == 0  -> floored to 1
+        assert _score(_MID_DELTA, 100) == 1     # 3 // 100 == 0 -> floored to 1
+        assert _score(_LOW_DELTA, 9) == 1       # 2 // 9 == 0  -> floored to 1
 
     def test_already_minimal_base_stays_one(self):
         # A very negative delta already scores 1; the penalty can't push it to 0.
