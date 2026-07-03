@@ -92,7 +92,7 @@ class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin, commands.Cog):
         Point distribution:
         rating diff | <-300| -300 | -200 | -100 |   0  |  100 |  200 |>=300
         no tags     |   1  |   2  |   3  |   5  |   8  |  12  |  17  |  23
-        Each penalised tag divides those points by (tag count + 1), floored,
+        Each penalised tag divides those points by (tag count + 1), rounded up,
         never below 1.
         """
         await self._gitgud_impl(ctx, args)

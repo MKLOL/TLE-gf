@@ -1,11 +1,11 @@
 """Tests for the gitgud tag-count point penalty.
 
 ``;gitgud`` divides a challenge's payout by ``(number of penalised tags + 1)``,
-never dropping below 1 point. One tag already halves the reward; piling on tags
-collapses it toward the floor. This defangs tag-spam: banning every hard
-category so an easy high-rated problem slips past the filters used to still pay
-near-max points. These tests pin the *resulting score* rather than the internal
-``rating_delta`` encoding used to store penalised scores.
+rounded up and never dropping below 1 point. One tag roughly halves the reward;
+piling on tags collapses it toward the floor. This defangs tag-spam: banning
+every hard category so an easy high-rated problem slips past the filters used
+to still pay near-max points. These tests pin the *resulting score* rather than
+the internal ``rating_delta`` encoding used to store penalised scores.
 """
 import pytest  # noqa: F401
 
@@ -42,8 +42,8 @@ class TestNoTagsIsUntouched:
 
 class TestOneTagAlreadyHalves:
     # One tag divides by two, so it is never a free full-points pick.
-    def test_one_tag_divides_by_two(self):
-        assert _score(_MAX_DELTA, 1) == 11
+    def test_one_tag_divides_by_two_rounded_up(self):
+        assert _score(_MAX_DELTA, 1) == 12
 
     def test_one_tag_is_less_than_no_tags(self):
         assert _score(_MAX_DELTA, 1) < _score(_MAX_DELTA, 0)
@@ -54,26 +54,26 @@ class TestOneTagAlreadyHalves:
 
 class TestDivisionByTagCountPlusOne:
     @pytest.mark.parametrize('num_tags', range(1, 30))
-    def test_matches_floored_division(self, num_tags):
+    def test_matches_ceiling_division(self, num_tags):
         base = _calculateGitgudScoreForDelta(_MAX_DELTA)  # 23
-        expected = max(1, base // (num_tags + 1))
+        expected = max(1, (base + num_tags) // (num_tags + 1))
         assert _score(_MAX_DELTA, num_tags) == expected
 
     def test_two_tags_divides_by_three(self):
-        assert _score(_MAX_DELTA, 2) == 7
+        assert _score(_MAX_DELTA, 2) == 8
 
     def test_three_tags_divides_by_four(self):
-        assert _score(_MAX_DELTA, 3) == 5
+        assert _score(_MAX_DELTA, 3) == 6
 
     def test_exact_integer_division_hit_is_not_rounded(self):
-        seventeen = 200
-        assert _calculateGitgudScoreForDelta(seventeen) == 17
-        assert _score(seventeen, 1) == 8
+        twelve = 100
+        assert _calculateGitgudScoreForDelta(twelve) == 12
+        assert _score(twelve, 1) == 6
 
-    def test_edu_single_tag_halves_top_score(self):
+    def test_edu_single_tag_halves_top_score_rounded_up(self):
         num_tags = _gitgudPenalisedTagCount(['edu'], [])
         assert num_tags == 1
-        assert _score(_MAX_DELTA, num_tags) == 11
+        assert _score(_MAX_DELTA, num_tags) == 12
 
 
 class TestPenalisedTagCount:
@@ -122,13 +122,12 @@ class TestPenalisedTagCount:
 
 class TestNeverBelowOne:
     def test_heavy_tag_spam_collapses_to_one_point(self):
-        # The motivating case: 23 tags on a top-rung problem pays exactly 1.
-        # 23 // 24 == 0 -> floored to 1.
+        # The motivating case: more tags than points pays exactly 1.
         assert _score(_MAX_DELTA, 23) == 1
 
     def test_more_tags_than_points_still_pays_one(self):
-        assert _score(_MID_DELTA, 100) == 1     # 8 // 101 == 0 -> floored to 1
-        assert _score(_LOW_DELTA, 9) == 1       # 5 // 10 == 0  -> floored to 1
+        assert _score(_MID_DELTA, 100) == 1
+        assert _score(_LOW_DELTA, 9) == 1
 
     def test_already_minimal_base_stays_one(self):
         # A very negative delta already scores 1; the penalty can't push it to 0.

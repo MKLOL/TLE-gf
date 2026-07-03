@@ -67,10 +67,9 @@ def _gitgudPenalisedTagCount(tags, bantags):
 def _gitgudTagPenaltyDelta(base_delta, num_tags):
     """Shrink a challenge's payout by the number of requested tags.
 
-    Points are worth ``base_score // (num_tags + 1)`` (floored, never below 1),
-    so one tag already halves the reward and piling on tags collapses it toward
-    the 1-point floor. This defangs tag-spam: banning every hard category so an
-    easy high-rated problem slips through used to still pay near-max points.
+    Points are worth ``ceil(base_score / (num_tags + 1))`` (never below 1), so
+    one tag roughly halves the reward and tag-spamming an easy high-rated
+    problem past the filters collapses it toward the 1-point floor.
 
     The whole system derives points from the stored ``rating_delta`` via
     :func:`_calculateGitgudScoreForDelta`, so penalised scores are stored as a
@@ -79,7 +78,8 @@ def _gitgudTagPenaltyDelta(base_delta, num_tags):
     """
     if num_tags <= 0:
         return base_delta
-    target = max(1, _calculateGitgudScoreForDelta(base_delta) // (num_tags + 1))
+    base_score = _calculateGitgudScoreForDelta(base_delta)
+    target = max(1, (base_score + num_tags) // (num_tags + 1))
     return _gitgudEncodeExactScoreAsDelta(target)
 
 
