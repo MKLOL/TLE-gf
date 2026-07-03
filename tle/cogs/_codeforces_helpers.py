@@ -10,7 +10,7 @@ _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX = 300
-_GITGUD_TAG_BASE_PENALTY = 200
+_GITGUD_EXACT_SCORE_DELTA_BASE = -10**9
 _ONE_WEEK_DURATION = 7 * 24 * 60 * 60
 _GITGUD_MORE_POINTS_START_TIME = 1680300000
 # Completing a gitgud challenge also credits the betting wallet with this many
@@ -21,7 +21,21 @@ _GITGUD_FREE_REQUIRED_TAGS = {'div1'}
 _GITGUD_FREE_BANNED_TAGS = {'div3', 'div4', 'edu'}
 
 
+def _gitgudEncodeExactScoreAsDelta(score):
+    return _GITGUD_EXACT_SCORE_DELTA_BASE - score
+
+
+def _gitgudDecodeExactScoreDelta(delta):
+    score = _GITGUD_EXACT_SCORE_DELTA_BASE - delta
+    if _GITGUD_SCORE_DISTRIB[0] <= score <= _GITGUD_SCORE_DISTRIB[-1]:
+        return score
+    return None
+
+
 def _calculateGitgudScoreForDelta(delta):
+    exact_score = _gitgudDecodeExactScoreDelta(delta)
+    if exact_score is not None:
+        return exact_score
     if (delta <= _GITGUD_SCORE_DISTRIB_MIN):
         return _GITGUD_SCORE_DISTRIB[0]
     if (delta >= _GITGUD_SCORE_DISTRIB_MAX):
@@ -53,15 +67,16 @@ def _gitgudPenalisedTagCount(tags, bantags):
 def _gitgudTagPenaltyDelta(base_delta, num_tags):
     """Shrink a challenge's payout by the number of requested tags.
 
-    Any positive penalised tag count uses the tagged ladder from ``;help
-    gitgud``: a flat ``_GITGUD_TAG_BASE_PENALTY`` off the rating delta. The
-    caller decides which parsed tags count; numeric rating arguments are never
-    included here. Returns ``base_delta`` unchanged when no penalised tags were
-    requested.
+    Penalised tags divide the normal score by ``num_tags + 1``, rounded up,
+    never below 1. The caller decides which parsed tags count; numeric rating
+    arguments are never included here. Penalised scores can be off-ladder, so
+    they are stored as reserved exact-score deltas.
     """
     if num_tags <= 0:
         return base_delta
-    return base_delta - _GITGUD_TAG_BASE_PENALTY
+    base_score = _calculateGitgudScoreForDelta(base_delta)
+    target = max(1, (base_score + num_tags) // (num_tags + 1))
+    return _gitgudEncodeExactScoreAsDelta(target)
 
 
 class CodeforcesCogError(commands.CommandError):

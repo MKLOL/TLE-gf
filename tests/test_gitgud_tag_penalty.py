@@ -1,9 +1,8 @@
-"""Tests for the gitgud tagged score ladder.
+"""Tests for the gitgud tag-count point penalty.
 
-``;gitgud`` uses the normal score ladder with no penalised tags. With any
-penalised tag, it uses the tagged ladder from ``;help gitgud``: a flat -200
-rating-delta shift. The numeric rating argument is not a tag; only parsed ``+``
-and ``~`` filters can affect the tag count.
+``;gitgud`` divides normal challenge points by ``penalised_tag_count + 1``,
+rounded up and never below 1. The numeric rating argument is not a tag; only
+parsed ``+`` and ``~`` filters can affect the tag count.
 """
 import pytest
 
@@ -12,7 +11,6 @@ from tle.cogs._codeforces_helpers import (
     _gitgudPenalisedTagCount,
     _gitgudTagPenaltyDelta,
     _GITGUD_SCORE_DISTRIB,
-    _GITGUD_TAG_BASE_PENALTY,
 )
 from tle.util import cf_format
 
@@ -24,10 +22,11 @@ def _score(base_delta, num_tags):
         _gitgudTagPenaltyDelta(base_delta, num_tags))
 
 
-# Deltas that land squarely on each rung of the untagged score ladder.
-_MAX_DELTA = 300        # -> 23; tagged -> 12
-_MID_DELTA = 0          # -> 8;  tagged -> 3
-_LOW_DELTA = -100       # -> 5;  tagged -> 2
+# Deltas that land squarely on each rung of the score ladder.
+_MAX_DELTA = 300        # -> 23
+_HIGH_DELTA = 200       # -> 17
+_MID_DELTA = 0          # -> 8
+_LOW_DELTA = -100       # -> 5
 
 
 class TestNoTagsIsUntouched:
@@ -40,28 +39,31 @@ class TestNoTagsIsUntouched:
         assert _score(_MID_DELTA, 0) == 8
 
 
-class TestTaggedLadder:
+class TestTagPenalty:
     @pytest.mark.parametrize('delta,expected', [
-        (_MAX_DELTA, 12),   # 300 - 200 -> 100 -> 12
-        (_MID_DELTA, 3),    # 0 - 200 -> -200 -> 3
-        (_LOW_DELTA, 2),    # -100 - 200 -> -300 -> 2
+        (_MAX_DELTA, 12),   # ceil(23 / 2)
+        (_HIGH_DELTA, 9),   # ceil(17 / 2)
+        (_MID_DELTA, 4),    # ceil(8 / 2)
+        (_LOW_DELTA, 3),    # ceil(5 / 2)
         (-400, 1),
     ])
-    def test_any_penalised_tag_uses_tagged_ladder(self, delta, expected):
+    def test_one_penalised_tag_halves_score_rounded_up(self, delta, expected):
         assert _score(delta, 1) == expected
 
     def test_one_tag_is_less_than_no_tags(self):
         assert _score(_MAX_DELTA, 1) < _score(_MAX_DELTA, 0)
 
-    def test_tagged_ladder_is_flat_delta_penalty(self):
-        for delta in (_MAX_DELTA, _MID_DELTA, _LOW_DELTA, 450, -50):
-            expected = _calculateGitgudScoreForDelta(
-                delta - _GITGUD_TAG_BASE_PENALTY)
-            assert _score(delta, 1) == expected
+    @pytest.mark.parametrize('num_tags', range(1, 30))
+    def test_matches_ceiling_division(self, num_tags):
+        base = _calculateGitgudScoreForDelta(_MAX_DELTA)
+        expected = max(1, (base + num_tags) // (num_tags + 1))
+        assert _score(_MAX_DELTA, num_tags) == expected
 
-    def test_more_tags_do_not_change_the_tagged_ladder(self):
-        for num_tags in range(1, 30):
-            assert _score(_MAX_DELTA, num_tags) == 12
+    def test_two_penalised_tags_divides_by_three_rounded_up(self):
+        assert _score(_MAX_DELTA, 2) == 8
+
+    def test_can_award_non_ladder_score(self):
+        assert _score(_HIGH_DELTA, 1) == 9
 
     def test_command_rating_argument_is_not_a_tag(self):
         args = ('3000', '+edu', '~div3', '~div4')
@@ -72,6 +74,17 @@ class TestTaggedLadder:
         assert bantags == ['div3', 'div4']
         assert _gitgudPenalisedTagCount(tags, bantags) == 1
         assert _score(_MAX_DELTA, 1) == 12
+
+    def test_user_examples(self):
+        # User rating 2200, so these are problem rating minus user rating.
+        assert _score(2500 - 2200, 0) == 23
+        assert _score(2400 - 2200, 0) == 17
+        assert _score(2500 - 2200, _gitgudPenalisedTagCount(['edu'], [])) == 12
+        assert _score(
+            2400 - 2200,
+            _gitgudPenalisedTagCount([], ['div3', 'div4'])) == 17
+        assert _score(2400 - 2200, _gitgudPenalisedTagCount(['dp'], [])) == 9
+        assert _score(2500 - 2200, _gitgudPenalisedTagCount(['div1'], [])) == 23
 
 
 class TestPenalisedTagCount:
@@ -116,9 +129,9 @@ class TestScoreBounds:
     def test_already_minimal_base_stays_one(self):
         assert _score(-5000, 7) == 1
 
-    def test_result_is_always_a_positive_ladder_value(self):
+    def test_result_is_always_in_score_bounds(self):
         for delta in (-5000, -400, -100, 0, 200, 300, 9000):
             for n in range(0, 40):
                 s = _score(delta, n)
                 assert s >= 1
-                assert s in _GITGUD_SCORE_DISTRIB
+                assert s <= _GITGUD_SCORE_DISTRIB[-1]

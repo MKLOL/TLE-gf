@@ -233,9 +233,10 @@ class CodeforcesGitgudMixin:
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
 
-        # Any penalised tag switches to the tagged score ladder. Hardening
-        # division filters such as +div1 and ~div3/~div4/~edu are exempt; other
-        # requested tags and bans count (see _gitgudPenalisedTagCount).
+        # Penalised tags divide points by (tag count + 1), rounded up.
+        # Hardening division filters such as +div1 and ~div3/~div4/~edu are
+        # exempt; other requested tags and bans count (see
+        # _gitgudPenalisedTagCount).
         delta = problems[choice].rating - rating
         delta = _gitgudTagPenaltyDelta(delta, _gitgudPenalisedTagCount(tags, bantags))
         await self._gitgud(ctx, handle, problems[choice], delta, hidden)
