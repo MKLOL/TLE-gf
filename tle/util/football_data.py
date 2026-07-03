@@ -32,7 +32,7 @@ _EQUIV = [
     {'unitedstates', 'usa', 'unitedstatesofamerica'},
     {'ivorycoast', 'cotedivoire'},
     {'czechia', 'czechrepublic'},
-    {'capeverde', 'caboverde'},
+    {'capeverde', 'caboverde', 'capeverdeislands'},
     {'iran', 'iranislamicrepublic'},
     {'bosnia', 'bosniaherzegovina', 'bosniaandherzegovina'},
     {'drcongo', 'congodr', 'democraticrepublicofcongo'},

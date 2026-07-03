@@ -219,6 +219,15 @@ class TestStageDetection:
         assert football_data.find_match_stage(
             'Algeria', 'Austria', 1000.0 + 10 * 86400, matches) is None
 
+    def test_find_match_stage_cape_verde_islands_spelling(self):
+        # Regression: The Odds API says 'Cape Verde', football-data says
+        # 'Cape Verde Islands'. Without unifying the two spellings the stage
+        # lookup missed and a knockout tie fell back to a 1X2 draw market.
+        matches = [{'home': 'Argentina', 'away': 'Cape Verde Islands',
+                    'commence_time': 1000.0, 'stage': 'LAST_32'}]
+        assert football_data.find_match_stage(
+            'Argentina', 'Cape Verde', 1000.0, matches) == 'LAST_32'
+
 
 class TestParseSettleArg:
     def test_pick_words(self):
