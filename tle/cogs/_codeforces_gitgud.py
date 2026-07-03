@@ -233,9 +233,7 @@ class CodeforcesGitgudMixin:
 
         choice = max(random.randrange(len(problems)) for _ in range(5))
 
-        # Points are divided by (number of penalised tags + 1), min 1 point, so
-        # even one tag roughly halves the reward and tag-spamming an easy
-        # high-rated problem past the filters pays almost nothing. Hardening
+        # Any penalised tag switches to the tagged score ladder. Hardening
         # division filters such as +div1 and ~div3/~div4/~edu are exempt; other
         # requested tags and bans count (see _gitgudPenalisedTagCount).
         delta = problems[choice].rating - rating
