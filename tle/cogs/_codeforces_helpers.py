@@ -10,6 +10,7 @@ _GITGUD_NO_SKIP_TIME = 2 * 60 * 60
 _GITGUD_SCORE_DISTRIB = (1, 2, 3, 5, 8, 12, 17, 23)
 _GITGUD_SCORE_DISTRIB_MIN = -400
 _GITGUD_SCORE_DISTRIB_MAX = 300
+_GITGUD_EXACT_SCORE_DELTA_BASE = -10**9
 _ONE_WEEK_DURATION = 7 * 24 * 60 * 60
 _GITGUD_MORE_POINTS_START_TIME = 1680300000
 # Completing a gitgud challenge also credits the betting wallet with this many
@@ -20,7 +21,21 @@ _GITGUD_FREE_REQUIRED_TAGS = {'div1'}
 _GITGUD_FREE_BANNED_TAGS = {'div3', 'div4', 'edu'}
 
 
+def _gitgudEncodeExactScoreAsDelta(score):
+    return _GITGUD_EXACT_SCORE_DELTA_BASE - score
+
+
+def _gitgudDecodeExactScoreDelta(delta):
+    score = _GITGUD_EXACT_SCORE_DELTA_BASE - delta
+    if _GITGUD_SCORE_DISTRIB[0] <= score <= _GITGUD_SCORE_DISTRIB[-1]:
+        return score
+    return None
+
+
 def _calculateGitgudScoreForDelta(delta):
+    exact_score = _gitgudDecodeExactScoreDelta(delta)
+    if exact_score is not None:
+        return exact_score
     if (delta <= _GITGUD_SCORE_DISTRIB_MIN):
         return _GITGUD_SCORE_DISTRIB[0]
     if (delta >= _GITGUD_SCORE_DISTRIB_MAX):
@@ -58,22 +73,14 @@ def _gitgudTagPenaltyDelta(base_delta, num_tags):
     easy high-rated problem slips through used to still pay near-max points.
 
     The whole system derives points from the stored ``rating_delta`` via
-    :func:`_calculateGitgudScoreForDelta`, so we translate the reduced score
-    back into a delta on that score ladder, rounding DOWN to the nearest
-    achievable rung (never inflating). Returns ``base_delta`` unchanged when no
-    tags were requested.
+    :func:`_calculateGitgudScoreForDelta`, so penalised scores are stored as a
+    reserved exact-score delta. Returns ``base_delta`` unchanged when no tags
+    were requested.
     """
     if num_tags <= 0:
         return base_delta
     target = max(1, _calculateGitgudScoreForDelta(base_delta) // (num_tags + 1))
-    # Walk the ascending score ladder and keep the delta of the largest rung
-    # whose score is still <= target. DISTRIB[i] is reached at this delta.
-    penalized = _GITGUD_SCORE_DISTRIB_MIN  # rung 0 -> 1 point, the floor
-    for i, score in enumerate(_GITGUD_SCORE_DISTRIB):
-        if score > target:
-            break
-        penalized = _GITGUD_SCORE_DISTRIB_MIN + i * 100
-    return penalized
+    return _gitgudEncodeExactScoreAsDelta(target)
 
 
 class CodeforcesCogError(commands.CommandError):
