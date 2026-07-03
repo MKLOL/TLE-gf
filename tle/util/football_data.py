@@ -124,6 +124,28 @@ def is_knockout_stage(stage):
     return bool(stage) and stage != 'GROUP_STAGE'
 
 
+def is_after_group_stage(commence_time, fd_matches):
+    """True when ``commence_time`` is later than every GROUP_STAGE kickoff in
+    the feed — i.e. this slot belongs to the knockout phase.
+
+    A fallback for :func:`find_match_stage` returning None because football-data
+    hasn't populated the knockout bracket with team names yet (placeholder
+    fixtures whose teams are still null for days after the feeder games finish).
+    The group phase always fully precedes the knockout phase, so any fixture
+    kicking off after the last scheduled group game is necessarily knockout —
+    no team names required. Returns False with no group data or no
+    ``commence_time``, so the caller still fails safe to a draw-bearing 1X2
+    market."""
+    if commence_time is None:
+        return False
+    group_times = [m['commence_time'] for m in fd_matches
+                   if m.get('stage') == 'GROUP_STAGE'
+                   and m.get('commence_time') is not None]
+    if not group_times:
+        return False
+    return commence_time > max(group_times)
+
+
 def find_match_stage(home_team, away_team, commence_time, fd_matches,
                      *, max_time_diff=86400):
     """Return the tournament ``stage`` (e.g. 'GROUP_STAGE', 'LAST_16') for the

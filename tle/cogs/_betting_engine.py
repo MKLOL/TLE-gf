@@ -90,7 +90,15 @@ class BetEngineMixin:
         stage = football_data.find_match_stage(
             event.get('home_team'), event.get('away_team'),
             event.get('commence_time'), fd_matches)
-        return football_data.is_knockout_stage(stage)
+        if stage is not None:
+            return football_data.is_knockout_stage(stage)
+        # No stage from a name match: football-data often lists a knockout slot
+        # as a nameless placeholder (null vs null) until both feeder games
+        # finish, so a clearly-knockout tie (e.g. Portugal vs Spain) would fall
+        # back to a draw for days. The group phase strictly precedes knockout,
+        # so treat any fixture after the last group kickoff as knockout.
+        return football_data.is_after_group_stage(
+            event.get('commence_time'), fd_matches)
 
     # ── Notify-role validation ─────────────────────────────────────────
 

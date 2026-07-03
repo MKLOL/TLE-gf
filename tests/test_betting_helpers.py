@@ -219,6 +219,21 @@ class TestStageDetection:
         assert football_data.find_match_stage(
             'Algeria', 'Austria', 1000.0 + 10 * 86400, matches) is None
 
+    def test_is_after_group_stage(self):
+        matches = [{'home': 'A', 'away': 'B', 'commence_time': 1000.0,
+                    'stage': 'GROUP_STAGE'},
+                   {'home': 'C', 'away': 'D', 'commence_time': 2000.0,
+                    'stage': 'GROUP_STAGE'},
+                   {'home': None, 'away': None, 'commence_time': 5000.0,
+                    'stage': 'LAST_16'}]
+        assert football_data.is_after_group_stage(2500.0, matches) is True
+        # The last group game itself is not "after" the group stage.
+        assert football_data.is_after_group_stage(2000.0, matches) is False
+        assert football_data.is_after_group_stage(1500.0, matches) is False
+        # No group data / no time → fail safe (caller keeps the draw).
+        assert football_data.is_after_group_stage(2500.0, []) is False
+        assert football_data.is_after_group_stage(None, matches) is False
+
     def test_find_match_stage_cape_verde_islands_spelling(self):
         # Regression: The Odds API says 'Cape Verde', football-data says
         # 'Cape Verde Islands'. Without unifying the two spellings the stage

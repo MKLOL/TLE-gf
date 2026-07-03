@@ -73,6 +73,20 @@ class TestStageFailSafe:
         events = _run(cog._ensure_wc_events(0))
         assert events[0]['market_type'] == 'advance'
 
+    def test_placeholder_knockout_slot_drops_draw_via_calendar(self, monkeypatch):
+        # football-data hasn't filled the bracket for this fixture (its slot is
+        # a nameless null-vs-null placeholder, so the name match misses), but
+        # the group stage is already over — the calendar fallback must still
+        # strip the draw instead of leaving a 1X2 market up for days.
+        cog = _cog(monkeypatch, fd_token='fdkey', fd_matches=[
+            {'home': 'X', 'away': 'Y', 'commence_time': time.time() - 86400,
+             'stage': 'GROUP_STAGE'},
+            {'home': None, 'away': None, 'commence_time': time.time() + 7200,
+             'stage': 'LAST_16'}])
+        events = _run(cog._ensure_wc_events(0))
+        assert events[0]['market_type'] == 'advance'
+        assert events[0]['odds']['draw'] == 0.0
+
     def test_group_stage_offers_draw(self, monkeypatch):
         cog = _cog(monkeypatch, fd_token='fdkey',
                    fd_matches=_stage_match('GROUP_STAGE'))
