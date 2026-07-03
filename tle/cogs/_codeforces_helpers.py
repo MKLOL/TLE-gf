@@ -16,6 +16,8 @@ _GITGUD_MORE_POINTS_START_TIME = 1680300000
 # coins per base gitgud point. Always applied to the *base* score, never the
 # end-of-month-doubled monthly points — the coin rate is a flat 5x.
 _GITGUD_COIN_MULTIPLIER = 5
+_GITGUD_FREE_REQUIRED_TAGS = {'div1'}
+_GITGUD_FREE_BANNED_TAGS = {'div3', 'div4', 'edu'}
 
 
 def _calculateGitgudScoreForDelta(delta):
@@ -30,15 +32,21 @@ def _calculateGitgudScoreForDelta(delta):
 def _gitgudPenalisedTagCount(tags, bantags):
     """How many requested tags subtract points.
 
-    Every ``+`` require and ``~`` ban counts -- including ``+edu`` and
-    ``+div2``/``div3``/``div4``, which narrow the pool just as much as a topic
-    tag -- EXCEPT a bare ``+div1``: restricting to div1 (the hardest division)
-    is a legitimately harder ask, not cherry-picking an easy problem, so it
-    never subtracts points. Banning div1 (``~div1``) still counts, since that
-    only makes the pool easier.
+    Every ``+`` require and ``~`` ban counts like a topic tag unless it is a
+    division filter that makes the pool harder instead of easier:
+
+    * ``+div1`` is free because it restricts to the hardest division.
+    * ``~div3``, ``~div4`` and ``~edu`` are free because they remove easier
+      contest pools.
+
+    Banning div1 (``~div1``) still counts, since that only makes the pool
+    easier.
     """
-    return (sum(1 for tag in tags if tag.strip().lower() != 'div1')
-            + len(bantags))
+    required = sum(1 for tag in tags
+                   if tag.strip().lower() not in _GITGUD_FREE_REQUIRED_TAGS)
+    banned = sum(1 for tag in bantags
+                 if tag.strip().lower() not in _GITGUD_FREE_BANNED_TAGS)
+    return required + banned
 
 
 def _gitgudTagPenaltyDelta(base_delta, num_tags):

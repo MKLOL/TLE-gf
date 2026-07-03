@@ -1,13 +1,12 @@
 """Tests for the gitgud tag-count point penalty.
 
-``;gitgud`` divides a challenge's payout by ``(number of requested tags + 1)``
-after division tags are stripped, never dropping below 1 point. One tag already
-halves the reward; piling on tags collapses it toward the floor. This defangs
-tag-spam: banning every hard category so an easy high-rated problem slips past
-the filters used to still pay near-max points. The whole system derives points
-from the stored ``rating_delta``, so the penalty is expressed as a delta on the
-score ladder -- these tests pin the *resulting score* rather than the
-intermediate delta.
+``;gitgud`` divides a challenge's payout by ``(number of penalised tags + 1)``,
+never dropping below 1 point. One tag already halves the reward; piling on tags
+collapses it toward the floor. This defangs tag-spam: banning every hard
+category so an easy high-rated problem slips past the filters used to still pay
+near-max points. The whole system derives points from the stored
+``rating_delta``, so the penalty is expressed as a delta on the score ladder --
+these tests pin the *resulting score* rather than the intermediate delta.
 """
 import pytest  # noqa: F401
 
@@ -113,9 +112,20 @@ class TestPenalisedTagCount:
         # ~div1 removes the hardest problems, so it only makes things easier.
         assert _gitgudPenalisedTagCount([], ['div1']) == 1
 
+    def test_banning_lower_divisions_is_free(self):
+        # ;gitgud 3000 ~div3 ~div4 ~edu should not lose points for excluding
+        # easier contest pools.
+        assert _gitgudPenalisedTagCount([], ['div3', 'div4', 'edu']) == 0
+
+    def test_banning_lower_divisions_is_free_regardless_of_case_or_space(self):
+        assert _gitgudPenalisedTagCount([], [' Div3 ', 'DIV4', ' Edu ']) == 0
+
     def test_div1_free_but_the_rest_of_the_mix_counts(self):
         # +div1 exempt; +dp and ~fft still count -> 2.
         assert _gitgudPenalisedTagCount(['div1', 'dp'], ['fft']) == 2
+
+    def test_lower_division_bans_do_not_hide_topic_tags(self):
+        assert _gitgudPenalisedTagCount(['dp'], ['div3', 'fft', 'edu']) == 2
 
 
 class TestNeverBelowOne:
