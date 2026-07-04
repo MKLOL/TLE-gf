@@ -254,6 +254,8 @@ class TestConfirmGate:
         m = db.bet_market_get(mid)
         assert m.status == 'settled' and m.result == 'away'
         assert db.bet_get_balance(GUILD, USER_A) == 1200
+        assert len(channel.sent) == 1
+        assert 'final' in channel.sent[0].embed.title.lower()
 
     def test_shootout_confirmation_blocks_odds_draw_fallback(self, db, monkeypatch):
         import time as _t
@@ -325,3 +327,71 @@ class TestConfirmGate:
             self._run(cog._settle_pending())
         assert db.bet_market_get(mid).status == 'open'
         assert db.bet_get_balance(GUILD, USER_B) == 900
+
+    def test_restart_fd_outage_keeps_blocking_odds_draw_fallback(
+            self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle.util import football_data as fd
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', 'fdkey',
+                            raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'oddskey', raising=False)
+        monkeypatch.setattr(constants, 'BET_SETTLE_BUFFER_SECONDS', 3 * 3600,
+                            raising=False)
+        mid = db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Australia',
+            'Egypt', _t.time() - 4 * 3600, 1.5, 5.5, 3.0, USER_A, 0.0)
+        db.bet_place(GUILD, mid, USER_B, 'draw', 100, 1.0, 1000)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+
+        self._fetch(monkeypatch, [{
+            'home': 'Australia', 'away': 'Egypt',
+            'home_score': 3, 'away_score': 5, 'winner': None,
+            'duration': 'PENALTY_SHOOTOUT',
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}])
+        self._run(cog._settle_via_football_data())  # persists the FD block
+
+        async def _fd_down(token, **kw):
+            raise fd.FootballDataError('down')
+        monkeypatch.setattr(fd, 'fetch_wc_matches', _fd_down)
+        self._odds_draw_score(monkeypatch)
+
+        restarted = Betting(bot)
+        self._run(restarted._settle_pending())
+        assert db.bet_market_get(mid).status == 'open'
+        assert db.bet_get_balance(GUILD, USER_B) == 900
+
+    def test_odds_fallback_keeps_five_minute_cadence(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle.util import odds_api
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', None,
+                            raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'oddskey', raising=False)
+        monkeypatch.setattr(constants, 'BET_SETTLE_BUFFER_SECONDS', 3 * 3600,
+                            raising=False)
+        db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Spain',
+            'Cape Verde', _t.time() - 4 * 3600, 1.5, 5.5, 3.0, USER_A, 0.0)
+        calls = []
+
+        async def _scores(api_key, sport_key, **kw):
+            calls.append((api_key, sport_key, kw))
+            return [{'event_id': 'evtWC', 'completed': False,
+                     'home_score': None, 'away_score': None}]
+        monkeypatch.setattr(odds_api, 'fetch_scores', _scores)
+
+        cog = Betting(bot=None)
+        self._run(cog._settle_pending())
+        self._run(cog._settle_pending())
+        assert len(calls) == 1

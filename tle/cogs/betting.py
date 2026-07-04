@@ -59,6 +59,7 @@ from tle.cogs._betting_engine import BetEngineMixin, BettingCogError
 from tle.cogs._betting_format import BetFormatMixin
 from tle.cogs._betting_remediation import BetRemediationMixin
 from tle.cogs._betting_scheduler import BetSchedulerMixin
+from tle.cogs._betting_settlement import BetSettlementMixin
 from tle.cogs._betting_wallet_cmds import BetWalletCmdImplMixin
 # Re-export the pure helpers so `from tle.cogs.betting import <helper>` keeps
 # working for callers and tests.
@@ -104,8 +105,8 @@ def _bet_channel_is_set(ctx):
 # ── Cog ────────────────────────────────────────────────────────────────────
 
 class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
-              BetEngineMixin, BetSchedulerMixin, BetRemediationMixin,
-              commands.Cog):
+              BetEngineMixin, BetSettlementMixin, BetSchedulerMixin,
+              BetRemediationMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         # channel_id -> events shown by the last `;bet matches` (for `;bet open <n>`)
