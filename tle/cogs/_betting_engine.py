@@ -433,7 +433,7 @@ class BetEngineMixin:
             if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
                 # The feed's beyond-regulation data has flip-flopped before (a
                 # wrong decisive winner that later vanished). Require the SAME
-                # result on two consecutive ~5-min polls before trusting it:
+                # result on two consecutive settle polls before trusting it:
                 # hold on first sight, settle only when the next poll confirms.
                 key = (outcome, result['home_score'], result['away_score'])
                 if self._fd_pending_confirm.get(m.market_id) != key:

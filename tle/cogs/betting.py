@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 _SAFETY_NET_INTERVAL = 15 * 60
 # Auto-settle poller cadence. Results come from football-data.org (free), so we
 # can poll often; only hits the network when a market is actually past kickoff.
-_SETTLE_INTERVAL = 5 * 60
+_SETTLE_INTERVAL = 60
 
 _CHANNEL_CONFIG_KEY = 'bet_channel'
 _PAUSED_CONFIG_KEY = 'bet_paused'
