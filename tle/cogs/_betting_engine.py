@@ -425,7 +425,10 @@ class BetEngineMixin:
             # internally inconsistent — leaving it for a manual `;bet settle`.
             outcome = fd_settle_outcome(result)
             if outcome is None:
-                self._fd_pending_confirm.pop(m.market_id, None)
+                if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
+                    self._fd_pending_confirm[m.market_id] = None
+                else:
+                    self._fd_pending_confirm.pop(m.market_id, None)
                 continue
             if result.get('duration') in ('EXTRA_TIME', 'PENALTY_SHOOTOUT'):
                 # The feed's beyond-regulation data has flip-flopped before (a
@@ -449,6 +452,8 @@ class BetEngineMixin:
             return
         cutoff = time.time() - constants.BET_SETTLE_BUFFER_SECONDS
         markets = cf_common.user_db.bet_markets_pending_settlement(cutoff)
+        markets = [m for m in markets
+                   if m.market_id not in self._fd_pending_confirm]
         if not markets:
             return
         by_sport = {}

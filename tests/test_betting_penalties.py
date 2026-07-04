@@ -45,6 +45,36 @@ class TestFdSettleOutcome:
             'home_score': 4, 'away_score': 4,
             'penalties': {'home': 4, 'away': 4}}) is None
 
+    def test_penalties_no_winner_clear_tally_accepted(self):
+        assert fd_settle_outcome({
+            'winner': None, 'duration': 'PENALTY_SHOOTOUT',
+            'home_score': 1, 'away_score': 1,
+            'penalties': {'home': 2, 'away': 4}}) == 'away'
+
+    def test_penalties_decisive_fulltime_accepted_when_regular_level(self):
+        # football-data can expose shootout totals in fullTime while winner is
+        # null and the penalties node is bogus/tied. Accept only with a level
+        # regularTime, and the auto-settler still requires two matching polls.
+        assert fd_settle_outcome({
+            'winner': None, 'duration': 'PENALTY_SHOOTOUT',
+            'home_score': 3, 'away_score': 5,
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}) == 'away'
+
+    def test_penalties_decisive_fulltime_requires_regular_level(self):
+        assert fd_settle_outcome({
+            'winner': None, 'duration': 'PENALTY_SHOOTOUT',
+            'home_score': 3, 'away_score': 5,
+            'regular_home_score': 2, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}) is None
+
+    def test_penalties_conflicting_evidence_rejected(self):
+        assert fd_settle_outcome({
+            'winner': None, 'duration': 'PENALTY_SHOOTOUT',
+            'home_score': 3, 'away_score': 5,
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 5, 'away': 3}}) is None
+
     def test_penalties_tied_tally_rejected(self):
         assert fd_settle_outcome({
             'winner': 'home', 'duration': 'PENALTY_SHOOTOUT',
@@ -79,6 +109,18 @@ class TestParsePenalties:
                'homeTeam': {'name': 'A'}, 'awayTeam': {'name': 'B'},
                'score': {'winner': 'HOME_TEAM', 'fullTime': {'home': 2, 'away': 0}}}
         assert football_data.parse_match(raw)['penalties'] is None
+
+    def test_parse_current_shootout_shape(self):
+        raw = {'status': 'FINISHED', 'utcDate': '2026-07-03T18:00:00Z',
+               'homeTeam': {'name': 'Australia'}, 'awayTeam': {'name': 'Egypt'},
+               'score': {'winner': None, 'duration': 'PENALTY_SHOOTOUT',
+                         'regularTime': {'home': 1, 'away': 1},
+                         'fullTime': {'home': 3, 'away': 5},
+                         'penalties': {'home': 4, 'away': 4}}}
+        p = football_data.parse_match(raw)
+        assert (p['home_score'], p['away_score']) == (3, 5)
+        assert (p['regular_home_score'], p['regular_away_score']) == (1, 1)
+        assert fd_settle_outcome(p) == 'away'
 
     def test_find_match_result_swaps_penalties_on_flip(self):
         # Provider lists Paraguay as home; our market is Germany (home) vs Paraguay.
@@ -131,6 +173,14 @@ class TestConfirmGate:
             return [base]
         monkeypatch.setattr(fd, 'fetch_wc_matches', _fake)
 
+    def _odds_draw_score(self, monkeypatch):
+        from tle.util import odds_api
+
+        async def _fake(api_key, sport_key, **kw):
+            return [{'event_id': 'evtWC', 'completed': True,
+                     'home_score': 1, 'away_score': 1}]
+        monkeypatch.setattr(odds_api, 'fetch_scores', _fake)
+
     def test_garbage_shootout_never_settles(self, db, monkeypatch):
         cog, mid = self._cog_and_market(db, monkeypatch)
         db.bet_place(GUILD, mid, USER_A, 'home', 100, 1.0, 1000)
@@ -170,3 +220,108 @@ class TestConfirmGate:
         assert m.status == 'settled' and m.result == 'away'
         assert db.bet_get_balance(GUILD, USER_A) == 1200  # 900 + 100*3.0
         assert db.bet_get_balance(GUILD, USER_B) == 900   # phantom-home backer lost
+
+    def test_decisive_fulltime_shootout_settles_after_restart(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', 'fdkey',
+                            raising=False)
+        mid = db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Australia',
+            'Egypt', _t.time() - 100, 1.5, 0.0, 3.0, USER_A, 0.0)
+        db.bet_place(GUILD, mid, USER_A, 'away', 100, 1.0, 1000)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+
+        self._fetch(monkeypatch, [{
+            'home': 'Australia', 'away': 'Egypt',
+            'home_score': 3, 'away_score': 5, 'winner': None,
+            'duration': 'PENALTY_SHOOTOUT',
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}])
+
+        self._run(cog._settle_via_football_data())  # first poll: held
+        assert db.bet_market_get(mid).status == 'open'
+        restarted = Betting(bot)
+        self._run(restarted._settle_via_football_data())  # restart re-holds
+        assert db.bet_market_get(mid).status == 'open'
+        self._run(restarted._settle_via_football_data())  # confirmed after restart
+        m = db.bet_market_get(mid)
+        assert m.status == 'settled' and m.result == 'away'
+        assert db.bet_get_balance(GUILD, USER_A) == 1200
+
+    def test_shootout_confirmation_blocks_odds_draw_fallback(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', 'fdkey',
+                            raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'oddskey', raising=False)
+        monkeypatch.setattr(constants, 'BET_SETTLE_BUFFER_SECONDS', 3 * 3600,
+                            raising=False)
+        mid = db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Australia',
+            'Egypt', _t.time() - 4 * 3600, 1.5, 5.5, 3.0, USER_A, 0.0)
+        db.bet_place(GUILD, mid, USER_A, 'away', 100, 1.0, 1000)
+        db.bet_place(GUILD, mid, USER_B, 'draw', 100, 1.0, 1000)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+
+        self._fetch(monkeypatch, [{
+            'home': 'Australia', 'away': 'Egypt',
+            'home_score': 3, 'away_score': 5, 'winner': None,
+            'duration': 'PENALTY_SHOOTOUT',
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}])
+        self._odds_draw_score(monkeypatch)
+
+        self._run(cog._settle_pending())  # first FD poll held; odds skipped
+        assert db.bet_market_get(mid).status == 'open'
+        assert db.bet_get_balance(GUILD, USER_B) == 900  # draw not paid
+        self._run(cog._settle_pending())
+        m = db.bet_market_get(mid)
+        assert m.status == 'settled' and m.result == 'away'
+        assert db.bet_get_balance(GUILD, USER_A) == 1200
+        assert db.bet_get_balance(GUILD, USER_B) == 900
+
+    def test_garbage_shootout_blocks_odds_draw_fallback(self, db, monkeypatch):
+        import time as _t
+        from tle.util import codeforces_common as cf_common
+        from tle import constants
+        from tle.cogs.betting import Betting
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(constants, 'BET_START_BALANCE', 1000, raising=False)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', 'fdkey',
+                            raising=False)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'oddskey', raising=False)
+        monkeypatch.setattr(constants, 'BET_SETTLE_BUFFER_SECONDS', 3 * 3600,
+                            raising=False)
+        mid = db.bet_market_create(
+            GUILD, '222', 'evtWC', 'soccer_fifa_world_cup', 'Australia',
+            'Egypt', _t.time() - 4 * 3600, 1.5, 5.5, 3.0, USER_A, 0.0)
+        db.bet_place(GUILD, mid, USER_B, 'draw', 100, 1.0, 1000)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+
+        self._fetch(monkeypatch, [{
+            'home': 'Australia', 'away': 'Egypt',
+            'home_score': 1, 'away_score': 1, 'winner': None,
+            'duration': 'PENALTY_SHOOTOUT',
+            'regular_home_score': 1, 'regular_away_score': 1,
+            'penalties': {'home': 4, 'away': 4}}])
+        self._odds_draw_score(monkeypatch)
+
+        for _ in range(3):
+            self._run(cog._settle_pending())
+        assert db.bet_market_get(mid).status == 'open'
+        assert db.bet_get_balance(GUILD, USER_B) == 900

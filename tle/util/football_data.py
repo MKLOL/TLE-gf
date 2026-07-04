@@ -92,6 +92,8 @@ def parse_match(raw):
     commence = raw.get('utcDate')
     finished = (status in ('FINISHED', 'AWARDED')
                 and home_score is not None and away_score is not None)
+    regular = score.get('regularTime') or {}
+    extra = score.get('extraTime') or {}
     pens = score.get('penalties') or {}
     pen_home, pen_away = _score_value(pens, 'home'), _score_value(pens, 'away')
     penalties = ({'home': pen_home, 'away': pen_away}
@@ -103,6 +105,10 @@ def parse_match(raw):
         'finished': finished,
         'home_score': home_score,
         'away_score': away_score,
+        'regular_home_score': _score_value(regular, 'home'),
+        'regular_away_score': _score_value(regular, 'away'),
+        'extra_home_score': _score_value(extra, 'home'),
+        'extra_away_score': _score_value(extra, 'away'),
         'winner': _winner(score.get('winner')),
         'duration': score.get('duration'),
         'penalties': penalties,
@@ -234,6 +240,10 @@ def find_match_result(home_team, away_team, commence_time, fd_matches,
         'away': best['home'],
         'home_score': best['away_score'],
         'away_score': best['home_score'],
+        'regular_home_score': best.get('regular_away_score'),
+        'regular_away_score': best.get('regular_home_score'),
+        'extra_home_score': best.get('extra_away_score'),
+        'extra_away_score': best.get('extra_home_score'),
         'winner': winner,
         'penalties': ({'home': pens['away'], 'away': pens['home']}
                       if pens else None),

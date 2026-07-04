@@ -125,8 +125,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         self._close_timers = {}
         # market_id -> asyncio.Task: coalesced thread intro pool refresh.
         self._pool_refresh_timers = {}
-        # market_id -> (outcome, home_score, away_score): the beyond-regulation
-        # football-data result seen last poll. An ET/penalty game is only settled
+        # market_id -> (outcome, home_score, away_score) or None: the
+        # beyond-regulation football-data result seen last poll. Such games settle
         # once two consecutive polls agree, filtering the feed's transient
         # (sometimes wrong) shootout readings. In-memory: a restart just re-waits
         # one round, which is safe.

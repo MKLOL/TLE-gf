@@ -38,31 +38,54 @@ def outcome_from_score(home, away):
     return 'draw'
 
 
+def _score_leader(home, away):
+    if home is None or away is None or home == away:
+        return None
+    return 'home' if home > away else 'away'
+
+
+def _scores_level(home, away):
+    return home is not None and away is not None and home == away
+
+
+def _shootout_fulltime_winner(result):
+    winner = _score_leader(result.get('home_score'), result.get('away_score'))
+    if winner is None:
+        return None
+    if not _scores_level(
+            result.get('regular_home_score'), result.get('regular_away_score')):
+        return None
+    return winner
+
+
 def fd_settle_outcome(result):
     """The outcome a football-data result supports for auto-settlement, or None
     when we must NOT settle it yet.
 
     football-data's ``winner`` is authoritative — it already reflects extra time
-    and penalties — so it is trusted over the scoreline (a shootout reports a
-    LEVEL fullTime but a decisive winner). But the feed's beyond-regulation data
-    has proven unreliable, so a ``PENALTY_SHOOTOUT`` is only accepted when its
-    ``penalties`` tally has a clear leader that agrees with ``winner``; an
-    inconsistent reading (no winner, or a tied/garbage shootout) returns None and
-    is left for a manual ``;bet settle``. A plain in-regulation game with no
-    published winner falls back to the scoreline.
+    and penalties — so it is trusted over the scoreline. But the feed's
+    beyond-regulation data has proven unreliable, so a ``PENALTY_SHOOTOUT`` is
+    accepted only when independent evidence agrees: a clear ``penalties`` tally
+    and/or a decisive ``fullTime`` score with level ``regularTime``. If
+    ``winner`` is present, it must agree too. Inconsistent readings are left for
+    a manual ``;bet settle``. A plain in-regulation game with no published
+    winner falls back to the scoreline.
     """
     winner = result.get('winner')
     duration = result.get('duration')
     if duration == 'PENALTY_SHOOTOUT':
-        if winner not in ('home', 'away'):
-            return None
         pens = result.get('penalties') or {}
-        ph, pa = pens.get('home'), pens.get('away')
-        if ph is None or pa is None or ph == pa:
+        evidence = [
+            side for side in (
+                _score_leader(pens.get('home'), pens.get('away')),
+                _shootout_fulltime_winner(result))
+            if side is not None]
+        if not evidence or len(set(evidence)) > 1:
             return None
-        if ('home' if ph > pa else 'away') != winner:
+        settled_winner = evidence[0]
+        if winner is not None and winner != settled_winner:
             return None
-        return winner
+        return settled_winner
     if winner in ('home', 'away', 'draw'):
         return winner
     if duration == 'EXTRA_TIME':
