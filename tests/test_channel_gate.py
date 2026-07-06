@@ -159,6 +159,22 @@ class TestGateCheck:
             assert asyncio.run(cog._gate_check(ctx)) is True
             assert ctx.sent == []
 
+    def test_rpoll_bypasses_gate(self, db, cog):
+        # ;rpoll is exempt: it runs even in a channel where commands are blocked.
+        db.set_command_gate('g1', 'c1')
+        ctx = self._ctx(command_name='rpoll', channel=SimpleNamespace(id='c1'))
+        assert asyncio.run(cog._gate_check(ctx)) is True
+        assert ctx.sent == []
+
+    def test_rpoll_subcommand_bypasses_gate(self, db, cog):
+        # Subcommands (e.g. ;rpoll list) share the group's exemption via
+        # root_parent, so they bypass the gate too.
+        db.set_command_gate('g1', 'c1')
+        ctx = self._ctx(command_name='list', channel=SimpleNamespace(id='c1'))
+        ctx.command.root_parent = SimpleNamespace(name='rpoll')
+        assert asyncio.run(cog._gate_check(ctx)) is True
+        assert ctx.sent == []
+
     def test_ungated_channel_allowed(self, cog):
         ctx = self._ctx(command_name='gitgud', channel=SimpleNamespace(id='c1'))
         assert asyncio.run(cog._gate_check(ctx)) is True

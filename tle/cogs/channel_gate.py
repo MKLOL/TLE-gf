@@ -7,6 +7,9 @@ channel, not just the bot-created one. A global check enforces the gate for
 every prefix command; on a blocked attempt it drops a short, auto-deleting
 notice (linking the thread when there is one). ``;allow`` reverts.
 
+``;rpoll`` (and its subcommands) is exempt from the gate — rating-weighted
+polls run in any channel, even one where bot commands are otherwise blocked.
+
 Only prefix commands are gated — the minigame slash commands run through a
 separate app-command path that ``bot.add_check`` does not cover.
 """
@@ -25,7 +28,10 @@ logger = logging.getLogger(__name__)
 _THREAD_NAME = 'bot-commands'
 _THREAD_AUTO_ARCHIVE = 1440  # minutes (1 day)
 _NOTICE_DELETE_AFTER = 15    # seconds — the notice auto-deletes so it doesn't pile up
-_EXEMPT_COMMANDS = frozenset({'disallow', 'allow'})
+# ``disallow``/``allow`` must stay usable so an admin can always lift the gate;
+# ``rpoll`` is exempt so rating-weighted polls can be run in any channel,
+# including ones where bot commands are otherwise blocked.
+_EXEMPT_COMMANDS = frozenset({'disallow', 'allow', 'rpoll'})
 
 
 class ChannelGate(commands.Cog):
@@ -52,7 +58,7 @@ class ChannelGate(commands.Cog):
         command = ctx.command
         if command is not None \
                 and (command.root_parent or command).name in _EXEMPT_COMMANDS:
-            return True  # admins must always be able to lift the gate
+            return True  # exempt commands always run (see _EXEMPT_COMMANDS)
         parent_id, current_thread_id = self._location(ctx.channel)
         if parent_id is None:
             return True
