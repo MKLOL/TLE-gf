@@ -275,7 +275,19 @@ def compute_vs(rows1, rows2, score_fn=None, missing_is_loss=False,
     }
 
 
-def compute_streak(rows):
+def previous_streak_day(day, weekdays=None):
+    """The latest day before ``day`` that counts toward a streak.
+
+    With a weekday filter active, non-matching calendar days are not gaps —
+    e.g. under ``+dow=fri`` two adjacent Fridays are consecutive.
+    """
+    day -= dt.timedelta(days=1)
+    while weekdays and day.weekday() not in weekdays:
+        day -= dt.timedelta(days=1)
+    return day
+
+
+def compute_streak(rows, weekdays=None):
     best_by_day = {}
     for row in rows:
         puzzle_date = normalize_puzzle_date(row.puzzle_date)
@@ -293,11 +305,11 @@ def compute_streak(rows):
         if row is None or not row.is_perfect:
             break
         streak += 1
-        current_day -= dt.timedelta(days=1)
+        current_day = previous_streak_day(current_day, weekdays)
     return streak
 
 
-def compute_longest_streak(rows):
+def compute_longest_streak(rows, weekdays=None):
     """Return the longest run of consecutive perfect days across all data."""
     best_by_day = {}
     for row in rows:
@@ -314,7 +326,9 @@ def compute_longest_streak(rows):
     prev_day = None
     for day in sorted(best_by_day):
         row = best_by_day[day]
-        if row.is_perfect and (prev_day is None or day == prev_day + dt.timedelta(days=1)):
+        if row.is_perfect and (
+                prev_day is None
+                or previous_streak_day(day, weekdays) == prev_day):
             current += 1
         elif row.is_perfect:
             current = 1

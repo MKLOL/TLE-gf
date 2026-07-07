@@ -25,10 +25,6 @@ from tle.cogs._minigame_queens_filters import (
     _filter_queens_weekday_rows,
     _filter_queens_rating_date_rows,
 )
-from tle.cogs._minigame_queens_cog import (
-    _format_queens_date,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -56,24 +52,10 @@ class ImplRatingMixin:
             return
         self._recompute_minigame_ratings(guild_id, game)
 
-    @staticmethod
-    def _queens_played_day_counts(rows):
-        days_by_user = {}
-        for row in rows:
-            days_by_user.setdefault(str(row.user_id), set()).add(
-                _format_queens_date(row))
-        return {
-            user_id: len(days)
-            for user_id, days in days_by_user.items()
-        }
-
-    def _with_queens_played_games(self, rows, states):
-        counts = self._queens_played_day_counts(rows)
-        return {
-            user_id: state._replace(
-                games=counts.get(str(state.user_id), state.games))
-            for user_id, state in states.items()
-        }
+    # ``games`` deliberately stays the engine's count of *contested* days
+    # (>= 2 players) for every minigame — a solo day is not a game.  Queens
+    # historically overrode this with a played-day count; that override was
+    # removed to standardize on the Akari semantics.
 
     def _recompute_minigame_ratings(self, guild_id, game):
         try:
@@ -90,8 +72,6 @@ class ImplRatingMixin:
                 rows = self._filter_queens_registered_result_rows(guild_id, rows)
             kwargs = self._rating_compute_kwargs(game)
             states = compute_ratings(rows, **kwargs)
-            if game.name == QUEENS_GAME.name:
-                states = self._with_queens_played_games(rows, states)
             if game.name == AKARI_GAME.name:
                 cf_common.user_db.replace_akari_ratings(
                     guild_id, states.values(), time.time())
@@ -124,22 +104,41 @@ class ImplRatingMixin:
             kwargs['rank_fn'] = rating.rank_fn
         return kwargs
 
-    def _minigame_rating_rows(self, guild_id, game, *, excluded_ids=None,
-                              included_ids=None, weekdays=None,
-                              date_bounds=None):
+    def _filtered_minigame_result_rows(self, guild_id, game, *,
+                                       excluded_ids=None, included_ids=None,
+                                       weekdays=None, date_bounds=None):
+        """Merged result rows with every read-side filter applied.
+
+        Weekday and date-bounds filters are game-agnostic (no-ops when None);
+        the registered-players-only cut is Queens-specific (Akari shadow-rates
+        everyone, Queens rates only linked players).
+        """
         self._sync_minigame_results_for_read(guild_id, game)
         rows = cf_common.user_db.get_minigame_results_for_guild(
             guild_id, game.name)
         rows = self._filter_minigame_banned_rows(guild_id, game, rows)
         if game.name == QUEENS_GAME.name:
             rows = self._filter_queens_registered_result_rows(guild_id, rows)
-            rows = _filter_queens_weekday_rows(rows, weekdays)
-            rows = _filter_queens_rating_date_rows(rows, date_bounds)
-        rows = self._filter_akari_rows(
+        rows = _filter_queens_weekday_rows(rows, weekdays)
+        rows = _filter_queens_rating_date_rows(rows, date_bounds)
+        return self._filter_akari_rows(
             rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        states = compute_ratings(rows, **self._rating_compute_kwargs(game))
-        if game.name == QUEENS_GAME.name:
-            states = self._with_queens_played_games(rows, states)
+
+    def _minigame_compute_kwargs(self, game, extra_compute_kwargs=None):
+        kwargs = self._rating_compute_kwargs(game)
+        if extra_compute_kwargs:
+            kwargs.update(extra_compute_kwargs)
+        return kwargs
+
+    def _minigame_rating_rows(self, guild_id, game, *, excluded_ids=None,
+                              included_ids=None, weekdays=None,
+                              date_bounds=None, extra_compute_kwargs=None):
+        rows = self._filtered_minigame_result_rows(
+            guild_id, game, excluded_ids=excluded_ids,
+            included_ids=included_ids, weekdays=weekdays,
+            date_bounds=date_bounds)
+        states = compute_ratings(
+            rows, **self._minigame_compute_kwargs(game, extra_compute_kwargs))
         return sorted(
             states.values(),
             key=lambda s: (-s.rating, -s.games, int(s.user_id)),
@@ -148,55 +147,43 @@ class ImplRatingMixin:
     def _minigame_user_data(self, guild_id, game, user_id, *,
                             include_decay=False, excluded_ids=None,
                             included_ids=None, weekdays=None,
-                            date_bounds=None):
-        self._sync_minigame_results_for_read(guild_id, game)
-        rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, game.name)
-        rows = self._filter_minigame_banned_rows(guild_id, game, rows)
-        if game.name == QUEENS_GAME.name:
-            rows = self._filter_queens_registered_result_rows(guild_id, rows)
-            rows = _filter_queens_weekday_rows(rows, weekdays)
-            rows = _filter_queens_rating_date_rows(rows, date_bounds)
-        rows = self._filter_akari_rows(
-            rows, excluded_ids=excluded_ids, included_ids=included_ids)
+                            date_bounds=None, extra_compute_kwargs=None):
+        rows = self._filtered_minigame_result_rows(
+            guild_id, game, excluded_ids=excluded_ids,
+            included_ids=included_ids, weekdays=weekdays,
+            date_bounds=date_bounds)
         histories = {}
         states = compute_ratings(
             rows, histories=histories,
             include_decay_in_history=include_decay,
-            **self._rating_compute_kwargs(game))
-        if game.name == QUEENS_GAME.name:
-            states = self._with_queens_played_games(rows, states)
+            **self._minigame_compute_kwargs(game, extra_compute_kwargs))
         key = str(user_id)
         return states.get(key), histories.get(key, [])
 
     def _minigame_user_history(self, guild_id, game, user_id, *,
                                include_decay=False, excluded_ids=None,
                                included_ids=None, weekdays=None,
-                               date_bounds=None):
+                               date_bounds=None, extra_compute_kwargs=None):
         state, history = self._minigame_user_data(
             guild_id, game, user_id, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            weekdays=weekdays, date_bounds=date_bounds)
+            weekdays=weekdays, date_bounds=date_bounds,
+            extra_compute_kwargs=extra_compute_kwargs)
         del state
         return history
 
     def _minigame_puzzle_change_info(self, guild_id, game, puzzle_number, *,
                                      excluded_ids=None, included_ids=None,
-                                     weekdays=None, date_bounds=None):
-        self._sync_minigame_results_for_read(guild_id, game)
-        rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, game.name)
-        rows = self._filter_minigame_banned_rows(guild_id, game, rows)
-        if game.name == QUEENS_GAME.name:
-            rows = self._filter_queens_registered_result_rows(guild_id, rows)
-            rows = _filter_queens_weekday_rows(rows, weekdays)
-            rows = _filter_queens_rating_date_rows(rows, date_bounds)
-        rows = self._filter_akari_rows(
-            rows, excluded_ids=excluded_ids, included_ids=included_ids)
+                                     weekdays=None, date_bounds=None,
+                                     extra_compute_kwargs=None):
+        rows = self._filtered_minigame_result_rows(
+            guild_id, game, excluded_ids=excluded_ids,
+            included_ids=included_ids, weekdays=weekdays,
+            date_bounds=date_bounds)
         histories = {}
         compute_ratings(
             rows, histories=histories,
-            **self._rating_compute_kwargs(game))
+            **self._minigame_compute_kwargs(game, extra_compute_kwargs))
         info = {}
         for user_id, points in histories.items():
             for point in points:

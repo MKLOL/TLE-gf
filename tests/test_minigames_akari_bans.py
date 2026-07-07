@@ -113,16 +113,16 @@ class TestAkariBan:
         asyncio.run(cog.on_message(msg))
         assert db.get_minigame_result(1) is not None
 
-    def test_reparse_skips_banned_user(self, db, monkeypatch):
-        # Even if a banned user's raw message is in the store from before the
-        # ban, reparse must not produce a result row for them.
+    def test_reparse_skips_banned_user_post_ban_rows(self, db, monkeypatch):
+        # Bans are forward-only: a raw message sent AFTER the ban took effect
+        # must not produce a result row on reparse.
         monkeypatch.setattr(cf_common, 'user_db', db)
         _AkariRatingHelpers._enable(db)
-        # Stash a pre-ban raw message authored by the soon-to-be-banned user.
         msg = _AkariRatingHelpers._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')
         db.save_raw_message(
             msg.id, msg.guild.id, msg.channel.id, msg.author.id,
             msg.created_at.isoformat(), msg.content)
+        # banned_at=200.0 (1970 epoch) predates the 2026 message — post-ban.
         db.ban_akari_user(1, 999, 200.0, 7, None)
         # Also clear out any imported rows that an earlier setup might have
         # left lying around for this guild.
@@ -147,6 +147,34 @@ class TestAkariBan:
             ('999',)).fetchall()
         assert imported == []
 
+    def test_reparse_keeps_banned_user_pre_ban_rows(self, db, monkeypatch):
+        # Forward-only ban: raw messages sent BEFORE the ban keep
+        # materializing on reparse — 'existing results stay rated'.
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        _AkariRatingHelpers._enable(db)
+        msg = _AkariRatingHelpers._akari_msg(1, 999, '\U0001f31f Perfect! \U0001f553 1:29')
+        db.save_raw_message(
+            msg.id, msg.guild.id, msg.channel.id, msg.author.id,
+            msg.created_at.isoformat(), msg.content)
+        # Ban a day after the message — the row is pre-ban.
+        db.ban_akari_user(1, 999, msg.created_at.timestamp() + 86400, 7, None)
+        db.clear_imported_minigame_results(1, 'akari')
+
+        async def _send(*a, **k):
+            pass
+
+        cog = Minigames(bot=None)
+        ctx = SimpleNamespace(
+            guild=_FakeGuild(1, members=[_FakeDiscordMember(999, 'Alice')]),
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=7),
+            send=_send,
+        )
+        asyncio.run(cog._cmd_reparse(ctx, AKARI_GAME))
+        imported = db.conn.execute(
+            'SELECT 1 FROM minigame_import_result WHERE user_id = ?',
+            ('999',)).fetchall()
+        assert imported != []
 
 
 class TestAkariNonProMode:

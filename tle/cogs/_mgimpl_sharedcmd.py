@@ -4,6 +4,7 @@ import logging
 
 import discord
 
+from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
@@ -21,7 +22,7 @@ from tle.cogs._minigame_queens import (
     QUEENS_GAME,
 )
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, _safe_member_name,
+    MinigameCogError, _safe_member_name, _safe_user_name,
     _format_score,
 )
 from tle.cogs._minigame_queens_filters import (
@@ -33,6 +34,61 @@ logger = logging.getLogger(__name__)
 
 
 class ImplSharedCmdMixin:
+    # ── Delegated-admin list commands (shared by Queens and Akari) ──────
+
+    async def _cmd_minigame_admins(self, ctx, label, get_ids):
+        admin_ids = get_ids(ctx.guild.id)
+        if not admin_ids:
+            await ctx.send(embed=discord_common.embed_neutral(
+                f'No extra {label} admins configured.'))
+            return
+        lines = [
+            f'- {_safe_user_name(ctx.guild, user_id)} (`{user_id}`)'
+            for user_id in sorted(admin_ids, key=self._user_id_sort_key)
+        ]
+        await ctx.send(embed=discord_common.embed_neutral(
+            f'Extra {label} admins:\n' + '\n'.join(lines)))
+
+    def _require_server_mod_for_admin_list(self, ctx, label):
+        if not self._has_server_mod_role(ctx.author):
+            raise MinigameCogError(
+                f'Only `{constants.TLE_ADMIN}` / `{constants.TLE_MODERATOR}` '
+                f'can change the {label} admin list.')
+
+    async def _cmd_minigame_admins_add(self, ctx, member, label,
+                                       get_ids, set_ids):
+        self._require_server_mod_for_admin_list(ctx, label)
+        admin_ids = get_ids(ctx.guild.id)
+        before = len(admin_ids)
+        admin_ids.add(str(member.id))
+        if len(admin_ids) == before:
+            message = (
+                f'`{_safe_member_name(member)}` already has '
+                f'{label} admin access.')
+        else:
+            set_ids(ctx.guild.id, admin_ids)
+            message = (
+                f'`{_safe_member_name(member)}` can now run '
+                f'{label} mod commands.')
+        await ctx.send(embed=discord_common.embed_success(message))
+
+    async def _cmd_minigame_admins_remove(self, ctx, member, label,
+                                          get_ids, set_ids):
+        self._require_server_mod_for_admin_list(ctx, label)
+        admin_ids = get_ids(ctx.guild.id)
+        removed = str(member.id) in admin_ids
+        admin_ids.discard(str(member.id))
+        if removed:
+            set_ids(ctx.guild.id, admin_ids)
+            message = (
+                f'`{_safe_member_name(member)}` no longer has '
+                f'{label} admin access.')
+        else:
+            message = (
+                f'`{_safe_member_name(member)}` was not an extra '
+                f'{label} admin.')
+        await ctx.send(embed=discord_common.embed_success(message))
+
     # ── Shared command implementations ──────────────────────────────────
 
     async def _cmd_here(self, ctx, game):
@@ -138,9 +194,7 @@ class ImplSharedCmdMixin:
         self._sync_minigame_results_for_read(ctx.guild.id, game)
         try:
             args, scoring_name, scoring = resolve_scoring(game, args)
-            weekdays = None
-            if game.name == QUEENS_GAME.name:
-                args, weekdays = _split_queens_weekday_filter(args)
+            args, weekdays = _split_queens_weekday_filter(args)
             dlo, dhi, plo, phi = parse_date_args(args)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
@@ -151,9 +205,8 @@ class ImplSharedCmdMixin:
             ctx.guild.id, game.name, member2.id, dlo, dhi, plo, phi)
         rows1 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows1)
         rows2 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows2)
-        if game.name == QUEENS_GAME.name:
-            rows1 = _filter_queens_weekday_rows(rows1, weekdays)
-            rows2 = _filter_queens_weekday_rows(rows2, weekdays)
+        rows1 = _filter_queens_weekday_rows(rows1, weekdays)
+        rows2 = _filter_queens_weekday_rows(rows2, weekdays)
         stats = compute_vs(
             rows1, rows2,
             score_fn=scoring.score_matchup,
@@ -177,9 +230,7 @@ class ImplSharedCmdMixin:
         suffix_parts = []
         if scoring_name:
             suffix_parts.append(scoring_name.title())
-        weekday_label = (
-            _format_queens_weekday_filter(weekdays)
-            if game.name == QUEENS_GAME.name else '')
+        weekday_label = _format_queens_weekday_filter(weekdays)
         if weekday_label:
             suffix_parts.append(weekday_label)
         title_suffix = f' ({", ".join(suffix_parts)})' if suffix_parts else ''
@@ -253,6 +304,7 @@ class ImplSharedCmdMixin:
     async def _cmd_streak(self, ctx, game, *args):
         self._require_enabled(ctx.guild.id, game)
         filter_args = list(args)
+        filter_args, weekdays = _split_queens_weekday_filter(filter_args)
         member = ctx.author
         if filter_args:
             try:
@@ -268,8 +320,9 @@ class ImplSharedCmdMixin:
 
         rows = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member.id, dlo, dhi, plo, phi)
-        streak = compute_streak(rows)
-        longest = compute_longest_streak(rows)
+        rows = _filter_queens_weekday_rows(rows, weekdays)
+        streak = compute_streak(rows, weekdays)
+        longest = compute_longest_streak(rows, weekdays)
         if not rows:
             raise MinigameCogError(
                 f'No {game.display_name} results found for `{_safe_member_name(member)}`.')
@@ -277,8 +330,10 @@ class ImplSharedCmdMixin:
         best = pick_best_results(rows)
         latest_row = best[max(best)]
         latest_status = 'Perfect' if latest_row.is_perfect else f'{latest_row.accuracy}%'
+        weekday_label = _format_queens_weekday_filter(weekdays)
+        weekday_suffix = f' ({weekday_label})' if weekday_label else ''
         embed = discord.Embed(
-            title=f'{game.display_name} Streak',
+            title=f'{game.display_name} Streak{weekday_suffix}',
             description='\n'.join([
                 f'`{_safe_member_name(member)}`: **{streak}** consecutive perfect day(s)',
                 f'Longest streak: **{longest}** day(s)',
@@ -293,9 +348,7 @@ class ImplSharedCmdMixin:
         self._sync_minigame_results_for_read(ctx.guild.id, game)
         try:
             args, scoring_name, scoring = resolve_scoring(game, args)
-            weekdays = None
-            if game.name == QUEENS_GAME.name:
-                args, weekdays = _split_queens_weekday_filter(args)
+            args, weekdays = _split_queens_weekday_filter(args)
             dlo, dhi, plo, phi = parse_date_args(args)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
@@ -305,7 +358,7 @@ class ImplSharedCmdMixin:
         rows = self._filter_minigame_banned_rows(ctx.guild.id, game, rows)
         if game.name == QUEENS_GAME.name:
             rows = self._filter_queens_registered_result_rows(ctx.guild.id, rows)
-            rows = _filter_queens_weekday_rows(rows, weekdays)
+        rows = _filter_queens_weekday_rows(rows, weekdays)
         winners = compute_top(
             rows,
             is_eligible=scoring.is_eligible_winner,
@@ -320,9 +373,7 @@ class ImplSharedCmdMixin:
         suffix_parts = []
         if scoring_name:
             suffix_parts.append(scoring_name.title())
-        weekday_label = (
-            _format_queens_weekday_filter(weekdays)
-            if game.name == QUEENS_GAME.name else '')
+        weekday_label = _format_queens_weekday_filter(weekdays)
         if weekday_label:
             suffix_parts.append(weekday_label)
         title_suffix = f' ({", ".join(suffix_parts)})' if suffix_parts else ''

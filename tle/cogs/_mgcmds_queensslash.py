@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 class QueensSlashMixin:
     queens_slash = app_commands.Group(
         name='queens', description='LinkedIn Queens commands', guild_only=True)
+    # Nested group: Discord caps a group at 25 direct children, and this
+    # group is at that limit. It also mirrors the ';queens import <sub>'
+    # prefix commands.
+    queens_slash_import = app_commands.Group(
+        name='import', description='Manage imported Queens history',
+        parent=queens_slash)
 
     @queens_slash.command(name='show', description='Show LinkedIn Queens settings')
     async def slash_queens_show(self, interaction: discord.Interaction):
@@ -34,6 +40,16 @@ class QueensSlashMixin:
             return
         try:
             await self._cmd_here(_SlashCtx(interaction), QUEENS_GAME)
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
+    @queens_slash.command(name='clear', description='Clear the LinkedIn Queens channel')
+    async def slash_queens_channel_clear(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if not await self._slash_require_queens_mod(interaction):
+            return
+        try:
+            await self._cmd_clear(_SlashCtx(interaction), QUEENS_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -331,9 +347,9 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='clear', description='Remove all Queens results for a date')
+    @queens_slash.command(name='delete', description='Remove all Queens results for a date')
     @app_commands.describe(date='Date or puzzle number')
-    async def slash_queens_clear(
+    async def slash_queens_delete(
         self, interaction: discord.Interaction, date: str,
     ):
         await interaction.response.defer()
@@ -371,7 +387,7 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='import-start', description='Rebuild imported Queens history')
+    @queens_slash_import.command(name='start', description='Rebuild imported Queens history')
     @app_commands.describe(channel='Channel to import from')
     async def slash_queens_import_start(
         self, interaction: discord.Interaction,
@@ -388,7 +404,7 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='import-status', description='Show Queens import status')
+    @queens_slash_import.command(name='status', description='Show Queens import status')
     async def slash_queens_import_status(self, interaction: discord.Interaction):
         await interaction.response.defer()
         if not await self._slash_require_queens_mod(interaction):
@@ -398,7 +414,7 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='import-cancel', description='Cancel a running Queens import')
+    @queens_slash_import.command(name='cancel', description='Cancel a running Queens import')
     async def slash_queens_import_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
         if not await self._slash_require_queens_mod(interaction):
@@ -408,7 +424,7 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='import-clear', description='Delete imported Queens history')
+    @queens_slash_import.command(name='clear', description='Delete imported Queens history')
     async def slash_queens_import_clear(self, interaction: discord.Interaction):
         await interaction.response.defer()
         if not await self._slash_require_queens_mod(interaction):

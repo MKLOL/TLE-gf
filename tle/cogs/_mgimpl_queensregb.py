@@ -251,9 +251,10 @@ class ImplQueensRegBMixin:
             link = links_by_name.get(row.normalized_name)
             if link is None:
                 continue
-            if cf_common.user_db.is_minigame_banned(
-                    guild_id, QUEENS_GAME.name, link.user_id):
-                continue
+            # Bans are forward-only: new results are blocked where they enter
+            # (imports, adds, channel shares), so any source row that exists
+            # here predates the ban and keeps materializing.  Only the sticky
+            # self opt-out suppresses projection.
             if cf_common.user_db.is_minigame_opted_out(
                     guild_id, QUEENS_GAME.name, link.user_id):
                 continue

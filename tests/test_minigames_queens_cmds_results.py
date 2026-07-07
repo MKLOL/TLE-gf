@@ -193,7 +193,8 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         with pytest.raises(MinigameCogError, match='Unrecognized filter'):
             asyncio.run(Minigames.queens_stats.__wrapped__(cog, ctx, '769'))
 
-    def test_ban_removes_link_and_excludes_queens_rating(self, db, monkeypatch):
+    def test_ban_is_forward_only_and_hides_from_public_board(
+            self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
@@ -221,10 +222,40 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         asyncio.run(Minigames.queens_ban.__wrapped__(
             cog, ctx, alice, reason='duplicate account'))
 
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        # Forward-only, like Akari: link kept, existing results stay rated.
+        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
         assert db.is_minigame_banned(100, 'queens', alice.id) is True
-        assert [row.user_id for row in db.get_minigame_ratings(100, 'queens')] == ['301']
         assert db.get_minigame_ban(100, 'queens', alice.id).reason == 'duplicate account'
+        assert {row.user_id for row in db.get_minigame_ratings(100, 'queens')} == {
+            '300', '301',
+        }
+        rows = db.get_minigame_results_for_guild(100, 'queens')
+        assert {row.user_id for row in rows} == {'300', '301'}
+        assert {row.user_id
+                for row in cog._filter_minigame_banned_rows(
+                    100, QUEENS_GAME, rows)} == {'300', '301'}
+
+        # Hidden from the public board; debug still shows everyone.
+        captured = []
+        monkeypatch.setattr(
+            minigames_module, '_get_akari_rating_table_image_file',
+            lambda guild, rating_rows, registrants, **kwargs: captured.append(
+                [row.user_id for row in rating_rows]) or object())
+        asyncio.run(cog._cmd_queens_ratings(ctx))
+        assert captured[-1] == ['301']
+        asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
+        assert set(captured[-1]) == {'300', '301'}
+
+        # New manual adds are refused while banned.
+        with pytest.raises(MinigameCogError, match='banned'):
+            asyncio.run(cog._cmd_queens_add(
+                ctx, 'Alice LinkedIn 2026-06-09 0:30'))
+
+        # Unban keeps the registration; results resume counting.
+        asyncio.run(Minigames.queens_unban.__wrapped__(cog, ctx, alice))
+        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
+        asyncio.run(cog._cmd_queens_ratings(ctx))
+        assert set(captured[-1]) == {'300', '301'}
 
     def test_import_skips_banned_linked_user(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

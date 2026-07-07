@@ -161,6 +161,34 @@ class TestComputation:
         ]
         assert compute_longest_streak(rows) == 0
 
+    def test_weekday_filtered_streak_spans_calendar_gaps(self):
+        # Three consecutive Fridays: under a fri-only filter the weekend
+        # + weekday gaps are not streak breaks.
+        fridays = {4}
+        rows = [
+            _row(1, 10, '2026-03-13', True, 60, number=432),
+            _row(2, 10, '2026-03-20', True, 60, number=439),
+            _row(3, 10, '2026-03-27', True, 60, number=446),
+        ]
+        assert compute_streak(rows, fridays) == 3
+        assert compute_longest_streak(rows, fridays) == 3
+        # A missing Friday still breaks the run.
+        gapped = [rows[0], rows[2]]
+        assert compute_streak(gapped, fridays) == 1
+        assert compute_longest_streak(gapped, fridays) == 1
+
+    def test_weekend_filtered_streak_spans_the_week(self):
+        # Sat+Sun on consecutive weekends form one 4-day run.
+        weekend = {5, 6}
+        rows = [
+            _row(1, 10, '2026-03-14', True, 60, number=433),
+            _row(2, 10, '2026-03-15', True, 60, number=434),
+            _row(3, 10, '2026-03-21', True, 60, number=440),
+            _row(4, 10, '2026-03-22', True, 60, number=441),
+        ]
+        assert compute_streak(rows, weekend) == 4
+        assert compute_longest_streak(rows, weekend) == 4
+
     def test_top_counts_shared_fastest_perfect_wins(self):
         rows = [
             _row(1, 10, '2026-03-26', True, 80, number=445),

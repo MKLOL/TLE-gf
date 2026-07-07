@@ -33,6 +33,9 @@ from tle.cogs._minigame_queens_cog import (
 
 logger = logging.getLogger(__name__)
 
+# Extra per-guild Akari command admins (mirrors Queens' delegated-admin tier).
+_AKARI_ADMINS_KEY = 'akari_admin_user_ids'
+
 
 class ImplCoreMixin:
     async def cog_load(self):
@@ -243,11 +246,10 @@ class ImplCoreMixin:
         return any(r.name in allowed for r in getattr(member, 'roles', []))
 
     @staticmethod
-    def _queens_admin_ids(guild_id):
+    def _guild_admin_ids(guild_id, config_key):
         if cf_common.user_db is None:
             return set()
-        raw = cf_common.user_db.get_guild_config(
-            guild_id, _QUEENS_ADMINS_KEY)
+        raw = cf_common.user_db.get_guild_config(guild_id, config_key)
         if not raw:
             return set()
         try:
@@ -263,15 +265,33 @@ class ImplCoreMixin:
         }
 
     @staticmethod
-    def _set_queens_admin_ids(guild_id, user_ids):
+    def _set_guild_admin_ids(guild_id, config_key, user_ids):
         user_ids = sorted(
             {str(user_id) for user_id in user_ids},
             key=_mg().Minigames._user_id_sort_key)
         if user_ids:
             cf_common.user_db.set_guild_config(
-                guild_id, _QUEENS_ADMINS_KEY, json.dumps(user_ids))
+                guild_id, config_key, json.dumps(user_ids))
         else:
-            cf_common.user_db.delete_guild_config(guild_id, _QUEENS_ADMINS_KEY)
+            cf_common.user_db.delete_guild_config(guild_id, config_key)
+
+    @staticmethod
+    def _queens_admin_ids(guild_id):
+        return _mg().Minigames._guild_admin_ids(guild_id, _QUEENS_ADMINS_KEY)
+
+    @staticmethod
+    def _set_queens_admin_ids(guild_id, user_ids):
+        _mg().Minigames._set_guild_admin_ids(
+            guild_id, _QUEENS_ADMINS_KEY, user_ids)
+
+    @staticmethod
+    def _akari_admin_ids(guild_id):
+        return _mg().Minigames._guild_admin_ids(guild_id, _AKARI_ADMINS_KEY)
+
+    @staticmethod
+    def _set_akari_admin_ids(guild_id, user_ids):
+        _mg().Minigames._set_guild_admin_ids(
+            guild_id, _AKARI_ADMINS_KEY, user_ids)
 
     @staticmethod
     def _user_id_sort_key(user_id):
@@ -284,6 +304,18 @@ class ImplCoreMixin:
         return (
             self._has_server_mod_role(member)
             or str(getattr(member, 'id', None)) in self._queens_admin_ids(guild_id)
+        )
+
+    @staticmethod
+    def _akari_mod_role_error_message():
+        return (
+            f'You need the `{constants.TLE_ADMIN}` or '
+            f'`{constants.TLE_MODERATOR}` role or Akari admin access.')
+
+    def _has_akari_mod_access(self, guild_id, member):
+        return (
+            self._has_server_mod_role(member)
+            or str(getattr(member, 'id', None)) in self._akari_admin_ids(guild_id)
         )
 
     def _resolve_queens_registrar_target(self, ctx, member):
@@ -311,14 +343,20 @@ class ImplCoreMixin:
         }
 
     def _minigame_hidden_user_ids(self, guild_id, game):
-        """Users who must never appear in rankings: banned ∪ self-opted-out."""
-        return (self._minigame_banned_user_ids(guild_id, game)
-                | self._minigame_opted_out_user_ids(guild_id, game))
+        """Users who must never appear in rankings: the self-opted-out.
+
+        Bans are deliberately NOT part of this set — like Akari's, they are
+        forward-only: they gate new ingestion/imports (with a notice) but a
+        banned player's existing results stay in the rating pool.  Only the
+        sticky self opt-out hides stored rows.
+        """
+        return self._minigame_opted_out_user_ids(guild_id, game)
 
     def _filter_minigame_banned_rows(self, guild_id, game, rows):
-        # Akari has its own ban/opt-out/rating tables; generic bans/opt-outs are
-        # for manual minigames such as Queens and must not affect legacy Akari
-        # data.
+        # Akari's opt-out lives in its own tables and is applied via the
+        # registrants filter at display time; generic opt-outs are for manual
+        # minigames such as Queens.  (Despite the historical name, this
+        # filters *hidden* users — bans are forward-only and never drop rows.)
         if game.name == AKARI_GAME.name:
             return rows
         hidden = self._minigame_hidden_user_ids(guild_id, game)

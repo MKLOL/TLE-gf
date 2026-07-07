@@ -71,7 +71,8 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         rendered = []
         fake_file = SimpleNamespace(filename='queens-stats.png')
 
-        def fake_queens_stats(results, display_name, *, title_suffix=''):
+        def fake_queens_stats(results, display_name, *, title_suffix='',
+                              weekdays=None):
             rendered.append({
                 'dates': [
                     minigames_module.normalize_puzzle_date(row.puzzle_date)

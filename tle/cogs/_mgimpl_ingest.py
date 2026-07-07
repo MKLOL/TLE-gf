@@ -54,15 +54,36 @@ class ImplIngestMixin:
         return saved
 
     @staticmethod
-    def _is_akari_banned(guild_id, user_id, game):
-        """True iff this is an Akari message from a banned user.
+    def _is_ingest_banned(guild_id, user_id, game):
+        """True iff this user is banned from submitting results for ``game``.
 
-        Banning is akari-only — other games (e.g. GuessGame) don't have a
-        banlist and pass through.  Used to short-circuit ingest at every entry
-        point: live messages, edits, history import, and reparse.
+        Bans are forward-only for every game: they short-circuit the live
+        entry points (messages, edits) but never touch existing rows.  The
+        history entry points (import, reparse) must keep materializing
+        pre-ban messages — use :meth:`_ingest_ban_cutoff` there.  Akari keeps
+        its own legacy banlist table; other games use the generic
+        ``minigame_ban`` table.
         """
-        return (game.name == AKARI_GAME.name
-                and cf_common.user_db.is_akari_banned(guild_id, user_id))
+        if game.name == AKARI_GAME.name:
+            return cf_common.user_db.is_akari_banned(guild_id, user_id)
+        return cf_common.user_db.is_minigame_banned(
+            guild_id, game.name, user_id)
+
+    @staticmethod
+    def _ingest_ban_cutoff(guild_id, user_id, game):
+        """Unix timestamp at which the user's ban took effect, or None.
+
+        History entry points (import, reparse) compare message timestamps
+        against this so a ban only drops messages sent after it — clearing
+        and rebuilding history must not erase a banned user's pre-ban
+        results ('existing results stay rated').
+        """
+        if game.name == AKARI_GAME.name:
+            ban = cf_common.user_db.get_akari_ban(guild_id, user_id)
+        else:
+            ban = cf_common.user_db.get_minigame_ban(
+                guild_id, game.name, user_id)
+        return None if ban is None else float(ban.banned_at)
 
     async def _notify_non_pro_mode(self, message):
         """Reply to a non-pro Daily Akari submission asking the user to enable Pro Mode.
@@ -134,15 +155,20 @@ class ImplIngestMixin:
             message, game, content)
 
     async def _notify_banned_submission(self, message, game):
-        """Reply to a banned user's parsable Akari post explaining the ban.
+        """Reply to a banned user's parsable result post explaining the ban.
 
         Only called after we've confirmed the message *would have* produced a
-        result — chat messages from banned users in the Akari channel stay
+        result — chat messages from banned users in the game channel stay
         silent so we don't spam unrelated conversation.  Best-effort: a failed
         reply (deleted message, missing perms) is logged and swallowed so the
         ingestion path can't be broken by a notice failure.
         """
-        ban = cf_common.user_db.get_akari_ban(message.guild.id, message.author.id)
+        if game.name == AKARI_GAME.name:
+            ban = cf_common.user_db.get_akari_ban(
+                message.guild.id, message.author.id)
+        else:
+            ban = cf_common.user_db.get_minigame_ban(
+                message.guild.id, game.name, message.author.id)
         reason = ban.reason if ban is not None else None
         body = f'You are banned from posting {game.display_name} results.'
         if reason:
@@ -170,12 +196,15 @@ class ImplIngestMixin:
                     invalid_message is not None) or (
                     game.name == AKARI_GAME.name
                     and looks_like_non_pro_akari(message.content))
-                if self._is_akari_banned(message.guild.id, message.author.id, game):
-                    # Reply only if this post is a submission attempt — banned
-                    # users chatting in the channel stay silent.
-                    if is_submission:
-                        await self._notify_banned_submission(message, game)
-                    return  # never save/ingest for banned users
+                # Only submission attempts pay the ban lookup — plain chat in
+                # a busy game channel must not run a DB query per message.
+                # (on_message_edit keeps its unconditional up-front check: its
+                # early return protects pre-ban rows from the delete-and-
+                # reingest path below it.)
+                if is_submission and self._is_ingest_banned(
+                        message.guild.id, message.author.id, game):
+                    await self._notify_banned_submission(message, game)
+                    return  # never ingest a banned user's submission
                 if invalid_message is not None:
                     await self._notify_invalid_minigame_submission(
                         message, game, cleaned)
@@ -209,7 +238,7 @@ class ImplIngestMixin:
         invalid_message = self._invalid_minigame_submission_message(game, cleaned)
         is_non_pro = (game.name == AKARI_GAME.name
                       and looks_like_non_pro_akari(after.content))
-        if self._is_akari_banned(after.guild.id, after.author.id, game):
+        if self._is_ingest_banned(after.guild.id, after.author.id, game):
             try:
                 if game.parse(cleaned) or is_non_pro or invalid_message is not None:
                     await self._notify_banned_submission(after, game)

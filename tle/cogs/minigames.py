@@ -41,6 +41,7 @@ from tle.cogs._minigame_common import normalize_puzzle_date  # noqa: F401
 # ── Re-exports for the test suite and downstream importers ──────────────
 from tle.cogs._minigame_helpers import (  # noqa: F401
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
+    akari_mod_only,
     _FollowupChannel, _SlashCtx, _ScheduledCtx,
     _safe_member_name, _safe_user_name, _safe_cf_handle, _legend_name_for,
     _format_score, _format_akari_history_line, _format_minigame_history_line,
@@ -100,7 +101,7 @@ from tle.cogs._minigame_queens_cog import (  # noqa: F401
 )
 
 # Implementation mixins (plain classes — logic only)
-from tle.cogs._mgimpl_core import ImplCoreMixin
+from tle.cogs._mgimpl_core import ImplCoreMixin, _AKARI_ADMINS_KEY  # noqa: F401
 from tle.cogs._mgimpl_rating import ImplRatingMixin
 from tle.cogs._mgimpl_queensreg import ImplQueensRegMixin
 from tle.cogs._mgimpl_queensregb import ImplQueensRegBMixin
@@ -116,6 +117,7 @@ from tle.cogs._mgimpl_import import ImplImportMixin
 from tle.cogs._mgimpl_sharedcmd import ImplSharedCmdMixin
 from tle.cogs._mgimpl_akaria import ImplAkariAMixin
 from tle.cogs._mgimpl_akarib import ImplAkariBMixin
+from tle.cogs._mgimpl_akaric import ImplAkariCMixin
 from tle.cogs._mgimpl_stats import ImplStatsMixin
 from tle.cogs._mgimpl_export import ImplExportMixin
 
@@ -123,6 +125,7 @@ from tle.cogs._mgimpl_export import ImplExportMixin
 from tle.cogs._mgcmds_akari import AkariCmdsMixin
 from tle.cogs._mgcmds_queens import QueensCmdsMixin
 from tle.cogs._mgcmds_guessgame import GuessGameCmdsMixin
+from tle.cogs._mgcmds_slashhelpers import SlashHelpersMixin
 from tle.cogs._mgcmds_akarislash import AkariSlashMixin
 from tle.cogs._mgcmds_queensslash import QueensSlashMixin
 
@@ -135,6 +138,7 @@ class Minigames(
     AkariCmdsMixin,
     QueensCmdsMixin,
     GuessGameCmdsMixin,
+    SlashHelpersMixin,
     AkariSlashMixin,
     QueensSlashMixin,
     ImplCoreMixin,
@@ -153,6 +157,7 @@ class Minigames(
     ImplSharedCmdMixin,
     ImplAkariAMixin,
     ImplAkariBMixin,
+    ImplAkariCMixin,
     ImplStatsMixin,
     ImplExportMixin,
     commands.Cog,

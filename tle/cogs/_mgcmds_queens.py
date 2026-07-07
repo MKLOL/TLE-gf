@@ -60,6 +60,19 @@ class QueensCmdsMixin:
     async def queens_here(self, ctx):
         await self._cmd_here(ctx, QUEENS_GAME)
 
+    @queens.command(name='clear', brief='Clear the LinkedIn Queens channel')
+    @queens_mod_only()
+    async def queens_channel_clear(self, ctx, *args):
+        # ``clear`` used to be an alias for per-date deletion; refuse stray
+        # arguments so an old-style ``;queens clear DATE`` cannot silently
+        # unset the channel instead.
+        if args:
+            raise MinigameCogError(
+                '`;queens clear` unsets the Queens channel and takes no '
+                'arguments. To remove results for a date, use '
+                '`;queens delete DATE`.')
+        await self._cmd_clear(ctx, QUEENS_GAME)
+
     @queens.command(name='register',
                     brief='Link a Discord user to a LinkedIn Queens name',
                     usage='[+username DiscordUser] LinkedIn Name [+anon]')
@@ -200,8 +213,8 @@ class QueensCmdsMixin:
         self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         await ctx.send(embed=discord_common.embed_success(
             f'`{_safe_member_name(member)}` is no longer banned from '
-            f'{QUEENS_GAME.display_name}. They need to run '
-            '`;queens register LinkedIn Name` again.'))
+            f'{QUEENS_GAME.display_name}. Their registration was kept, so '
+            'new results count again immediately.'))
 
     @queens.command(name='bans',
                     brief='(Mod) List Queens bans')
@@ -302,6 +315,24 @@ class QueensCmdsMixin:
     async def queens_import_confirm(self, ctx):
         await self._cmd_queens_import_confirm(ctx)
 
+    @queens_import.command(name='orphans',
+                           brief='(Mod) List imported results with no live counterpart')
+    @queens_mod_only()
+    async def queens_import_orphans(self, ctx):
+        await self._cmd_import_orphans(ctx, QUEENS_GAME)
+
+    @queens.command(name='export', brief='(Mod) Download a snapshot of the result tables')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_export(self, ctx):
+        await self._cmd_akari_export(ctx, QUEENS_GAME)
+
+    @queens.command(name='diff',
+                    brief='(Mod) Diff an uploaded snapshot against current results',
+                    usage='(attach a .db / .zip snapshot)')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def queens_diff(self, ctx):
+        await self._cmd_akari_diff(ctx, QUEENS_GAME)
+
     @queens.command(name='add',
                     brief='Manually add a Queens result',
                     usage='<@user|LinkedIn Name> date|number time [status...]')
@@ -315,11 +346,15 @@ class QueensCmdsMixin:
     async def queens_remove(self, ctx, *, args: str = None):
         await self._cmd_queens_remove(ctx, args)
 
-    @queens.command(name='clear', aliases=['delete'],
+    # Standard names across both games: ``clear`` unsets the channel,
+    # ``delete``/``clean`` remove results (``;queens clear DATE`` was the
+    # historical spelling — the channel-clear command above hints at
+    # ``delete`` if it gets arguments).
+    @queens.command(name='delete',
                     brief='(Mod) Remove all Queens results for a date',
                     usage='date|number')
     @queens_mod_only()
-    async def queens_clear(self, ctx, puzzle_date: str = None):
+    async def queens_delete(self, ctx, puzzle_date: str = None):
         await self._cmd_queens_clear(ctx, puzzle_date)
 
     @queens.command(name='clean', aliases=['cleanup'],

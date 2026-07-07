@@ -21,6 +21,8 @@ from tle.cogs._minigame_queens_cog import (
 
 logger = logging.getLogger(__name__)
 
+_UNSET = object()  # cache sentinel: None is a meaningful cutoff value
+
 
 class ImplImportMixin:
     # ── Import ──────────────────────────────────────────────────────────
@@ -79,13 +81,23 @@ class ImplImportMixin:
                 raise MinigameCogError(f'Channel `{channel_id}` is not available.')
 
             uncommitted = 0
+            ban_cutoffs = {}
             async for message in channel.history(oldest_first=True, limit=None):
                 status['scanned'] += 1
                 if message.author.bot or not message.content:
                     continue
 
-                if self._is_akari_banned(guild_id, message.author.id, game):
-                    continue  # skip banned users entirely (no raw, no result)
+                ban_cutoff = ban_cutoffs.get(message.author.id, _UNSET)
+                if ban_cutoff is _UNSET:
+                    ban_cutoff = self._ingest_ban_cutoff(
+                        guild_id, message.author.id, game)
+                    ban_cutoffs[message.author.id] = ban_cutoff
+                if (ban_cutoff is not None
+                        and message.created_at.timestamp() >= ban_cutoff):
+                    # Forward-only ban: pre-ban messages still import (the
+                    # rebuild must not erase history that predates the ban);
+                    # only post-ban ones are dropped (no raw, no result).
+                    continue
 
                 cleaned = strip_codeblock(message.content)
                 if await self._notify_invalid_minigame_submission(

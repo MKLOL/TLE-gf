@@ -19,6 +19,7 @@ import discord
 from tle.util import discord_common
 from tle.cogs._minigame_common import (
     format_duration, normalize_puzzle_date, pick_best_results,
+    previous_streak_day,
 )
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_helpers import MinigameCogError
@@ -293,7 +294,7 @@ def _queens_best_results_by_date(rows):
     )
 
 
-def _queens_streak_info(rows):
+def _queens_streak_info(rows, weekdays=None):
     best = _queens_best_results_by_date(rows)
     if not best:
         return 0, 0, None
@@ -303,7 +304,7 @@ def _queens_streak_info(rows):
     day = latest_day
     while day in best and best[day].is_perfect:
         current += 1
-        day -= dt.timedelta(days=1)
+        day = previous_streak_day(day, weekdays)
 
     longest = 0
     run = 0
@@ -312,7 +313,7 @@ def _queens_streak_info(rows):
         if best[day].is_perfect:
             is_consecutive = (
                 previous_day is not None
-                and day == previous_day + dt.timedelta(days=1)
+                and previous_streak_day(day, weekdays) == previous_day
             )
             run = (
                 run + 1

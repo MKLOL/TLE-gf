@@ -1,4 +1,8 @@
-"""Akari slash group + shared slash helpers (Minigames cog slash mixin; see minigames.py)."""
+"""Akari slash group (Minigames cog slash mixin; see minigames.py).
+
+Shared slash helpers (error plumbing, mod checks, option adapters) live in
+``_mgcmds_slashhelpers``; this module carries only the ``/akari`` commands.
+"""
 
 import logging
 from typing import Optional
@@ -6,78 +10,21 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from tle import constants
-from tle.util import discord_common
-
 from tle.cogs._minigame_akari import AKARI_GAME
-from tle.cogs._minigame_helpers import MinigameCogError, _SlashCtx
-from tle.cogs._minigame_queens_filters import (
-    _split_queens_weekday_filter, _split_queens_rating_date_filter)
+from tle.cogs._minigame_helpers import _SlashCtx
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
 
 
 class AkariSlashMixin:
-    async def _slash_handle_error(self, interaction, exc):
-        if isinstance(exc, MinigameCogError):
-            await self._slash_send_error(interaction, exc)
-        else:
-            logger.exception('Unhandled error in slash command')
-            await self._slash_send_error(
-                interaction, 'An unexpected error occurred.')
-
     akari_slash = app_commands.Group(
         name='akari', description='Daily Akari commands', guild_only=True)
-
-    def _has_mod_role(self, interaction):
-        allowed = {constants.TLE_ADMIN, constants.TLE_MODERATOR}
-        return any(r.name in allowed for r in interaction.user.roles)
-
-    async def _slash_require_queens_mod(self, interaction):
-        if self._has_queens_mod_access(interaction.guild.id, interaction.user):
-            return True
-        await self._slash_send_error(interaction, self._mod_role_error_message())
-        return False
-
-    @staticmethod
-    def _slash_choice_args(*choices):
-        return [choice.value for choice in choices if choice]
-
-    @staticmethod
-    def _slash_queens_weekday_args(weekdays):
-        if not weekdays:
-            return []
-        text = str(weekdays).strip()
-        if not text:
-            return []
-        if text.startswith('+'):
-            return [text]
-        return [f'+dow={text}']
-
-    @staticmethod
-    def _slash_queens_weekdays(weekdays):
-        _remaining, parsed = _split_queens_weekday_filter(
-            AkariSlashMixin._slash_queens_weekday_args(weekdays))
-        return parsed
-
-    @staticmethod
-    def _slash_queens_date_bounds(date_filter):
-        if not date_filter:
-            return None
-        args = str(date_filter).split()
-        remaining, date_bounds = _split_queens_rating_date_filter(args)
-        if remaining:
-            raise MinigameCogError(
-                'Use date filters like `d>=01062026 d<08062026`.')
-        return date_bounds
-
-    async def _slash_send_error(self, interaction, error):
-        try:
-            await interaction.followup.send(
-                embed=discord_common.embed_alert(str(error)))
-        except Exception:
-            logger.warning('Failed to send slash error response', exc_info=True)
+    # Nested group mirroring the ';akari import <sub>' prefix commands and
+    # the /queens import subgroup (Discord caps a group at 25 children).
+    akari_slash_import = app_commands.Group(
+        name='import', description='Manage imported Akari history',
+        parent=akari_slash)
 
     @akari_slash.command(name='show', description='Show Daily Akari settings')
     async def slash_akari_show(self, interaction: discord.Interaction):
@@ -90,148 +37,200 @@ class AkariSlashMixin:
     @akari_slash.command(name='vs', description='Head-to-head comparison')
     @app_commands.describe(
         member1='First player', member2='Second player',
-        timeframe='Time period filter', mode='Scoring mode')
+        timeframe='Time period filter', mode='Scoring mode',
+        weekdays='Days: mon,wed, weekday, or weekend')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
     async def slash_akari_vs(
         self, interaction: discord.Interaction,
         member1: discord.Member, member2: discord.Member,
         timeframe: Optional[app_commands.Choice[str]] = None,
         mode: Optional[app_commands.Choice[str]] = None,
+        weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
-        args = []
-        if timeframe:
-            args.append(timeframe.value)
-        if mode:
-            args.append(mode.value)
         try:
             await self._cmd_vs(
-                _SlashCtx(interaction), AKARI_GAME, member1, member2, *args)
+                _SlashCtx(interaction), AKARI_GAME, member1, member2,
+                *self._slash_choice_args(timeframe, mode),
+                *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='streak', description='Show current perfect streak')
-    @app_commands.describe(member='Player to check', timeframe='Time period filter')
+    @app_commands.describe(
+        member='Player to check', timeframe='Time period filter',
+        weekdays='Days: mon,wed, weekday, or weekend')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
     async def slash_akari_streak(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         timeframe: Optional[app_commands.Choice[str]] = None,
+        weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
         ctx = _SlashCtx(interaction)
         if member:
             ctx.author = member
-        args = []
-        if timeframe:
-            args.append(timeframe.value)
         try:
-            await self._cmd_streak(ctx, AKARI_GAME, *args)
+            await self._cmd_streak(
+                ctx, AKARI_GAME, *self._slash_choice_args(timeframe),
+                *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='top', description='Show winners leaderboard')
-    @app_commands.describe(timeframe='Time period filter', mode='Scoring mode')
+    @app_commands.describe(
+        timeframe='Time period filter', mode='Scoring mode',
+        weekdays='Days: mon,wed, weekday, or weekend')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
     async def slash_akari_top(
         self, interaction: discord.Interaction,
         timeframe: Optional[app_commands.Choice[str]] = None,
         mode: Optional[app_commands.Choice[str]] = None,
+        weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
-        args = []
-        if timeframe:
-            args.append(timeframe.value)
-        if mode:
-            args.append(mode.value)
         try:
-            await self._cmd_top(_SlashCtx(interaction), AKARI_GAME, *args)
+            await self._cmd_top(
+                _SlashCtx(interaction), AKARI_GAME,
+                *self._slash_choice_args(timeframe, mode),
+                *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='stats', description='Show personal stats with graphs')
-    @app_commands.describe(member='Player to check', timeframe='Time period filter')
+    @app_commands.describe(
+        member='Player to check', timeframe='Time period filter',
+        weekdays='Days: mon,wed, weekday, or weekend')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
     async def slash_akari_stats(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         timeframe: Optional[app_commands.Choice[str]] = None,
+        weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
         ctx = _SlashCtx(interaction)
         if member:
             ctx.author = member
-        args = []
-        if timeframe:
-            args.append(timeframe.value)
         try:
-            await self._cmd_stats(ctx, AKARI_GAME, *args)
-        except MinigameCogError as e:
-            await self._slash_send_error(interaction, e)
+            await self._cmd_stats(
+                ctx, AKARI_GAME, *self._slash_choice_args(timeframe),
+                *self._slash_queens_weekday_args(weekdays))
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
+    @akari_slash.command(name='results', description='Show an Akari puzzle/date leaderboard')
+    @app_commands.describe(
+        selector='Puzzle number, #number, or date (defaults to today)',
+        weekdays='Days: mon,wed, weekday, or weekend',
+        date_filter='Date filter, e.g. d>=01062026 d<08062026')
+    async def slash_akari_results(
+        self, interaction: discord.Interaction,
+        selector: Optional[str] = None,
+        weekdays: Optional[str] = None,
+        date_filter: Optional[str] = None,
+    ):
+        await interaction.response.defer()
+        args = [selector] if selector else []
+        args += self._slash_queens_weekday_args(weekdays)
+        args += str(date_filter or '').split()
+        try:
+            await self._cmd_akari_results(_SlashCtx(interaction), args)
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='ratings', description='Show Akari rating leaderboard')
     @app_commands.describe(
-        weekly='Preview weekly-contest ratings and this week\'s scores')
+        weekly='Preview weekly-contest ratings and this week\'s scores',
+        weekdays='Days: mon,wed, weekday, or weekend',
+        date_filter='Date filter, e.g. d>=01062026 d<08062026')
     async def slash_akari_ratings(self, interaction: discord.Interaction,
-                                  weekly: bool = False):
+                                  weekly: bool = False,
+                                  weekdays: Optional[str] = None,
+                                  date_filter: Optional[str] = None):
         await interaction.response.defer()
         try:
             await self._cmd_akari_ratings(
-                _SlashCtx(interaction), weekly=weekly)
+                _SlashCtx(interaction), weekly=weekly,
+                weekdays=self._slash_queens_weekdays(weekdays),
+                date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='rating', description="Show a user's Akari rating graph")
     @app_commands.describe(
         member='Player (defaults to you)',
-        decay='Include every day (with decay slopes), not only days played')
+        decay='Include every day (with decay slopes), not only days played',
+        weekdays='Days: mon,wed, weekday, or weekend',
+        date_filter='Date filter, e.g. d>=01062026 d<08062026',
+        recalculate='Recalculate ratings from the filtered result set')
     async def slash_akari_rating(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         decay: bool = False,
+        weekdays: Optional[str] = None,
+        date_filter: Optional[str] = None,
+        recalculate: Optional[bool] = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
         try:
             await self._cmd_akari_rating(
-                _SlashCtx(interaction), [target], include_decay=decay)
+                _SlashCtx(interaction), [target], include_decay=decay,
+                weekdays=self._slash_queens_weekdays(weekdays),
+                date_bounds=self._slash_queens_date_bounds(date_filter),
+                recalculate=bool(recalculate))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='performance', description="Show a user's Akari performance graph")
-    @app_commands.describe(member='Player (defaults to you)')
+    @app_commands.describe(
+        member='Player (defaults to you)',
+        weekdays='Days: mon,wed, weekday, or weekend',
+        date_filter='Date filter, e.g. d>=01062026 d<08062026')
     async def slash_akari_performance(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
+        weekdays: Optional[str] = None,
+        date_filter: Optional[str] = None,
     ):
         await interaction.response.defer()
         target = member or interaction.user
         try:
-            await self._cmd_akari_performance(_SlashCtx(interaction), [target])
+            await self._cmd_akari_performance(
+                _SlashCtx(interaction), [target],
+                weekdays=self._slash_queens_weekdays(weekdays),
+                date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='history', description="Show a user's Akari rating delta log")
-    @app_commands.describe(member='Player (defaults to you)')
+    @app_commands.describe(
+        member='Player (defaults to you)',
+        weekdays='Days: mon,wed, weekday, or weekend',
+        date_filter='Date filter, e.g. d>=01062026 d<08062026')
     async def slash_akari_history(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
+        weekdays: Optional[str] = None,
+        date_filter: Optional[str] = None,
     ):
         await interaction.response.defer()
         target = member or interaction.user
         try:
-            await self._cmd_akari_history(_SlashCtx(interaction), target)
+            await self._cmd_akari_history(
+                _SlashCtx(interaction), target,
+                weekdays=self._slash_queens_weekdays(weekdays),
+                date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @akari_slash.command(name='here', description='Set the Daily Akari channel')
     async def slash_akari_here(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_here(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:
@@ -240,11 +239,8 @@ class AkariSlashMixin:
     @akari_slash.command(name='clear', description='Clear the Daily Akari channel')
     async def slash_akari_clear(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_clear(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:
@@ -257,11 +253,8 @@ class AkariSlashMixin:
         member: discord.Member, puzzle_id: int,
     ):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_remove(
                 _SlashCtx(interaction), AKARI_GAME, member, puzzle_id)
@@ -278,42 +271,63 @@ class AkariSlashMixin:
         member: discord.Member, puzzle_id: int, result: str, time: str,
     ):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_akari_add(
                 _SlashCtx(interaction), member, puzzle_id, result, time)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
+    @akari_slash.command(name='delete', description='Remove all Akari results for a date/puzzle')
+    @app_commands.describe(selector='Puzzle number, #number, or date')
+    async def slash_akari_delete(
+        self, interaction: discord.Interaction, selector: str,
+    ):
+        await interaction.response.defer()
+        if not await self._slash_require_akari_mod(interaction):
+            return
+        try:
+            await self._cmd_akari_delete_date(_SlashCtx(interaction), selector)
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
+    @akari_slash.command(name='clean', description='Remove Akari results for a date range')
+    @app_commands.describe(
+        start_date='Start date or puzzle number',
+        end_date='End date or puzzle number (defaults to start date)')
+    async def slash_akari_clean(
+        self, interaction: discord.Interaction, start_date: str,
+        end_date: Optional[str] = None,
+    ):
+        await interaction.response.defer()
+        if not await self._slash_require_akari_mod(interaction):
+            return
+        try:
+            await self._cmd_akari_clean(
+                _SlashCtx(interaction), start_date, end_date)
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
     @akari_slash.command(name='reparse', description='Reparse all stored raw messages')
     async def slash_akari_reparse(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_reparse(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='import-start', description='Rebuild imported history')
+    @akari_slash_import.command(name='start', description='Rebuild imported history')
     @app_commands.describe(channel='Channel to import from')
     async def slash_akari_import_start(
         self, interaction: discord.Interaction,
         channel: Optional[discord.TextChannel] = None,
     ):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         ctx = _SlashCtx(interaction)
         try:
             original = await interaction.original_response()
@@ -322,40 +336,31 @@ class AkariSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='import-status', description='Show import status')
+    @akari_slash_import.command(name='status', description='Show import status')
     async def slash_akari_import_status(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_import_status(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='import-cancel', description='Cancel a running import')
+    @akari_slash_import.command(name='cancel', description='Cancel a running import')
     async def slash_akari_import_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_import_cancel(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='import-clear', description='Delete imported history')
+    @akari_slash_import.command(name='clear', description='Delete imported history')
     async def slash_akari_import_clear(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not self._has_mod_role(interaction):
-            return await self._slash_send_error(
-                interaction,
-                f'You need the `{constants.TLE_ADMIN}` or '
-                f'`{constants.TLE_MODERATOR}` role.')
+        if not await self._slash_require_akari_mod(interaction):
+            return
         try:
             await self._cmd_import_clear(_SlashCtx(interaction), AKARI_GAME)
         except Exception as _slash_exc:

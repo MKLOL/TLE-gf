@@ -109,7 +109,9 @@ class TestCogIngest:
         assert row.is_perfect == 1
         rating = db.get_minigame_rating(1, 'queens', 999)
         assert rating is not None
-        assert rating.games == 1
+        # A lone share is a solo day — rated snapshot exists but games stays
+        # 0 (contested-days semantics, same as Akari).
+        assert rating.games == 0
 
     def test_queens_reparse_uses_raw_share_messages(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -151,7 +153,9 @@ class TestCogIngest:
         assert sent['embed'] is not None
         rating = db.get_minigame_rating(1, 'queens', 999)
         assert rating is not None
-        assert rating.games == 1
+        # A lone share is a solo day — rated snapshot exists but games stays
+        # 0 (contested-days semantics, same as Akari).
+        assert rating.games == 0
 
     def test_ignores_disabled_feature(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

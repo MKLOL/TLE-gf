@@ -209,7 +209,7 @@ class ImplQueensCmdBMixin:
                 f'No {QUEENS_GAME.display_name} results found for '
                 f'`{display_name}`.')
 
-        current, longest, latest = _queens_streak_info(rows)
+        current, longest, latest = _queens_streak_info(rows, weekdays)
         latest_status = (
             'no hints & no mistakes'
             if latest.is_perfect
@@ -261,7 +261,8 @@ class ImplQueensCmdBMixin:
         discord_file = _mg().plot_queens_stats(
             results,
             display_name,
-            title_suffix=_queens_weekday_filter_suffix(weekdays))
+            title_suffix=_queens_weekday_filter_suffix(weekdays),
+            weekdays=weekdays)
         await ctx.send(file=discord_file)
 
     async def _cmd_queens_stats_date(self, ctx, date_arg, *,

@@ -20,6 +20,11 @@ from tle.cogs._minigame_stats import (
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg, _safe_member_name,
     _legend_name_for, _format_akari_history_line,
+    _display_rating, _display_peak, _display_games,
+)
+from tle.cogs._minigame_queens_filters import (
+    _filter_queens_weekday_rows, _filter_queens_rating_date_rows,
+    _filter_queens_rating_date_history, _queens_filter_suffix,
 )
 from tle.cogs._minigame_tables import (
     _maybe_parse_puzzle_selector,
@@ -32,7 +37,9 @@ logger = logging.getLogger(__name__)
 class ImplAkariBMixin:
     async def _cmd_akari_rating(self, ctx, members, *, require_registered=True,
                                 include_decay=False, excluded_ids=None,
-                                included_ids=None, test_decay=False):
+                                included_ids=None, test_decay=False,
+                                weekdays=None, date_bounds=None,
+                                recalculate=False):
         """Per-user rating graph (``;plot rating`` style).
 
         ``members`` is a list of one-or-more members.  With a single member
@@ -63,8 +70,20 @@ class ImplAkariBMixin:
                         f'`{_safe_member_name(member)}` has not opted in to '
                         f'{AKARI_GAME.display_name} ratings '
                         f'(`;mg akari register`).')
+                # Banned players are hidden from public views (forward-only
+                # ban); the mod-only debug variants skip this gate.
+                if cf_common.user_db.is_akari_banned(ctx.guild.id, member.id):
+                    raise MinigameCogError(
+                        f'`{_safe_member_name(member)}` is banned from '
+                        f'{AKARI_GAME.display_name}.')
 
-        filtered = bool(excluded_ids or included_ids or test_decay)
+        # Mirrors the Queens semantics: date bounds display-filter the stored
+        # history by default; ``+recalculate`` replays on only the filtered
+        # rows.  Weekday filters always force a fresh (ad-hoc) replay.
+        replay_date_bounds = date_bounds if recalculate else None
+        filtered = bool(excluded_ids or included_ids or test_decay
+                        or weekdays is not None
+                        or replay_date_bounds is not None)
         per_member = []
         for member in members:
             if filtered:
@@ -72,12 +91,16 @@ class ImplAkariBMixin:
                     ctx.guild.id, member.id,
                     include_decay=include_decay,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    test_decay=test_decay)
+                    test_decay=test_decay, weekdays=weekdays,
+                    date_bounds=replay_date_bounds)
             else:
                 row = cf_common.user_db.get_akari_rating(
                     ctx.guild.id, member.id)
                 history = self._akari_user_history(
                     ctx.guild.id, member.id, include_decay=include_decay)
+            if not recalculate:
+                history = _filter_queens_rating_date_history(
+                    history, date_bounds)
             if row is None:
                 raise MinigameCogError(
                     f'No {AKARI_GAME.display_name} rating for '
@@ -93,11 +116,14 @@ class ImplAkariBMixin:
         discord_file = _mg().plot_akari_rating(series)
 
         title_suffix = ' [test decay]' if test_decay else ''
+        title_suffix += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         if len(per_member) == 1:
             member, row, history = per_member[0]
-            rating = round(row.rating)
+            rating = round(_display_rating(row, history, date_bounds))
             rank = rank_for_rating(rating)
-            peak_rank = rank_for_rating(round(row.peak))
+            peak = round(_display_peak(row, history, date_bounds))
+            peak_rank = rank_for_rating(peak)
             # Last contest day's delta and performance (skip solo-day Nones).
             # row.last_delta on the snapshot is overwritten by daily decay steps
             # and rounds to +0 for most users — use the history to find their
@@ -116,19 +142,21 @@ class ImplAkariBMixin:
                 color=rank.color_embed,
             )
             embed.add_field(name='Rating', value=f'{rating} ({rank.title_abbr})')
-            embed.add_field(name='Peak', value=f'{round(row.peak)} ({peak_rank.title_abbr})')
-            embed.add_field(name='Games', value=str(row.games))
+            embed.add_field(name='Peak', value=f'{peak} ({peak_rank.title_abbr})')
+            embed.add_field(name='Games',
+                            value=str(_display_games(row, history, date_bounds)))
             embed.add_field(name='Last change', value=last_change_str)
             embed.add_field(name='Last performance', value=last_perf_str)
         else:
-            top_member, top_row, _ = max(per_member, key=lambda t: t[1].rating)
-            top_rank = rank_for_rating(round(top_row.rating))
-            del top_member  # only its row drives the embed colour
+            _top_member, top_row, top_history = max(
+                per_member, key=lambda t: _display_rating(t[1], t[2], date_bounds))
+            top_rank = rank_for_rating(
+                round(_display_rating(top_row, top_history, date_bounds)))
             lines = [
                 f'**{_safe_member_name(member)}**: '
-                f'{round(row.rating)} '
-                f'({rank_for_rating(round(row.rating)).title_abbr})'
-                for member, row, _ in per_member
+                f'{round(_display_rating(row, history, date_bounds))} '
+                f'({rank_for_rating(round(_display_rating(row, history, date_bounds))).title_abbr})'
+                for member, row, history in per_member
             ]
             embed = discord.Embed(
                 title=(f'{AKARI_GAME.display_name} ratings — '
@@ -142,7 +170,8 @@ class ImplAkariBMixin:
 
     async def _cmd_akari_performance(self, ctx, members, *, require_registered=True,
                                      excluded_ids=None, included_ids=None,
-                                     test_decay=False):
+                                     test_decay=False, weekdays=None,
+                                     date_bounds=None):
         """Per-user performance graph.
 
         Performance is the rating that, given the day's field, would seed the
@@ -169,19 +198,27 @@ class ImplAkariBMixin:
                         f'`{_safe_member_name(member)}` has not opted in to '
                         f'{AKARI_GAME.display_name} ratings '
                         f'(`;mg akari register`).')
+                # Banned players are hidden from public views (forward-only
+                # ban); the mod-only debug variants skip this gate.
+                if cf_common.user_db.is_akari_banned(ctx.guild.id, member.id):
+                    raise MinigameCogError(
+                        f'`{_safe_member_name(member)}` is banned from '
+                        f'{AKARI_GAME.display_name}.')
 
-        filtered = bool(excluded_ids or included_ids or test_decay)
+        filtered = bool(excluded_ids or included_ids or test_decay
+                        or weekdays is not None)
         per_member = []
         for member in members:
             if filtered:
                 row, history = self._akari_user_data(
                     ctx.guild.id, member.id,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    test_decay=test_decay)
+                    test_decay=test_decay, weekdays=weekdays)
             else:
                 row = cf_common.user_db.get_akari_rating(
                     ctx.guild.id, member.id)
                 history = self._akari_user_history(ctx.guild.id, member.id)
+            history = _filter_queens_rating_date_history(history, date_bounds)
             if row is None:
                 raise MinigameCogError(
                     f'No {AKARI_GAME.display_name} rating for '
@@ -193,11 +230,20 @@ class ImplAkariBMixin:
                     f'{AKARI_GAME.display_name} days to plot performance for yet.')
             per_member.append((member, row, history, contest_history))
 
-        series = [(history, _legend_name_for(ctx.guild, member), round(row.rating))
-                  for member, row, history, _ in per_member]
+        series = [
+            (
+                history,
+                _legend_name_for(ctx.guild, member),
+                round(history[-1].rating if date_bounds is not None
+                      else row.rating),
+            )
+            for member, row, history, _ in per_member
+        ]
         discord_file = _mg().plot_akari_performance(series)
 
         title_suffix = ' [test decay]' if test_decay else ''
+        title_suffix += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         if len(per_member) == 1:
             member, row, _history, contest_history = per_member[0]
             last_perf = contest_history[-1].performance
@@ -241,7 +287,8 @@ class ImplAkariBMixin:
     async def _cmd_akari_ratings_debug(self, ctx, *, excluded_ids=None,
                                         included_ids=None,
                                         include_inactive=False,
-                                        test_decay=False, weekly=False):
+                                        test_decay=False, weekly=False,
+                                        weekdays=None, date_bounds=None):
         """Admin view: leaderboard image including shadow-rated (unopted-in) users.
 
         Same image as ``;mg akari ratings`` but without the registration filter —
@@ -250,14 +297,18 @@ class ImplAkariBMixin:
         way as the public command.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
+        filtered = bool(excluded_ids or included_ids or test_decay
+                        or weekdays is not None or date_bounds is not None)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
                 ctx.guild.id, excluded_ids=excluded_ids,
-                included_ids=included_ids)
-        elif excluded_ids or included_ids or test_decay:
+                included_ids=included_ids,
+                weekdays=weekdays, date_bounds=date_bounds)
+        elif filtered:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
-                included_ids=included_ids, test_decay=test_decay)
+                included_ids=included_ids, test_decay=test_decay,
+                weekdays=weekdays, date_bounds=date_bounds)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
         if not rows and not (weekly and standings):
@@ -281,6 +332,8 @@ class ImplAkariBMixin:
             title += ' [test decay]'
         if weekly:
             title += ' [weekly preview]'
+        title += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         if shown:
             table_kwargs = {'games_label': 'Weeks'} if weekly else {}
             discord_file = _mg()._get_akari_rating_table_image_file(
@@ -293,7 +346,8 @@ class ImplAkariBMixin:
 
     async def _cmd_akari_history(self, ctx, member, *, require_registered=True,
                                  excluded_ids=None, included_ids=None,
-                                 test_decay=False):
+                                 test_decay=False, weekdays=None,
+                                 date_bounds=None):
         """Per-user paginated rating delta history (``;handles updates`` style).
 
         One line per contest the user played, newest first.  Solo days (single
@@ -304,16 +358,21 @@ class ImplAkariBMixin:
         those users so each delta reflects the contest minus them.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if require_registered and not cf_common.user_db.is_akari_registered(
-                ctx.guild.id, member.id):
-            raise MinigameCogError(
-                f'`{_safe_member_name(member)}` has not opted in to '
-                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
+        if require_registered:
+            if not cf_common.user_db.is_akari_registered(
+                    ctx.guild.id, member.id):
+                raise MinigameCogError(
+                    f'`{_safe_member_name(member)}` has not opted in to '
+                    f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
+            if cf_common.user_db.is_akari_banned(ctx.guild.id, member.id):
+                raise MinigameCogError(
+                    f'`{_safe_member_name(member)}` is banned from '
+                    f'{AKARI_GAME.display_name}.')
 
         history = self._akari_user_history(
             ctx.guild.id, member.id,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            test_decay=test_decay)
+            test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds)
         contest_history = [h for h in history if h.performance is not None]
         if not contest_history:
             raise MinigameCogError(
@@ -322,6 +381,8 @@ class ImplAkariBMixin:
 
         lines = [_format_akari_history_line(h) for h in reversed(contest_history)]
         title_suffix = ' [test decay]' if test_decay else ''
+        title_suffix += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         title = (f'{AKARI_GAME.display_name} rating history — '
                  f'{_safe_member_name(member)} '
                  f'({len(contest_history)} contests){title_suffix}')
@@ -344,7 +405,8 @@ class ImplAkariBMixin:
 
     async def _cmd_akari_stats_puzzle(self, ctx, selector_arg, *,
                                        show_all=False, excluded_ids=None,
-                                       included_ids=None, test_decay=False):
+                                       included_ids=None, test_decay=False,
+                                       weekdays=None, date_bounds=None):
         """Render a per-puzzle results image annotated with pre-puzzle ratings.
 
         ``show_all=False`` (public path): only opted-in users get the rating
@@ -375,6 +437,8 @@ class ImplAkariBMixin:
 
         rows = self._filter_akari_rows(
             rows, excluded_ids=excluded_ids, included_ids=included_ids)
+        rows = _filter_queens_weekday_rows(rows, weekdays)
+        rows = _filter_queens_rating_date_rows(rows, date_bounds)
 
         if not rows:
             raise MinigameCogError(
@@ -389,7 +453,8 @@ class ImplAkariBMixin:
             puzzle_info = self._akari_puzzle_change_info(
                 ctx.guild.id, next(iter(puzzle_numbers)),
                 excluded_ids=excluded_ids, included_ids=included_ids,
-                test_decay=test_decay)
+                test_decay=test_decay, weekdays=weekdays,
+                date_bounds=date_bounds)
             if show_all:
                 # Debug: pretend every rated player is registered for display.
                 registrants = set(puzzle_info.keys())
@@ -399,6 +464,8 @@ class ImplAkariBMixin:
 
         if test_decay:
             title += ' [test decay]'
+        title += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         discord_file = _mg()._get_akari_puzzle_table_image_file(
             ctx.guild, rows, title,
             puzzle_info=puzzle_info, registrants=registrants)

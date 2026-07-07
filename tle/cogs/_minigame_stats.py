@@ -35,7 +35,7 @@ def _bin_times(times):
     return counts
 
 
-def plot_akari_stats(rows, display_name):
+def plot_akari_stats(rows, display_name, weekdays=None):
     """Generate a multi-panel Akari stats image. Returns a discord.File."""
     best = pick_best_results(rows)
     results = sorted(best.values(), key=lambda r: normalize_puzzle_date(r.puzzle_date))
@@ -49,8 +49,8 @@ def plot_akari_stats(rows, display_name):
     all_times = [r.time_seconds for r in results]
     perfect_times = [r.time_seconds for r in perfects]
 
-    streak = compute_streak(rows)
-    longest = compute_longest_streak(rows)
+    streak = compute_streak(rows, weekdays)
+    longest = compute_longest_streak(rows, weekdays)
 
     best_time = min(perfect_times) if perfect_times else min(all_times) if all_times else 0
     avg_time = sum(perfect_times) / len(perfect_times) if perfect_times else 0
@@ -189,7 +189,8 @@ def _empty_panel(ax, text):
     ax.set_yticks([])
 
 
-def plot_queens_stats(results, display_name, *, title_suffix=''):
+def plot_queens_stats(results, display_name, *, title_suffix='',
+                      weekdays=None):
     """Generate a multi-panel Queens stats image. Returns a discord.File."""
     results = sorted(
         results,
@@ -199,7 +200,7 @@ def plot_queens_stats(results, display_name, *, title_suffix=''):
     clean = [row for row in results if row.is_perfect]
     no_mistakes = [row for row in results if int(row.accuracy) == 100]
     times = [int(row.time_seconds) for row in results]
-    current, longest, latest = _queens_streak_info(results)
+    current, longest, latest = _queens_streak_info(results, weekdays)
 
     weekday_rows = [[] for _ in range(7)]
     for row in results:
@@ -316,7 +317,7 @@ def _guess_position(row):
     return 0  # no green
 
 
-def plot_guessgame_stats(rows, display_name):
+def plot_guessgame_stats(rows, display_name, weekdays=None):
     """Generate a multi-panel GuessThe.Game stats image. Returns a discord.File."""
     best = pick_best_results(rows)
     results = sorted(best.values(), key=lambda r: normalize_puzzle_date(r.puzzle_date))
@@ -328,8 +329,8 @@ def plot_guessgame_stats(rows, display_name):
     perfect_count = sum(1 for r in results if r.is_perfect)
     perfect_rate = perfect_count / total * 100 if total else 0
 
-    streak = compute_streak(rows)
-    longest = compute_longest_streak(rows)
+    streak = compute_streak(rows, weekdays)
+    longest = compute_longest_streak(rows, weekdays)
 
     # Guess distribution
     guess_counts = [0] * 7  # positions 1-6 + X(no green)

@@ -30,10 +30,19 @@ from tle.cogs._minigame_queens_cog import (
 logger = logging.getLogger(__name__)
 
 
+def _raw_created_timestamp(created_at):
+    """Unix timestamp of a raw-message row's ISO ``created_at`` string."""
+    ts = dt.datetime.fromisoformat(created_at)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    return ts.timestamp()
+
+
 class ImplExportMixin:
     async def _cmd_akari_export(self, ctx, game):
-        """Send a small sqlite snapshot of the two result tables (this game's
-        rows only) — the file ``;mg akari diff`` consumes."""
+        """Send a small sqlite snapshot of the two result tables (this
+        guild's rows for this game only) — the file ``;mg akari diff``
+        consumes."""
         os.makedirs(constants.TEMP_DIR, exist_ok=True)
         out_path = os.path.join(
             constants.TEMP_DIR, f'{game.name}_snapshot_{ctx.message.id}.db')
@@ -52,8 +61,8 @@ class ImplExportMixin:
                         raise MinigameCogError(f'`{tbl}` table is missing.')
                     dst.execute(create[0])
                     rows = src.execute(
-                        f'SELECT * FROM {tbl} WHERE game=?',
-                        (game.name,)).fetchall()
+                        f'SELECT * FROM {tbl} WHERE game=? AND guild_id=?',
+                        (game.name, str(ctx.guild.id))).fetchall()
                     if rows:
                         placeholders = ','.join(['?'] * len(rows[0]))
                         dst.executemany(
@@ -196,9 +205,18 @@ class ImplExportMixin:
         parsed_count = 0
         skipped = []
 
+        ban_cutoffs = {}
         for row in raw_messages:
-            if self._is_akari_banned(row.guild_id, row.user_id, game):
-                continue  # banned users' raw rows stay in the store but produce no results
+            if row.user_id not in ban_cutoffs:
+                ban_cutoffs[row.user_id] = self._ingest_ban_cutoff(
+                    row.guild_id, row.user_id, game)
+            cutoff = ban_cutoffs[row.user_id]
+            if (cutoff is not None
+                    and _raw_created_timestamp(row.created_at) >= cutoff):
+                # Forward-only ban: only post-ban messages are dropped —
+                # pre-ban raw rows keep materializing so 'existing results
+                # stay rated' survives a reparse.
+                continue
             cleaned = strip_codeblock(row.raw_content)
             if self._invalid_minigame_submission_message(game, cleaned) is not None:
                 skipped.append(row.message_id)

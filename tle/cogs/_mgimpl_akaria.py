@@ -8,7 +8,6 @@ import time
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-from tle.util.minigame_rating import compute_ratings
 from tle.util.akari_difficulty import fetch_akari_difficulties
 from tle.util.akari_weekly import (
     compute_weekly_ratings, current_week_standings, week_start,
@@ -23,8 +22,9 @@ from tle.cogs._minigame_akari import (
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg, _safe_member_name,
 )
-from tle.cogs._minigame_tables import (
-    _PuzzlePlayerInfo,
+from tle.cogs._minigame_queens_filters import (
+    _filter_queens_weekday_rows, _filter_queens_rating_date_rows,
+    _queens_filter_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,8 @@ class ImplAkariAMixin:
 
     async def _cmd_akari_ratings(self, ctx, *, excluded_ids=None,
                                   included_ids=None, include_inactive=False,
-                                  test_decay=False, weekly=False):
+                                  test_decay=False, weekly=False,
+                                  weekdays=None, date_bounds=None):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -127,27 +128,35 @@ class ImplAkariAMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
+        # Banned players stay rated (forward-only ban) but are hidden from
+        # public boards at display time, like Queens'; debug shows them.
+        banned_ids = self._akari_banned_user_ids(ctx.guild.id)
+        visible = registrants - banned_ids
+        filtered = bool(excluded_ids or included_ids or test_decay
+                        or weekdays is not None or date_bounds is not None)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
                 ctx.guild.id,
                 excluded_ids=excluded_ids,
                 included_ids=included_ids,
+                weekdays=weekdays, date_bounds=date_bounds,
             )
             # The public board honours the rating opt-out: unregistered
             # players are dropped from the provisional scores table too, not
             # just from the rating table (the debug command shows everyone).
-            standings = [s for s in standings if s.user_id in registrants]
-        elif excluded_ids or included_ids or test_decay:
+            standings = [s for s in standings if s.user_id in visible]
+        elif filtered:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
-                included_ids=included_ids, test_decay=test_decay)
+                included_ids=included_ids, test_decay=test_decay,
+                weekdays=weekdays, date_bounds=date_bounds)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
         if not rows and not (weekly and standings):
             raise MinigameCogError(
                 f'No {AKARI_GAME.display_name} ratings yet. They appear once '
                 f'players post results.')
-        registered = [r for r in rows if r.user_id in registrants]
+        registered = [r for r in rows if r.user_id in visible]
         if not registered and not (weekly and standings):
             raise MinigameCogError(
                 f'No registered {AKARI_GAME.display_name} players yet. '
@@ -169,6 +178,8 @@ class ImplAkariAMixin:
             title += ' [test decay]'
         if weekly:
             title += ' [weekly preview]'
+        title += _queens_filter_suffix(
+            weekdays=weekdays, date_bounds=date_bounds)
         if shown:
             table_kwargs = {'games_label': 'Weeks'} if weekly else {}
             discord_file = _mg()._get_akari_rating_table_image_file(
@@ -178,6 +189,11 @@ class ImplAkariAMixin:
             await ctx.send(file=discord_file)
         if weekly:
             await self._send_akari_weekly_scores(ctx, standings)
+
+    @staticmethod
+    def _akari_banned_user_ids(guild_id):
+        return {str(row.user_id)
+                for row in cf_common.user_db.get_akari_bans(guild_id)}
 
     @staticmethod
     async def _send_akari_weekly_scores(ctx, standings):
@@ -200,13 +216,16 @@ class ImplAkariAMixin:
         await ctx.send(file=score_file)
 
     async def _akari_weekly_preview(self, guild_id, *, excluded_ids=None,
-                                    included_ids=None):
+                                    included_ids=None, weekdays=None,
+                                    date_bounds=None):
         """Build weekly ratings plus provisional current-week standings."""
         result_rows = cf_common.user_db.get_minigame_results_for_guild(
             guild_id, AKARI_GAME.name)
         result_rows = self._filter_akari_rows(
             result_rows, excluded_ids=excluded_ids,
             included_ids=included_ids)
+        result_rows = _filter_queens_weekday_rows(result_rows, weekdays)
+        result_rows = _filter_queens_rating_date_rows(result_rows, date_bounds)
         today = dt.date.today()
         current_puzzle = _mg().expected_puzzle_number(today)
         wanted = set()
@@ -266,9 +285,24 @@ class ImplAkariAMixin:
             'decay_max': constants.AKARI_DECAY_BASE,
         }
 
+    def _akari_extra_compute_kwargs(self, test_decay=False):
+        """Akari overrides for the generic minigame replay helpers.
+
+        Pins ``current_puzzle_number``/``max_puzzle`` through the
+        monkeypatch-sensitive ``_mg().expected_puzzle_number`` (rather than
+        ``AKARI_GAME.rating.current_puzzle_number_fn``, which resolves to the
+        unpatched module function) and folds in the ``+test`` decay kwargs.
+        """
+        current_puzzle = _mg().expected_puzzle_number(dt.date.today())
+        return {
+            'current_puzzle_number': current_puzzle,
+            'max_puzzle': current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD,
+            **self._akari_test_decay_kwargs(test_decay),
+        }
+
     def _akari_user_history(self, guild_id, user_id, *, include_decay=False,
                             excluded_ids=None, included_ids=None,
-                            test_decay=False):
+                            test_decay=False, weekdays=None, date_bounds=None):
         """Replay the guild's results and return one user's per-day history.
 
         Shared by the rating and performance graphs — the replay is the same;
@@ -279,17 +313,19 @@ class ImplAkariAMixin:
         exclude filter before the replay so the queried user's history
         reflects only the surviving field.  ``test_decay=True`` replays under
         the experimental decay model (see ``_akari_test_decay_kwargs``).
+        ``weekdays`` / ``date_bounds`` restrict the replayed rows the same way
+        the Queens filters do.
         """
         state, history = self._akari_user_data(
             guild_id, user_id, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            test_decay=test_decay)
+            test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds)
         del state  # this helper returns history only; callers needing both use _akari_user_data
         return history
 
     def _akari_user_data(self, guild_id, user_id, *, include_decay=False,
                           excluded_ids=None, included_ids=None,
-                          test_decay=False):
+                          test_decay=False, weekdays=None, date_bounds=None):
         """One replay, two artefacts: ``(RatingState, [HistoryPoint])`` for one user.
 
         Used by rating / performance commands that show both an embed (needs
@@ -297,50 +333,34 @@ class ImplAkariAMixin:
         second replay versus calling ``_akari_user_history`` separately.
         Returns ``(None, [])`` when the user has no rated days.
         """
-        result_rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, AKARI_GAME.name)
-        result_rows = self._filter_akari_rows(
-            result_rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        current_puzzle = _mg().expected_puzzle_number(dt.date.today())
-        max_puzzle = current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD
-        histories = {}
-        states = compute_ratings(
-            result_rows, max_puzzle=max_puzzle, histories=histories,
-            include_decay_in_history=include_decay,
-            current_puzzle_number=current_puzzle,
-            **self._akari_test_decay_kwargs(test_decay))
-        key = str(user_id)
-        return states.get(key), histories.get(key, [])
+        return self._minigame_user_data(
+            guild_id, AKARI_GAME, user_id, include_decay=include_decay,
+            excluded_ids=excluded_ids, included_ids=included_ids,
+            weekdays=weekdays, date_bounds=date_bounds,
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay))
 
     def _akari_filtered_rating_rows(self, guild_id, *, excluded_ids=None,
-                                     included_ids=None, test_decay=False):
+                                     included_ids=None, test_decay=False,
+                                     weekdays=None, date_bounds=None):
         """Fresh leaderboard states with some users excluded/included — bypasses cache.
 
-        Used by ``;mg akari ratings +exclude=...`` / ``+include=...`` so the
-        persisted snapshot (the canonical rating store) stays untouched while
-        we render an ad-hoc view.  Returns the same
-        ``rating DESC, games DESC, user_id ASC`` order ``get_akari_ratings``
-        produces, so the rest of the rendering path doesn't care which source
-        it got.
+        Used by ``;mg akari ratings +exclude=...`` / ``+include=...`` (and the
+        ``+dow=`` / ``d>=`` / ``d<`` filters) so the persisted snapshot (the
+        canonical rating store) stays untouched while we render an ad-hoc
+        view.  Returns the same ``rating DESC, games DESC, user_id ASC`` order
+        ``get_akari_ratings`` produces, so the rest of the rendering path
+        doesn't care which source it got.
         """
-        rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, AKARI_GAME.name)
-        rows = self._filter_akari_rows(
-            rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        current_puzzle = _mg().expected_puzzle_number(dt.date.today())
-        max_puzzle = current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD
-        states = compute_ratings(
-            rows, max_puzzle=max_puzzle,
-            current_puzzle_number=current_puzzle,
-            **self._akari_test_decay_kwargs(test_decay))
-        return sorted(
-            states.values(),
-            key=lambda s: (-s.rating, -s.games, int(s.user_id)),
-        )
+        return self._minigame_rating_rows(
+            guild_id, AKARI_GAME,
+            excluded_ids=excluded_ids, included_ids=included_ids,
+            weekdays=weekdays, date_bounds=date_bounds,
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay))
 
     def _akari_puzzle_change_info(self, guild_id, puzzle_number,
                                    *, excluded_ids=None, included_ids=None,
-                                   test_decay=False):
+                                   test_decay=False, weekdays=None,
+                                   date_bounds=None):
         """Map ``user_id -> _PuzzlePlayerInfo(pre_rating, delta)`` for puzzle N.
 
         Replays the full guild history once and pulls each user's HistoryPoint
@@ -349,31 +369,15 @@ class ImplAkariAMixin:
         Used by ``;mg akari stats <puzzle>`` to colour each row by the
         player's pre-puzzle tier (post-puzzle would be circular) and to fill
         the Δ column with the day's signed change.  ``excluded_ids`` /
-        ``included_ids`` apply the same include / exclude filter as the rest
-        of the command surface so the surfaced pre-rating and delta reflect
-        the chosen field.
+        ``included_ids`` / ``weekdays`` / ``date_bounds`` apply the same
+        filters as the rest of the command surface so the surfaced pre-rating
+        and delta reflect the chosen field.
         """
-        result_rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, AKARI_GAME.name)
-        result_rows = self._filter_akari_rows(
-            result_rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        current_puzzle = _mg().expected_puzzle_number(dt.date.today())
-        max_puzzle = current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD
-        histories = {}
-        compute_ratings(
-            result_rows, max_puzzle=max_puzzle, histories=histories,
-            current_puzzle_number=current_puzzle,
-            **self._akari_test_decay_kwargs(test_decay))
-        info = {}
-        for user_id, points in histories.items():
-            for point in points:
-                if point.puzzle_number == puzzle_number:
-                    info[user_id] = _PuzzlePlayerInfo(
-                        pre_rating=point.rating - point.delta,
-                        delta=point.delta,
-                    )
-                    break
-        return info
+        return self._minigame_puzzle_change_info(
+            guild_id, AKARI_GAME, puzzle_number,
+            excluded_ids=excluded_ids, included_ids=included_ids,
+            weekdays=weekdays, date_bounds=date_bounds,
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay))
 
     async def _extract_akari_filters(self, ctx, args):
         """Pull akari-wide filter flags out of ``args``.

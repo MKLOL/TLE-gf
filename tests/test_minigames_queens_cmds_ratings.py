@@ -90,7 +90,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             'Unknown Person', 200, dt.date(2026, 6, 8).toordinal(),
             '2026-06-08', 100, 9, True, 'raw')
 
-        asyncio.run(Minigames.queens_clear.__wrapped__(
+        asyncio.run(Minigames.queens_delete.__wrapped__(
             cog, ctx, '2026-06-08'))
 
         remaining = db.get_minigame_results_for_guild(100, 'queens')
@@ -172,7 +172,9 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
 
         asyncio.run(cog._cmd_queens_ratings(ctx))
         assert captured[-1]['user_ids'] == ['300']
-        assert captured[-1]['games'] == [1]
+        # Bob is unregistered, so alice's only day has no opponent in the
+        # rating pool — a solo day is not a game (contested-days semantics).
+        assert captured[-1]['games'] == [0]
         assert captured[-1]['identity_label'] == 'LinkedIn'
         assert captured[-1]['mark_registered'] is False
         assert 'file' in ctx.sent['kwargs']

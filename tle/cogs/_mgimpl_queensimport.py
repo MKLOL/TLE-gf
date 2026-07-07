@@ -237,6 +237,11 @@ class ImplQueensImportMixin:
             raise MinigameCogError(
                 f'`{_safe_member_name(member)}` is not registered for '
                 f'{QUEENS_GAME.display_name} (`;queens register LinkedIn Name`).')
+        # Public rating/performance/history views hide banned players, just
+        # like Akari's (whose bans auto-opt the user out of displays); the
+        # mod-only debug variants skip this gate.
+        self._ensure_not_minigame_banned(
+            guild_id, QUEENS_GAME, member.id, _safe_member_name(member))
         return link
 
     def _queens_rating_identity_fn(self, links_by_user):

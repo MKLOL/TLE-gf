@@ -14,6 +14,7 @@ from tle.cogs._minigame_queens import (
 )
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg,
+    _display_rating, _display_peak, _display_games,
 )
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _split_queens_rating_date_filter, _split_queens_recalculate_filter,
@@ -148,7 +149,14 @@ class ImplQueensCmdMixin:
                 f'No {QUEENS_GAME.display_name} ratings yet.')
         links_by_user = self._queens_links_by_user(ctx.guild.id)
         linked_ids = set(links_by_user)
-        shown = rows if show_all else [row for row in rows if row.user_id in linked_ids]
+        # Banned players stay rated (forward-only ban) but are hidden from
+        # the public board, like Akari's auto-opted-out banned users; the
+        # debug view still shows them.
+        banned_ids = self._minigame_banned_user_ids(ctx.guild.id, QUEENS_GAME)
+        shown = rows if show_all else [
+            row for row in rows
+            if row.user_id in linked_ids and row.user_id not in banned_ids
+        ]
         if not shown:
             raise MinigameCogError(
                 f'No registered {QUEENS_GAME.display_name} players yet. '
@@ -226,26 +234,12 @@ class ImplQueensCmdMixin:
         ]
         discord_file = _mg().plot_akari_rating(series)
 
-        def _display_rating(row, history):
-            return history[-1].rating if date_bounds is not None else row.rating
-
-        def _display_peak(row, history):
-            if date_bounds is None:
-                return row.peak
-            return max(point.rating for point in history)
-
-        def _display_games(row, history):
-            if date_bounds is None:
-                return row.games
-            return sum(1 for point in history
-                       if not getattr(point, 'is_decay', False))
-
         if len(per_member) == 1:
             member, row, history, _graph_history = per_member[0]
             display_name = self._queens_public_user_name(ctx.guild, member.id)
-            rating = round(_display_rating(row, history))
+            rating = round(_display_rating(row, history, date_bounds))
             rank = rank_for_rating(rating)
-            peak = round(_display_peak(row, history))
+            peak = round(_display_peak(row, history, date_bounds))
             peak_rank = rank_for_rating(peak)
             last_contest = next((h for h in reversed(history)
                                  if h.performance is not None), None)
@@ -262,17 +256,17 @@ class ImplQueensCmdMixin:
             )
             embed.add_field(name='Rating', value=f'{rating} ({rank.title_abbr})')
             embed.add_field(name='Peak', value=f'{peak} ({peak_rank.title_abbr})')
-            embed.add_field(name='Games', value=str(_display_games(row, history)))
+            embed.add_field(name='Games', value=str(_display_games(row, history, date_bounds)))
             embed.add_field(name='Last change', value=last_change_str)
             embed.add_field(name='Last performance', value=last_perf_str)
         else:
             _top_member, top_row, top_history, _top_graph_history = max(
-                per_member, key=lambda t: _display_rating(t[1], t[2]))
+                per_member, key=lambda t: _display_rating(t[1], t[2], date_bounds))
             top_rank = rank_for_rating(
-                round(_display_rating(top_row, top_history)))
+                round(_display_rating(top_row, top_history, date_bounds)))
 
             def _rating_line(member, row, history):
-                rating = round(_display_rating(row, history))
+                rating = round(_display_rating(row, history, date_bounds))
                 return (
                     f'**{self._queens_public_user_name(ctx.guild, member.id)}**: '
                     f'{rating} ({rank_for_rating(rating).title_abbr})'

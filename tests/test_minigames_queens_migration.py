@@ -363,7 +363,8 @@ class TestQueensImportMigration:
         assert set(queens) == {'300', '301', '302'}
         assert queens['300'].rating > queens['301'].rating
         assert abs(queens['301'].rating - queens['302'].rating) < 1e-9
-        assert queens['300'].games == 2
+        # 300's second day is solo — not a game (contested-days semantics).
+        assert queens['300'].games == 1
         assert queens['301'].games == 1
         assert queens['302'].games == 1
 

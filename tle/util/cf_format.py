@@ -88,6 +88,17 @@ def negate_flags(*args):
 
 def parse_date(arg):
     try:
+        if '-' in arg or '/' in arg:
+            # Separator forms accepted by both Akari and Queens commands:
+            # ISO (2026-06-01) and day-first (01-06-2026), with / or -.
+            cleaned = arg.replace('/', '-')
+            for fmt in ('%Y-%m-%d', '%d-%m-%Y'):
+                try:
+                    return time.mktime(
+                        datetime.datetime.strptime(cleaned, fmt).timetuple())
+                except ValueError:
+                    continue
+            raise ValueError
         if len(arg) == 8:
             fmt = '%d%m%Y'
         elif len(arg) == 6:
