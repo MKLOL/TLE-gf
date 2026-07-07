@@ -165,8 +165,12 @@ class TestAutoOpen:
 
             assert len(channel.sent) == 2
             assert len(thread.sent) == 1
-            assert thread.archived is True
+            # Settling leaves the thread open (12h post-game grace) and arms a
+            # lock timer rather than locking immediately.
+            assert thread.archived is False
+            assert market.market_id in cog._lock_timers
             cog._close_timers[market.market_id].cancel()
+            cog._lock_timers[market.market_id].cancel()
 
         self._run(scenario())
 

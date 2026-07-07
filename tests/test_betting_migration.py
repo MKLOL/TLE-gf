@@ -6,7 +6,7 @@ import pytest  # noqa: F401
 from tle.util.db.user_db_conn import UserDbConn, namedtuple_factory, bet_fixture_key
 from tle.util.db.user_db_upgrades import (
     upgrade_1_33_0, upgrade_1_34_0, upgrade_1_35_0, upgrade_1_36_0,
-    upgrade_1_37_0,
+    upgrade_1_37_0, upgrade_1_41_0,
 )
 from tests.betting_test_utils import GUILD, CH, THREAD, USER_A, USER_B  # noqa: F401
 
@@ -130,6 +130,31 @@ class TestMigration:
         upgrade_1_36_0(conn)
         cols = [r[1] for r in conn.execute('PRAGMA table_info(bet_market)')]
         assert 'thread_intro_id' in cols
+        conn.close()
+
+    def test_upgrade_141_adds_thread_lock_flag_and_stamps_terminal(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = namedtuple_factory
+        upgrade_1_33_0(conn)
+        # One open, one settled, one cancelled market.
+        for event_id, status in [('open', 'open'), ('done', 'settled'),
+                                  ('void', 'cancelled')]:
+            conn.execute(
+                'INSERT INTO bet_market (guild_id, channel_id, event_id, '
+                'sport_key, home_team, away_team, commence_time, odds_home, '
+                'odds_draw, odds_away, created_by, created_at, status) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ('1', '2', event_id, 'soccer_epl', 'A', 'B', 10_000.0,
+                 2.0, 3.0, 4.0, '9', 0.0, status))
+
+        upgrade_1_41_0(conn)
+
+        cols = [r[1] for r in conn.execute('PRAGMA table_info(bet_market)')]
+        assert 'thread_locked' in cols
+        locked = {r.event_id: r.thread_locked for r in conn.execute(
+            'SELECT event_id, thread_locked FROM bet_market')}
+        # Already-terminal markets were locked under the old behavior → stamped.
+        assert locked == {'open': 0, 'done': 1, 'void': 1}
         conn.close()
 
     def test_upgrade_137_migrates_wager_primary_key(self):

@@ -451,3 +451,26 @@ def upgrade_1_40_0(db):
     ''')
     db.commit()
     logger.info('1.40.0: command_gate table created')
+
+
+@registry.register('1.41.0', 'Betting delayed thread-lock flag')
+def upgrade_1_41_0(db):
+    """Track whether a settled market's betting thread has been locked.
+
+    Threads used to lock the instant a market settled; now they stay open for
+    12 hours so members can keep discussing the finished game before the thread
+    is frozen. This flag lets a restart catch up on locks that are still
+    pending. Markets that were already terminal (settled/cancelled) under the
+    old immediate-lock behavior had their threads locked already, so stamp them
+    locked to keep the delayed-lock sweep from re-locking them.
+    """
+    logger.info('1.41.0: Adding betting thread-lock flag')
+    try:
+        db.execute('ALTER TABLE bet_market ADD COLUMN '
+                   'thread_locked INTEGER NOT NULL DEFAULT 0')
+        logger.info('1.41.0: Added bet_market.thread_locked')
+    except Exception as e:
+        logger.debug('1.41.0: thread_locked already exists or unavailable: %s', e)
+    db.execute("UPDATE bet_market SET thread_locked = 1 WHERE status != 'open'")
+    db.commit()
+    logger.info('1.41.0: Upgrade complete')

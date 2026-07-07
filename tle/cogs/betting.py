@@ -126,6 +126,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         self._close_timers = {}
         # market_id -> asyncio.Task: coalesced thread intro pool refresh.
         self._pool_refresh_timers = {}
+        # market_id -> asyncio.Task: lock a settled market's thread 12h after
+        # full time (kept open until then for post-game chat). Re-armed from DB
+        # state on startup since these timers don't survive a restart.
+        self._lock_timers = {}
         # market_id -> (outcome, home_score, away_score) or None: the
         # beyond-regulation football-data result seen last poll. Such games settle
         # once two consecutive polls agree, filtering the feed's transient
@@ -147,6 +151,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             return
         await self._refresh_schedule()   # arm open timers + catch in-window games
         await self._arm_close_timers()   # restore close timers after restart
+        await self._arm_lock_timers()    # restore delayed thread-lock timers
         await self._run_draw_refixture()  # one-time: fix mislabelled no-draw markets
         self._safety_net_task.start()
         self._settle_task.start()
@@ -154,18 +159,12 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def cog_unload(self):
         await self._safety_net_task.stop()
         await self._settle_task.stop()
-        for task in list(self._open_timers.values()):
-            if not task.done():
-                task.cancel()
-        self._open_timers.clear()
-        for task in list(self._close_timers.values()):
-            if not task.done():
-                task.cancel()
-        self._close_timers.clear()
-        for task in list(self._pool_refresh_timers.values()):
-            if not task.done():
-                task.cancel()
-        self._pool_refresh_timers.clear()
+        for timers in (self._open_timers, self._close_timers,
+                       self._pool_refresh_timers, self._lock_timers):
+            for task in list(timers.values()):
+                if not task.done():
+                    task.cancel()
+            timers.clear()
 
     # ── Group ──────────────────────────────────────────────────────────
 
@@ -474,6 +473,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             await self._arm_close_timers()
         except Exception:
             logger.warning('bet close timer refresh failed', exc_info=True)
+        try:
+            await self._arm_lock_timers()
+        except Exception:
+            logger.warning('bet lock timer refresh failed', exc_info=True)
 
     @tasks.task_spec(name='BetSettle',
                      waiter=tasks.Waiter.fixed_delay(_SETTLE_INTERVAL))

@@ -90,6 +90,7 @@ class _FakeThread:
         self.sent = []
         self._messages = {}
         self.archived = False
+        self.locked = False
 
     async def send(self, embed=None, **kw):
         m = _FakeMsg(embed=embed, **kw)
@@ -102,6 +103,7 @@ class _FakeThread:
 
     async def edit(self, **kw):
         self.archived = kw.get('archived', self.archived)
+        self.locked = kw.get('locked', self.locked)
 
 
 class _FakeMsg:

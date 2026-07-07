@@ -25,6 +25,9 @@ from tle.cogs._betting_helpers import (
 logger = logging.getLogger(__name__)
 
 _POOL_REFRESH_DELAY = 5
+# Keep a settled market's betting thread open this long so members can keep
+# talking about the finished game, then lock it. Was locked immediately.
+_THREAD_LOCK_DELAY = 12 * 3600
 
 
 class BettingCogError(commands.CommandError):
@@ -373,10 +376,57 @@ class BetEngineMixin:
             except discord.HTTPException:
                 logger.warning('could not post settlement to %s',
                                market.channel_id)
-        await self._archive_thread(market)
+        # Don't lock the thread now — members keep using it to talk about the
+        # game after full time. Arm a timer to lock it 12h later instead.
+        self._schedule_thread_lock(market)
         logger.info('Settled bet market %s (%s) source=%s winners=%d',
                     market.market_id, outcome, source,
                     sum(1 for r in outcome_rows if r[4] > 0))
+
+    def _schedule_thread_lock(self, market, *, delay=None):
+        """Arm a timer to lock a settled market's thread after ``delay`` seconds
+        (default 12h), leaving it open for post-game chat until then. Skips if a
+        live lock timer already exists (idempotent across catch-up sweeps)."""
+        if market is None or not market.thread_id or not self.bot:
+            return
+        market_id = market.market_id
+        existing = self._lock_timers.get(market_id)
+        if existing is not None and not existing.done():
+            return
+        if delay is None:
+            delay = _THREAD_LOCK_DELAY
+        self._lock_timers[market_id] = asyncio.create_task(
+            self._lock_timer(market_id, max(0.0, delay)))
+
+    async def _lock_timer(self, market_id, delay):
+        try:
+            await asyncio.sleep(delay)
+            market = (cf_common.user_db.bet_market_get(market_id)
+                      if cf_common.user_db is not None else None)
+            if market is not None:
+                await self._archive_thread(market)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning('thread lock timer failed for market %s', market_id,
+                           exc_info=True)
+        finally:
+            self._lock_timers.pop(market_id, None)
+
+    async def _arm_lock_timers(self):
+        """Restore/catch up the 12h thread-lock timers for settled markets whose
+        thread isn't locked yet — the in-memory timers are lost on restart. A
+        market whose 12h window already elapsed while the bot was down is locked
+        right away; the rest re-arm for their remaining time."""
+        if cf_common.user_db is None or not self.bot:
+            return
+        now = time.time()
+        for market in cf_common.user_db.bet_markets_pending_lock():
+            deadline = (market.settled_at or now) + _THREAD_LOCK_DELAY
+            if deadline <= now:
+                await self._archive_thread(market)
+            else:
+                self._schedule_thread_lock(market, delay=deadline - now)
 
     async def _archive_thread(self, market):
         if not market.thread_id or not self.bot:
@@ -387,4 +437,7 @@ class BetEngineMixin:
         try:
             await thread.edit(archived=True, locked=True)
         except (discord.HTTPException, AttributeError):
-            pass
+            return
+        # Only record the lock once Discord accepted the edit, so a transient
+        # failure is retried by the next catch-up sweep rather than lost.
+        cf_common.user_db.bet_market_mark_thread_locked(market.market_id)

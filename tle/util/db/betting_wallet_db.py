@@ -59,7 +59,8 @@ class BettingWalletDbMixin:
                 result_away    INTEGER,
                 created_by     TEXT NOT NULL,
                 created_at     REAL NOT NULL,
-                settled_at     REAL
+                settled_at     REAL,
+                thread_locked  INTEGER NOT NULL DEFAULT 0
             )
         ''')
         bet_market_cols = [
@@ -69,6 +70,9 @@ class BettingWalletDbMixin:
             self.conn.execute('ALTER TABLE bet_market ADD COLUMN fixture_key TEXT')
         if 'thread_intro_id' not in bet_market_cols:
             self.conn.execute('ALTER TABLE bet_market ADD COLUMN thread_intro_id TEXT')
+        if 'thread_locked' not in bet_market_cols:
+            self.conn.execute('ALTER TABLE bet_market ADD COLUMN '
+                              'thread_locked INTEGER NOT NULL DEFAULT 0')
         self.conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_bet_market_active
                 ON bet_market (guild_id, channel_id, status)

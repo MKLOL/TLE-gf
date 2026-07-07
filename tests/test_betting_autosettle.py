@@ -71,7 +71,10 @@ class TestAutoSettleFootballData:
 
         assert len(channel.sent) == 1
         assert len(thread.sent) == 0
-        assert thread.archived is True
+        # Thread stays open for post-game chat; locking is deferred 12h.
+        assert thread.archived is False
+        assert thread.locked is False
+        assert db.bet_market_get(mid).thread_locked == 0
 
     def test_knockout_settles_by_advancing_winner(self, db, monkeypatch):
         import time as _t

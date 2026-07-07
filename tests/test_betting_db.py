@@ -110,6 +110,38 @@ class TestMarket:
         db.bet_market_set_thread_intro(mid, '444')
         assert db.bet_market_get(mid).thread_intro_id == '444'
 
+    def test_thread_lock_flag_defaults_off_and_marks(self, db):
+        mid = _make_market(db)
+        db.bet_market_set_thread(mid, THREAD)
+        assert db.bet_market_get(mid).thread_locked == 0
+        db.bet_market_mark_thread_locked(mid)
+        assert db.bet_market_get(mid).thread_locked == 1
+
+    def test_pending_lock_lists_settled_unlocked_with_thread(self, db):
+        # Settled, has a thread, not yet locked → on the work-list.
+        pending = _make_market(db, commence=1000.0)
+        db.bet_market_set_thread(pending, THREAD)
+        db.bet_settle(GUILD, pending, 'home', 1, 0, 5.0)
+        # Settled but already locked → excluded.
+        locked = db.bet_market_create(
+            GUILD, CH, 'evt2', 'soccer_epl', 'A', 'B', 2000.0,
+            2.0, 3.0, 4.0, USER_A, 0.0)
+        db.bet_market_set_thread(locked, '444')
+        db.bet_settle(GUILD, locked, 'home', 1, 0, 6.0)
+        db.bet_market_mark_thread_locked(locked)
+        # Open market → excluded even with a thread.
+        open_mid = db.bet_market_create(
+            GUILD, CH, 'evt3', 'soccer_epl', 'C', 'D', 3000.0,
+            2.0, 3.0, 4.0, USER_A, 0.0)
+        db.bet_market_set_thread(open_mid, '555')
+        # Settled but never had a thread → excluded.
+        no_thread = db.bet_market_create(
+            GUILD, CH, 'evt4', 'soccer_epl', 'E', 'F', 4000.0,
+            2.0, 3.0, 4.0, USER_A, 0.0)
+        db.bet_settle(GUILD, no_thread, 'home', 1, 0, 7.0)
+
+        assert [m.market_id for m in db.bet_markets_pending_lock()] == [pending]
+
     def test_exists_open_for_event(self, db):
         _make_market(db)
         assert db.bet_market_exists_open_for_event(GUILD, 'evt1') is True
