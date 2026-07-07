@@ -28,6 +28,10 @@ _POOL_REFRESH_DELAY = 5
 # Keep a settled market's betting thread open this long so members can keep
 # talking about the finished game, then lock it. Was locked immediately.
 _THREAD_LOCK_DELAY = 12 * 3600
+# If a thread still can't be locked this long past its deadline it is gone
+# (deleted, or auto-archived out of cache after ~24h idle) and unreachable —
+# give up and mark it locked so it stops re-appearing on the pending-lock sweep.
+_LOCK_GIVE_UP_GRACE = 24 * 3600
 
 
 class BettingCogError(commands.CommandError):
@@ -403,8 +407,8 @@ class BetEngineMixin:
             await asyncio.sleep(delay)
             market = (cf_common.user_db.bet_market_get(market_id)
                       if cf_common.user_db is not None else None)
-            if market is not None:
-                await self._archive_thread(market)
+            if market is not None and not await self._archive_thread(market):
+                self._give_up_lock_if_stale(market)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -413,31 +417,45 @@ class BetEngineMixin:
         finally:
             self._lock_timers.pop(market_id, None)
 
+    def _give_up_lock_if_stale(self, market):
+        """A settled market whose thread we still can't lock long past its
+        deadline is unreachable (deleted / archived out of cache); mark it
+        locked so the pending-lock sweep stops re-attempting it forever."""
+        if market.settled_at is None:
+            return
+        horizon = market.settled_at + _THREAD_LOCK_DELAY + _LOCK_GIVE_UP_GRACE
+        if time.time() > horizon:
+            logger.warning('giving up locking market %s thread (unreachable)',
+                           market.market_id)
+            cf_common.user_db.bet_market_mark_thread_locked(market.market_id)
+
     async def _arm_lock_timers(self):
         """Restore/catch up the 12h thread-lock timers for settled markets whose
-        thread isn't locked yet — the in-memory timers are lost on restart. A
-        market whose 12h window already elapsed while the bot was down is locked
-        right away; the rest re-arm for their remaining time."""
+        thread isn't locked yet — the in-memory timers are lost on restart. Each
+        market is (re)scheduled for its remaining grace time; one already past
+        its deadline gets a zero delay and fires immediately. Routing through
+        ``_schedule_thread_lock`` keeps it deduplicated against a live timer and
+        off the startup path (fire-and-forget), rather than blocking here."""
         if cf_common.user_db is None or not self.bot:
             return
         now = time.time()
         for market in cf_common.user_db.bet_markets_pending_lock():
             deadline = (market.settled_at or now) + _THREAD_LOCK_DELAY
-            if deadline <= now:
-                await self._archive_thread(market)
-            else:
-                self._schedule_thread_lock(market, delay=deadline - now)
+            self._schedule_thread_lock(market, delay=deadline - now)
 
     async def _archive_thread(self, market):
+        """Lock (archive) the market's betting thread. Returns True once Discord
+        accepts the edit, False if the thread is gone or the edit failed — the
+        settle path's delayed-lock sweep retries on False. (The cancel /
+        remediation callers ignore the result and lock best-effort, as before.)"""
         if not market.thread_id or not self.bot:
-            return
+            return False
         thread = self.bot.get_channel(int(market.thread_id))
         if thread is None:
-            return
+            return False
         try:
             await thread.edit(archived=True, locked=True)
         except (discord.HTTPException, AttributeError):
-            return
-        # Only record the lock once Discord accepted the edit, so a transient
-        # failure is retried by the next catch-up sweep rather than lost.
+            return False
         cf_common.user_db.bet_market_mark_thread_locked(market.market_id)
+        return True

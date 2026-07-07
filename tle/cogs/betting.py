@@ -127,8 +127,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
         # market_id -> asyncio.Task: coalesced thread intro pool refresh.
         self._pool_refresh_timers = {}
         # market_id -> asyncio.Task: lock a settled market's thread 12h after
-        # full time (kept open until then for post-game chat). Re-armed from DB
-        # state on startup since these timers don't survive a restart.
+        # full time; re-armed from DB on restart (timers don't survive one).
         self._lock_timers = {}
         # market_id -> (outcome, home_score, away_score) or None: the
         # beyond-regulation football-data result seen last poll. Such games settle
@@ -151,7 +150,10 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             return
         await self._refresh_schedule()   # arm open timers + catch in-window games
         await self._arm_close_timers()   # restore close timers after restart
-        await self._arm_lock_timers()    # restore delayed thread-lock timers
+        try:
+            await self._arm_lock_timers()  # restore delayed thread-lock timers
+        except Exception:  # never abort startup before the settle task starts
+            logger.warning('bet lock timer restore failed', exc_info=True)
         await self._run_draw_refixture()  # one-time: fix mislabelled no-draw markets
         self._safety_net_task.start()
         self._settle_task.start()

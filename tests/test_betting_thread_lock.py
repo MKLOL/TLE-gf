@@ -9,7 +9,7 @@ import pytest  # noqa: F401
 from tle.util import codeforces_common as cf_common
 from tle import constants
 from tle.cogs.betting import Betting
-from tle.cogs._betting_engine import _THREAD_LOCK_DELAY
+from tle.cogs._betting_engine import _THREAD_LOCK_DELAY, _LOCK_GIVE_UP_GRACE
 from tests.betting_test_utils import (  # noqa: F401
     GUILD, CH, THREAD, USER_A, USER_B, db, _make_market,
     _FakeChannel, _FakeThread, _FakeGuild, _FakeBot,
@@ -58,10 +58,15 @@ class TestThreadLockDeferred:
         # Settled long enough ago that the 12h window has passed (restart case).
         db.bet_settle(GUILD, mid, 'home', 1, 0, _t.time() - _THREAD_LOCK_DELAY - 60)
 
-        _run(cog._arm_lock_timers())
+        async def scenario():
+            await cog._arm_lock_timers()
+            # Past-deadline markets are scheduled at zero delay (fire-and-forget
+            # so startup never blocks); drain the task to observe the lock.
+            await cog._lock_timers[mid]
+            assert thread.archived is True and thread.locked is True
+            assert db.bet_market_get(mid).thread_locked == 1
 
-        assert thread.archived is True and thread.locked is True
-        assert db.bet_market_get(mid).thread_locked == 1
+        _run(scenario())
 
     def test_catch_up_rearms_timer_within_window(self, db, monkeypatch):
         cog, mid, thread = _cog_with_thread(db, monkeypatch)
@@ -87,13 +92,36 @@ class TestThreadLockDeferred:
 
         async def _boom(**kw):
             raise discord.HTTPException(None, 'rate limited')
-        thread.edit = _boom
 
-        _run(cog._arm_lock_timers())
-        assert db.bet_market_get(mid).thread_locked == 0  # still pending
+        async def scenario():
+            thread.edit = _boom
+            await cog._arm_lock_timers()
+            await cog._lock_timers[mid]
+            # Edit failed but it's only just past the deadline (not stale) →
+            # left pending for a later retry, not given up.
+            assert db.bet_market_get(mid).thread_locked == 0
 
-        # A later sweep with a working edit finishes the job.
-        thread.edit = _FakeThread.edit.__get__(thread)
-        _run(cog._arm_lock_timers())
-        assert thread.locked is True
-        assert db.bet_market_get(mid).thread_locked == 1
+            # A later sweep with a working edit finishes the job.
+            thread.edit = _FakeThread.edit.__get__(thread)
+            await cog._arm_lock_timers()
+            await cog._lock_timers[mid]
+            assert thread.locked is True
+            assert db.bet_market_get(mid).thread_locked == 1
+
+        _run(scenario())
+
+    def test_gives_up_locking_unreachable_thread_past_horizon(self, db, monkeypatch):
+        """A thread that stays unreachable well past its deadline is gone; the
+        market is marked locked so the sweep stops re-attempting it forever."""
+        cog, mid, thread = _cog_with_thread(db, monkeypatch)
+        cog.bot._channels.pop(333)  # thread deleted / dropped from cache
+        db.bet_settle(GUILD, mid, 'home', 1, 0,
+                      _t.time() - _THREAD_LOCK_DELAY - _LOCK_GIVE_UP_GRACE - 60)
+
+        async def scenario():
+            await cog._arm_lock_timers()
+            await cog._lock_timers[mid]
+            # Unreachable + long past deadline → given up (marked locked).
+            assert db.bet_market_get(mid).thread_locked == 1
+
+        _run(scenario())
