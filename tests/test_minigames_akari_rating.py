@@ -347,6 +347,7 @@ class TestRatingDisplayNoLeak:
         assert len(out[0]) == 6
         # Alice — opted in, rated 1304 (CM tier), gained ~12.
         assert '1304 CM' in out[0][1]
+        assert out[0][1].preserved_suffix == ' (1304 CM)'
         assert out[0][3] == '100%'
         assert out[0][4] == '1:00'
         assert out[0][5] == '+12'

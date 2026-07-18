@@ -9,7 +9,6 @@ function through ``_mg()`` so the patch takes effect.
 """
 
 import datetime as dt
-import html
 import io
 from collections import namedtuple
 
@@ -25,6 +24,9 @@ from tle.util import table
 from tle.util.akari_rating import rank_for_rating
 from tle.cogs._minigame_common import format_duration
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
+from tle.cogs._minigame_table_cells import (
+    _PreserveSuffixText, _draw_table_cell,
+)
 
 
 _AKARI_IMAGE_MAX_ROWS = 40
@@ -153,7 +155,8 @@ def _akari_puzzle_table_rows(guild, rows, *, puzzle_info=None,
                 and row.user_id in puzzle_info):
             info = puzzle_info[row.user_id]
             r = round(info.pre_rating)
-            name = f'{name} ({r} {rank_for_rating(r).title_abbr})'
+            name = _PreserveSuffixText(
+                name, f' ({r} {rank_for_rating(r).title_abbr})')
             delta_cell = f'{round(info.delta):+d}'
         cells = [
             index,
@@ -211,14 +214,9 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
         context.fill()
 
     def draw_cell(text, cell_width, *, align=Pango.Alignment.LEFT, bold=False):
-        text = html.escape(str(text))
-        if bold:
-            text = f'<b>{text}</b>'
-        layout.set_width(max(1, int((cell_width - _AKARI_IMAGE_COLUMN_MARGIN) * Pango.SCALE)))
-        layout.set_alignment(align)
-        layout.set_markup(text, -1)
-        PangoCairo.show_layout(context, layout)
-        context.rel_move_to(cell_width, 0)
+        _draw_table_cell(
+            layout, context, Pango, PangoCairo, text, cell_width,
+            _AKARI_IMAGE_COLUMN_MARGIN, align, bold)
 
     def draw_line(text, y, color, *, bold=False):
         context.set_source_rgb(*(component / 255 for component in color))
@@ -329,7 +327,8 @@ def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
                 and row.user_id in puzzle_info):
             info = puzzle_info[row.user_id]
             r = round(info.pre_rating)
-            name = f'{name} ({r} {rank_for_rating(r).title_abbr})'
+            name = _PreserveSuffixText(
+                name, f' ({r} {rank_for_rating(r).title_abbr})')
             delta_cell = f'{round(info.delta):+d}'
         cells = [
             index,
