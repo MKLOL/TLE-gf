@@ -1,47 +1,26 @@
-"""World Cup soccer betting minigame.
+"""World Cup soccer betting minigame — ARCHIVED.
 
-Fully automated and World Cup–only. An admin points the bot at a channel with
-`;prediction here`; from then on the bot, on its own, ~6 hours before each
-World Cup kickoff:
-  1. reads the live 1X2 odds from The Odds API and **freezes** them,
-  2. posts the market in the configured channel and opens a **thread**,
-  3. members bet by replying in the thread (`home 100`, `away all`, `draw 25%`).
-At kickoff betting closes; at full time the bot reads the final score and
-auto-settles, paying winners stake × odds. Everyone starts at 1000 coins and
-claims +100/day with `;bet daily`.
+The 2026 World Cup is over. While ``_ARCHIVED`` is True only ``;bet``,
+``;bet leaderboard [profit]`` and ``;bet me`` (alias ``profile``) stay
+registered — ``setup()`` strips the rest; on_ready skips the background tasks
+(safety net, auto-settle), open/close timers, draw refixture and the thread
+bet listener. Nothing deleted; flip ``_ARCHIVED`` to False to bring it back.
 
-Core commands (group `;bet`, alias `;prediction`) shown in `;help bet`:
-  ;bet home|draw|away <amt> stake on an outcome (also: reply in the thread)
-  ;bet mybet / withdraw     show / remove your bets on the active market
-  ;bet me                   show your betting summary
-  ;bet balance [@user]      show a wallet balance
-  ;bet daily                claim the daily allowance
-  ;bet leaderboard [profit] richest wallets / net profit
-  ;bet matches [query]      list upcoming World Cup matches with odds
-  ;bet notify               toggle the configured notification role
-  ;prediction here          set this channel for auto-opened markets       (admin)
-  ;bet notifyrole [@role|off]  set/clear the ping role for open markets     (admin)
-  ;bet settle <home|draw|away|2-1>  settle the active market manually       (admin)
-  ;bet cancel               cancel the active market, refund stakes         (admin)
-  ;bet grant @user <±amt>   give (or, negative, take) a user's coins        (admin)
-  ;bet grantall <±amt>      grant/raise every wallet (negative reverts)     (admin)
+How the live game worked: after `;prediction here`, ~6h before each kickoff
+the bot froze the 1X2 odds from The Odds API, posted the market and opened a
+thread; members bet via `;bet home|draw|away <amt>` or thread replies
+(`home 100`, `away all`, `draw 25%`). Betting closed at kickoff; full time
+auto-settled at stake × odds. Wallets started at 1000 coins, `;bet daily`
++100/day. The wallet/admin subcommands remain in code below (see the class
+body) but are unregistered while archived.
 
-To keep `;help bet` small, several niche/advanced subcommands are registered
-with ``hidden=True`` — they still work and respond to `;help bet <name>`, they
-just don't clutter the group listing: ``open``, ``not``, ``book``, ``pending``,
-``correct``, ``setbalance``, ``transfer``, ``for``, ``history``, ``odds``,
-``pause``, ``resume``, ``close`` and ``check``. ``grant`` absorbs the old ``take`` and
-``grantall`` absorbs ``ungrantall`` via negative amounts; ``notifyrole off``
-replaces the old ``clearnotifyrole``. ``here`` hides itself from the listing
-once a channel is configured (see ``_bet_channel_is_set``).
-
-The implementation is split across helper modules to keep every file under 500
-lines: pure helpers in ``_betting_helpers``, presentation in ``_betting_format``,
-market/bet/settle engine in ``_betting_engine``, the open/close scheduler in
-``_betting_scheduler``, and the heavier subcommand bodies in
-``_betting_commands`` / ``_betting_wallet_cmds``. This file keeps the cog
-itself: the ``bet`` group and all ``@bet.command`` callbacks in one class body
-(as discord.py requires), the message listener and the background task hooks.
+Split across helper modules to stay under 500 lines/file: pure helpers in
+``_betting_helpers``, presentation in ``_betting_format``, engine in
+``_betting_engine``, settlement in ``_betting_settlement``, scheduler in
+``_betting_scheduler``, subcommand bodies in ``_betting_commands`` /
+``_betting_wallet_cmds``. This file keeps the cog: the ``bet`` group and all
+``@bet.command`` callbacks in one class body (as discord.py requires), the
+message listener and the background task hooks.
 """
 import asyncio
 import logging
@@ -74,6 +53,11 @@ from tle.cogs._betting_helpers import (  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
+
+# Retired (see docstring): setup() strips all but _ARCHIVED_KEEP;
+# on_ready/on_message do nothing — no fetches, timers, polling.
+_ARCHIVED = True
+_ARCHIVED_KEEP = {'leaderboard', 'me'}
 
 # Each fixture gets a precise asyncio timer that opens its market at exactly
 # kickoff − BET_OPEN_LEAD_SECONDS (never late), mirroring rpoll's per-poll
@@ -139,6 +123,9 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @commands.Cog.listener()
     @discord_common.once
     async def on_ready(self):
+        if _ARCHIVED:
+            logger.info('betting: archived — skipping timers and background tasks')
+            return
         # user_db is set in the bot's on_ready handler, which may run after cog
         # listeners — wait briefly (as rpoll does) before arming timers.
         for _ in range(30):
@@ -172,19 +159,23 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
 
     @commands.group(name='bet',
                     aliases=['betting', 'prediction', 'pred', 'wager'],
-                    brief='World Cup betting', invoke_without_command=True)
+                    brief='World Cup betting (archived)',
+                    invoke_without_command=True)
     async def bet(self, ctx):
-        """Show the active market here and your balance."""
-        # `invoke_without_command=True` routes `;bet <unknown>` here too. NOTE:
-        # discord.py wipes `ctx.subcommand_passed` before this callback runs, so
-        # we recover the attempted subcommand from the raw message instead. Any
-        # leftover token means `;bet <unknown>` — error rather than silently
-        # acting like a bare `;bet`.
+        """Archived — only the leaderboards and profiles remain."""
+        # `invoke_without_command=True` routes `;bet <unknown>` here too;
+        # discord.py wipes `ctx.subcommand_passed` first, so recover the token
+        # from the raw message and error instead of acting like a bare `;bet`.
         attempted = unknown_subcommand_token(ctx)
         if attempted:
             raise BettingCogError(
                 f'`{discord.utils.escape_markdown(attempted)}` isn\'t a `;bet` '
                 'command. See `;help bet` for the full list.')
+        if _ARCHIVED:
+            await ctx.send(embed=discord_common.embed_neutral(
+                'The World Cup is over and betting is **archived**. Still up: '
+                '`;bet leaderboard`, `;bet leaderboard profit`, `;bet profile`.'))
+            return
         balance = cf_common.user_db.bet_ensure_wallet(
             ctx.guild.id, ctx.author.id, self._bet_start_balance(ctx.guild.id))
         market = self._find_market(ctx)
@@ -295,6 +286,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def on_message(self, message):
         """Treat a plain `pick amount` message inside a betting thread as a
         bet. Cheap pre-filters keep this off the DB for ordinary chatter."""
+        if _ARCHIVED:
+            return
         if message.author.bot or message.guild is None:
             return
         content = message.content or ''
@@ -496,4 +489,11 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
 
 
 async def setup(bot):
-    await bot.add_cog(Betting(bot))
+    cog = Betting(bot)
+    await bot.add_cog(cog)
+    if _ARCHIVED:
+        # Unregister all but the read-only survivors — dead commands neither
+        # run nor appear in `;help bet`. Canonical name removes aliases too.
+        for command in list(cog.bet.commands):
+            if command.name not in _ARCHIVED_KEEP:
+                cog.bet.remove_command(command.name)
