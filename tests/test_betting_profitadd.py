@@ -6,6 +6,7 @@ import pytest  # noqa: F401
 
 from tests.betting_test_utils import (  # noqa: F401
     GUILD, CH, THREAD, USER_A, USER_B, db, _make_market,
+    _FakeBot, _FakeChannel, _FakeGuild, _FakeBetMessage,
 )
 
 
@@ -92,6 +93,31 @@ class TestProfitAdd:
         assert row.profit == 100 + 300
         assert row.bets == 1 and row.wins == 1
 
+    def test_floored_revert_reports_what_actually_moved(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        from tle.util import discord_common
+        _setup(db, monkeypatch)
+        monkeypatch.setattr(discord_common, 'embed_success', lambda d: d)
+        monkeypatch.setattr(discord_common, 'embed_alert', lambda d: d)
+        db.bet_ensure_wallet(GUILD, USER_A, 100)  # only 100 left to claw back
+        cog = Betting(bot=None)
+
+        ctx = _ctx()
+        _run(Betting.profitadd.__wrapped__(cog, ctx, _member(USER_A), -250))
+        assert db.bet_get_balance(GUILD, USER_A) == 0
+        assert 'Removed **100**' in ctx.sent[0]
+        assert 'Requested -250' in ctx.sent[0]
+        row = next(r for r in db.bet_profit_leaderboard(GUILD)
+                   if r.user_id == USER_A)
+        assert row.profit == -100  # profit matches the coins actually moved
+
+        ctx2 = _ctx()  # second attempt: balance already 0 — nothing moves
+        _run(Betting.profitadd.__wrapped__(cog, ctx2, _member(USER_A), -50))
+        assert 'already 0' in ctx2.sent[0]
+        row = next(r for r in db.bet_profit_leaderboard(GUILD)
+                   if r.user_id == USER_A)
+        assert row.profit == -100
+
     def test_ledger_records_actor_and_action(self, db, monkeypatch):
         from tle.cogs.betting import Betting
         _setup(db, monkeypatch)
@@ -163,11 +189,81 @@ class TestArchivedFlag:
         assert ctx.sent == [_ARCHIVED_NOTICE]
         assert 'World cup has ended' in _ARCHIVED_NOTICE
 
-    def test_archived_guild_skipped_by_settlement(self, db, monkeypatch):
-        from tle.cogs._betting_helpers import _is_archived
+    def test_settle_football_data_never_fetches_when_archived(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        from tle.util import football_data
+        from tle import constants
         _setup(db, monkeypatch)
+        monkeypatch.setattr(constants, 'FOOTBALL_DATA_API_KEY', 'fd', raising=False)
+        _make_market(db, commence=10.0)  # long past kickoff, pending settlement
+        db.set_guild_config(GUILD, 'bet_archived', '1')
+        calls = []
+
+        async def _fetch(token):
+            calls.append(token)
+            return []
+        monkeypatch.setattr(football_data, 'fetch_wc_matches', _fetch)
+
+        _run(Betting(bot=None)._settle_via_football_data())
+
+        assert calls == []
+
+    def test_settle_odds_api_never_fetches_when_archived(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        from tle.util import odds_api
+        from tle import constants
+        _setup(db, monkeypatch)
+        monkeypatch.setattr(constants, 'ODDS_API_KEY', 'key', raising=False)
+        monkeypatch.setattr(constants, 'BET_SETTLE_BUFFER_SECONDS', 0,
+                            raising=False)
         _make_market(db, commence=10.0)
         db.set_guild_config(GUILD, 'bet_archived', '1')
-        pending = [m for m in db.bet_markets_pending_settlement(10_000.0)
-                   if not _is_archived(m.guild_id)]
-        assert pending == []
+        calls = []
+
+        async def _scores(api_key, sport_key, event_ids=None):
+            calls.append(sport_key)
+            return []
+        monkeypatch.setattr(odds_api, 'fetch_scores', _scores)
+
+        _run(Betting(bot=None)._settle_via_odds_api())
+
+        assert calls == []
+
+    def test_configured_guilds_skips_archived(self, db, monkeypatch):
+        from tle.cogs.betting import Betting
+        _setup(db, monkeypatch)
+        channel = _FakeChannel(222)
+        bot = _FakeBot([_FakeGuild(int(GUILD), channel)], {222: channel})
+        cog = Betting(bot)
+        db.set_guild_config(GUILD, 'bet_channel', '222')
+        assert cog._configured_guilds() == {int(GUILD): '222'}
+        db.set_guild_config(GUILD, 'bet_archived', '1')
+        assert cog._configured_guilds() == {}
+
+    def test_on_message_thread_bet_dead_when_archived(self, db, monkeypatch):
+        from tle.util import discord_common
+        from tle.cogs.betting import Betting
+        from tle import constants
+        _setup(db, monkeypatch)
+        monkeypatch.setattr(discord_common, '_BOT_PREFIX', ';', raising=False)
+        monkeypatch.setattr(constants, 'BET_MIN_STAKE', 1, raising=False)
+        import time as _t
+        market_id = _make_market(db, commence=_t.time() + 3600)  # still open
+        db.bet_market_set_thread(market_id, 333)
+        db.bet_ensure_wallet(GUILD, '1', 1000)
+        cog = Betting(bot=None)
+
+        db.set_guild_config(GUILD, 'bet_archived', '1')
+        msg = _FakeBetMessage('home 100')
+        _run(cog.on_message(msg))
+        assert msg.reactions == []
+        assert db.bet_get_wagers_for_user(market_id, '1') == []
+
+        # Same message with the flag off places the bet — proves the archived
+        # branch (not some other filter) is what blocked it above.
+        db.delete_guild_config(GUILD, 'bet_archived')
+        live = _FakeBetMessage('home 100')
+        _run(cog.on_message(live))
+        assert live.reactions == ['✅']
+        assert [w.stake for w in
+                db.bet_get_wagers_for_user(market_id, '1')] == [100]

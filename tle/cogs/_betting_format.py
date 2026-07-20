@@ -292,6 +292,7 @@ class BetFormatMixin:
             'admin_grant': 'admin grant',
             'admin_take': 'admin take',
             'admin_setbalance': 'admin set balance',
+            'profitadd': 'profit adjustment',
             'grantall': 'grant-all',
             'grantall_revert': 'grant-all revert',
             'mod_grant': 'mod grant',

@@ -391,14 +391,27 @@ class BetWalletCmdImplMixin:
         if amount == 0:
             raise BettingCogError(
                 'Amount must be a non-zero whole number (negative reverts).')
+        seed = self._bet_start_balance(ctx.guild.id)
+        before = cf_common.user_db.bet_ensure_wallet(ctx.guild.id, member.id, seed)
         new = cf_common.user_db.bet_adjust_balance(
-            ctx.guild.id, member.id, amount, self._bet_start_balance(ctx.guild.id),
+            ctx.guild.id, member.id, amount, seed,
             actor_id=ctx.author.id, action='profitadd')
+        # Balances floor at 0, so a revert can apply less than requested; the
+        # ledger (and hence the profit board) records what actually moved —
+        # report that, not the requested amount.
+        applied = new - before
         name = discord.utils.escape_markdown(member.display_name)
-        verb, prep = ('Added', 'to') if amount > 0 else ('Removed', 'from')
-        await ctx.send(embed=discord_common.embed_success(
-            f'{verb} **{abs(amount)}** {_COIN} {prep} `{name}`\'s balance '
-            f'**and profit**. New balance: **{new}** {_COIN}.'))
+        if applied == 0:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'`{name}`\'s balance is already 0 — nothing removed and '
+                f'profit unchanged (requested {amount}).'))
+            return
+        verb, prep = ('Added', 'to') if applied > 0 else ('Removed', 'from')
+        text = (f'{verb} **{abs(applied)}** {_COIN} {prep} `{name}`\'s balance '
+                f'**and profit**. New balance: **{new}** {_COIN}.')
+        if applied != amount:
+            text += f'\n⚠️ Requested {amount}; balances floor at 0.'
+        await ctx.send(embed=discord_common.embed_success(text))
 
     async def _cmd_setbalance(self, ctx, member, amount):
         if amount < 0:
