@@ -13,7 +13,7 @@ import discord
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.cogs._betting_helpers import (
-    seconds_until_open, _api_key, _event_fixture_key,
+    seconds_until_open, _api_key, _event_fixture_key, _is_archived,
 )
 from tle.cogs._betting_engine import BettingCogError
 
@@ -34,6 +34,8 @@ class BetSchedulerMixin:
         if not self.bot:
             return out
         for guild in self.bot.guilds:
+            if _is_archived(guild.id):
+                continue
             if cf_common.user_db.get_guild_config(
                     guild.id, _PAUSED_CONFIG_KEY) == '1':
                 continue
@@ -97,6 +99,8 @@ class BetSchedulerMixin:
             return
         now = time.time()
         for guild in self.bot.guilds:
+            if _is_archived(guild.id):
+                continue
             for market in cf_common.user_db.bet_markets_open(guild.id):
                 if market.bets_closed:
                     continue

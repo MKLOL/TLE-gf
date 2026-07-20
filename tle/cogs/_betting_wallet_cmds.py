@@ -384,6 +384,22 @@ class BetWalletCmdImplMixin:
                 f'Took **{-amount}** {_COIN} from `{name}`. '
                 f'New balance: **{new}** {_COIN}.'))
 
+    async def _cmd_profitadd(self, ctx, member, amount):
+        """Credit coins that also count toward `;bet leaderboard profit` — for
+        winning bets the bot never recorded (e.g. placed right at close). The
+        ledger rows (action='profitadd') are what the leaderboard sums."""
+        if amount == 0:
+            raise BettingCogError(
+                'Amount must be a non-zero whole number (negative reverts).')
+        new = cf_common.user_db.bet_adjust_balance(
+            ctx.guild.id, member.id, amount, self._bet_start_balance(ctx.guild.id),
+            actor_id=ctx.author.id, action='profitadd')
+        name = discord.utils.escape_markdown(member.display_name)
+        verb, prep = ('Added', 'to') if amount > 0 else ('Removed', 'from')
+        await ctx.send(embed=discord_common.embed_success(
+            f'{verb} **{abs(amount)}** {_COIN} {prep} `{name}`\'s balance '
+            f'**and profit**. New balance: **{new}** {_COIN}.'))
+
     async def _cmd_setbalance(self, ctx, member, amount):
         if amount < 0:
             raise BettingCogError('Balance cannot be negative.')

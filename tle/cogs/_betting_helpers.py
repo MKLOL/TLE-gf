@@ -445,6 +445,23 @@ def _role_mentions():
         return None
 
 
+_ARCHIVED_CONFIG_KEY = 'bet_archived'
+
+
+def _is_archived(guild_id):
+    """True once `;meta config enable bet_archived` was run in the guild: the
+    betting game is retired there — commands (except the read-only ones and
+    admin ``profitadd``) refuse, the thread listener ignores messages, and the
+    scheduler/settlement passes skip the guild entirely."""
+    from tle.util import codeforces_common as cf_common
+    try:
+        return bool(guild_id is not None and cf_common.user_db is not None
+                    and cf_common.user_db.get_guild_config(
+                        guild_id, _ARCHIVED_CONFIG_KEY) == '1')
+    except Exception:
+        return False
+
+
 def _api_key():
     return getattr(constants, 'ODDS_API_KEY', None)
 

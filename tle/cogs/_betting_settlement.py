@@ -8,6 +8,7 @@ from tle.util import football_data
 from tle.util import odds_api
 from tle.cogs._betting_helpers import (
     fd_settle_outcome, outcome_from_score, _api_key, _football_data_key,
+    _is_archived,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,9 @@ class BetSettlementMixin:
         token = _football_data_key()
         if not token:
             return
-        markets = cf_common.user_db.bet_markets_pending_settlement(time.time())
+        markets = [m for m in
+                   cf_common.user_db.bet_markets_pending_settlement(time.time())
+                   if not _is_archived(m.guild_id)]
         if not markets:
             return
         try:
@@ -105,7 +108,8 @@ class BetSettlementMixin:
         cutoff = now - constants.BET_SETTLE_BUFFER_SECONDS
         markets = cf_common.user_db.bet_markets_pending_settlement(cutoff)
         markets = [m for m in markets
-                   if m.market_id not in self._fd_pending_confirm
+                   if not _is_archived(m.guild_id)
+                   and m.market_id not in self._fd_pending_confirm
                    and not _is_beyond_regulation(m.market_id)]
         if not markets:
             return

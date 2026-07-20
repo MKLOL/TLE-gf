@@ -413,6 +413,8 @@ class TestScheduler:
         async def scenario():
             cog, db, channel = setup
             base = _t.time() + 5 * 3600
+            if int(base // 86400) != int((base + 15 * 60) // 86400):
+                base += 3600  # fixture keys bucket by UTC day — stay same-day
             ev1 = _wc_event(event_id='old-id', commence=base)
             ev2 = _wc_event(event_id='new-id', home='Cape Verde', away='Spain',
                             commence=base + 15 * 60)

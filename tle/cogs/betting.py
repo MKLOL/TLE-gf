@@ -1,26 +1,24 @@
 """World Cup soccer betting minigame — ARCHIVED.
 
-The 2026 World Cup is over. While ``_ARCHIVED`` is True only ``;bet``,
-``;bet leaderboard [profit]`` and ``;bet me`` (alias ``profile``) stay
-registered — ``setup()`` strips the rest; on_ready skips the background tasks
-(safety net, auto-settle), open/close timers, draw refixture and the thread
-bet listener. Nothing deleted; flip ``_ARCHIVED`` to False to bring it back.
+`;meta config enable bet_archived` retires the game per guild: bare `;bet`
+answers with a farewell notice, subcommands other than `leaderboard`,
+`me`/`profile` and admin `profitadd` refuse (``cog_check``), the thread bet
+listener goes quiet, and the scheduler/settlement passes skip the guild — no
+odds/scores API traffic. `;meta config disable bet_archived` restores all.
 
 How the live game worked: after `;prediction here`, ~6h before each kickoff
-the bot froze the 1X2 odds from The Odds API, posted the market and opened a
-thread; members bet via `;bet home|draw|away <amt>` or thread replies
-(`home 100`, `away all`, `draw 25%`). Betting closed at kickoff; full time
-auto-settled at stake × odds. Wallets started at 1000 coins, `;bet daily`
-+100/day. The wallet/admin subcommands remain in code below (see the class
-body) but are unregistered while archived.
+the bot froze The Odds API 1X2 odds, posted the market and opened a thread;
+members bet via `;bet home|draw|away <amt>` or thread replies (`home 100`,
+`away all`). Betting closed at kickoff; full time auto-settled at stake ×
+odds. Wallets seeded 1000 coins, `;bet daily` +100. See the class body for
+the full wallet/admin subcommand set.
 
-Split across helper modules to stay under 500 lines/file: pure helpers in
-``_betting_helpers``, presentation in ``_betting_format``, engine in
-``_betting_engine``, settlement in ``_betting_settlement``, scheduler in
-``_betting_scheduler``, subcommand bodies in ``_betting_commands`` /
-``_betting_wallet_cmds``. This file keeps the cog: the ``bet`` group and all
-``@bet.command`` callbacks in one class body (as discord.py requires), the
-message listener and the background task hooks.
+Split across helper modules to stay under 500 lines/file: ``_betting_helpers``
+(pure), ``_betting_format``, ``_betting_engine``, ``_betting_settlement``,
+``_betting_scheduler``, ``_betting_commands`` / ``_betting_wallet_cmds``.
+This file keeps the cog: the ``bet`` group and every ``@bet.command``
+callback in one class body (discord.py requires it), the message listener
+and the background task hooks.
 """
 import asyncio
 import logging
@@ -48,23 +46,21 @@ from tle.cogs._betting_helpers import (  # noqa: F401
     parse_settle_arg, payout_amount, pick_is_negative, pick_wins, positive_pick,
     rank_line, resolve_bet_pick, resolve_pick, seconds_until_open,
     unknown_subcommand_token,
-    _COIN, _api_key, _bot_prefix, _football_data_key, _no_mentions,
+    _COIN, _api_key, _bot_prefix, _football_data_key, _is_archived, _no_mentions,
     _role_mentions, _short_error, _utc_today,
 )
 
 logger = logging.getLogger(__name__)
 
-# Retired (see docstring): setup() strips all but _ARCHIVED_KEEP;
-# on_ready/on_message do nothing — no fetches, timers, polling.
-_ARCHIVED = True
-_ARCHIVED_KEEP = {'leaderboard', 'me'}
+# Subcommands that still respond after `;meta config enable bet_archived`.
+_ARCHIVE_ALLOWED = {'leaderboard', 'me', 'profitadd'}
+_ARCHIVED_NOTICE = ('World cup has ended, congrats to the best bettors! '
+                    'The leaderboard is archived.')
 
-# Each fixture gets a precise asyncio timer that opens its market at exactly
-# kickoff − BET_OPEN_LEAD_SECONDS (never late), mirroring rpoll's per-poll
-# expiry timers. The safety-net task is only a coarse backstop: it re-discovers
-# the schedule (to arm timers for new fixtures) and catches anything a missed
-# timer / restart left in-window. So opening precision comes from the timers,
-# NOT this interval.
+# Precise per-fixture asyncio timers open each market at exactly kickoff −
+# BET_OPEN_LEAD_SECONDS (mirroring rpoll's per-poll expiry timers). The safety
+# net is only a coarse backstop: it re-arms timers for new fixtures and catches
+# anything a missed timer / restart left in-window.
 _SAFETY_NET_INTERVAL = 15 * 60
 # Auto-settle poller cadence. Results come from football-data.org (free), so we
 # can poll often; only hits the network when a market is actually past kickoff.
@@ -123,11 +119,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @commands.Cog.listener()
     @discord_common.once
     async def on_ready(self):
-        if _ARCHIVED:
-            logger.info('betting: archived — skipping timers and background tasks')
-            return
-        # user_db is set in the bot's on_ready handler, which may run after cog
-        # listeners — wait briefly (as rpoll does) before arming timers.
+        # user_db may be set after cog listeners run — wait briefly (as rpoll
+        # does) before arming timers.
         for _ in range(30):
             if cf_common.user_db is not None:
                 break
@@ -157,12 +150,24 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
 
     # ── Group ──────────────────────────────────────────────────────────
 
+    async def cog_check(self, ctx):
+        """In archived guilds only _ARCHIVE_ALLOWED subcommands still run."""
+        if ctx.guild is None or not _is_archived(ctx.guild.id):
+            return True
+        command = ctx.command
+        if command is None or command.qualified_name == 'bet' \
+                or command.name in _ARCHIVE_ALLOWED:
+            return True
+        raise BettingCogError(_ARCHIVED_NOTICE)
+
     @commands.group(name='bet',
                     aliases=['betting', 'prediction', 'pred', 'wager'],
-                    brief='World Cup betting (archived)',
-                    invoke_without_command=True)
+                    brief='World Cup betting', invoke_without_command=True)
     async def bet(self, ctx):
-        """Archived — only the leaderboards and profiles remain."""
+        """Show the active market here and your balance."""
+        if _is_archived(ctx.guild.id):
+            await ctx.send(embed=discord_common.embed_neutral(_ARCHIVED_NOTICE))
+            return
         # `invoke_without_command=True` routes `;bet <unknown>` here too;
         # discord.py wipes `ctx.subcommand_passed` first, so recover the token
         # from the raw message and error instead of acting like a bare `;bet`.
@@ -171,11 +176,6 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             raise BettingCogError(
                 f'`{discord.utils.escape_markdown(attempted)}` isn\'t a `;bet` '
                 'command. See `;help bet` for the full list.')
-        if _ARCHIVED:
-            await ctx.send(embed=discord_common.embed_neutral(
-                'The World Cup is over and betting is **archived**. Still up: '
-                '`;bet leaderboard`, `;bet leaderboard profit`, `;bet profile`.'))
-            return
         balance = cf_common.user_db.bet_ensure_wallet(
             ctx.guild.id, ctx.author.id, self._bet_start_balance(ctx.guild.id))
         market = self._find_market(ctx)
@@ -275,8 +275,7 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
                  usage='@user <home|draw|away|team> <amount | 50% | all | 0 to remove>')
     @commands.has_role(constants.TLE_ADMIN)
     async def bet_for(self, ctx, member: discord.Member, *, text: str):
-        """Place (or, with `0`, remove) a bet for another member — for when
-        they're away but have told you what they want to wager. Spends their
+        """Place (or with `0` remove) a bet for an absent member. Spends their
         own wallet; you're recorded as the actor in the wallet history."""
         await self._cmd_place_for(ctx, member, text)
 
@@ -286,8 +285,6 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     async def on_message(self, message):
         """Treat a plain `pick amount` message inside a betting thread as a
         bet. Cheap pre-filters keep this off the DB for ordinary chatter."""
-        if _ARCHIVED:
-            return
         if message.author.bot or message.guild is None:
             return
         content = message.content or ''
@@ -298,6 +295,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
             return
         if cf_common.user_db is None:
             return  # startup window — DB not initialized yet
+        if _is_archived(message.guild.id):
+            return  # game retired here — thread bets are dead
         market = cf_common.user_db.bet_market_get_active_by_thread(
             message.guild.id, message.channel.id)
         if market is None:
@@ -380,10 +379,8 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @bet.command(name='pending', aliases=['stuck'], hidden=True,
                  brief='List open markets past kickoff awaiting a result')
     async def pending(self, ctx):
-        """Show markets that have kicked off but not yet settled — e.g. a
-        fixture the scores API never reported as completed. Stakes stay
-        escrowed until an admin settles (`;bet settle`) or cancels (`;bet cancel`).
-        """
+        """Markets past kickoff but unsettled (e.g. a scores-API gap); stakes
+        stay escrowed until an admin `;bet settle`s or `;bet cancel`s."""
         await self._cmd_pending(ctx)
 
     @bet.command(name='correct', aliases=['fix', 'resettle'], hidden=True,
@@ -401,6 +398,16 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
     @commands.has_role(constants.TLE_ADMIN)
     async def grant(self, ctx, member: discord.Member, amount: int):
         await self._cmd_grant(ctx, member, amount)
+
+    @bet.command(name='profitadd', aliases=['addprofit'],
+                 brief='Credit coins that also count as profit (admin)',
+                 usage='@user <amount | -amount>')
+    @commands.has_role(constants.TLE_ADMIN)
+    async def profitadd(self, ctx, member: discord.Member, amount: int):
+        """For winning bets the bot never recorded (e.g. placed at the last
+        second): credit coins that also count in `;bet leaderboard profit`.
+        Negative reverts a mistaken add. Works while archived."""
+        await self._cmd_profitadd(ctx, member, amount)
 
     @bet.command(name='setbalance', aliases=['setbal'], hidden=True,
                  brief='Set a user\'s balance (admin)', usage='@user <amount>')
@@ -489,11 +496,4 @@ class Betting(BetWalletCmdImplMixin, BetCommandImplMixin, BetFormatMixin,
 
 
 async def setup(bot):
-    cog = Betting(bot)
-    await bot.add_cog(cog)
-    if _ARCHIVED:
-        # Unregister all but the read-only survivors — dead commands neither
-        # run nor appear in `;help bet`. Canonical name removes aliases too.
-        for command in list(cog.bet.commands):
-            if command.name not in _ARCHIVED_KEEP:
-                cog.bet.remove_command(command.name)
+    await bot.add_cog(Betting(bot))
