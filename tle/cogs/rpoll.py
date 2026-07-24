@@ -207,6 +207,7 @@ class Rpoll(commands.Cog):
           +osu: top vote full, then 0.67x decay
           +gg / +mgg: all-time / monthly gitgud score
           +akari / +akariexp: Daily Akari rating (sum / exponential)
+          +queens / +queensexp: LinkedIn Queens rating (sum / exponential)
         """
         if args is None:
             await ctx.send_help(ctx.command)

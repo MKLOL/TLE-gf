@@ -247,6 +247,77 @@ class TestAkariFormula:
         assert _get_vote_weight(poll, 'user1', GUILD) == 1500
 
 
+class TestQueensFormula:
+    @pytest.fixture
+    def fake_db(self):
+        database = FakeRpollDb()
+        original = cf_common.user_db
+        cf_common.user_db = database
+        try:
+            yield database
+        finally:
+            cf_common.user_db = original
+            database.close()
+
+    def test_queens_sum_is_plain_addition(self):
+        assert _apply_formula('queens', [1234, 1567]) == 2801
+
+    def test_queensexp_matches_exp_shape(self):
+        ratings = [1200, 1800, 2200]
+        assert _apply_formula('queensexp', ratings) == _apply_formula('exp', ratings)
+
+    def test_vote_weight_uses_queens_rating(self, fake_db):
+        fake_db._seed_queens_rating('user1', GUILD, 1456.7)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='queens', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 1457  # rounded display value
+
+    def test_vote_weight_queensexp_uses_same_source_as_queens(self, fake_db):
+        fake_db._seed_queens_rating('user1', GUILD, 1623.4)
+        Poll = namedtuple('Poll', 'formula created_at')
+        for formula in ('queens', 'queensexp'):
+            poll = Poll(formula=formula, created_at=0)
+            assert _get_vote_weight(poll, 'user1', GUILD) == 1623
+
+    def test_vote_weight_unrated_user_is_zero(self, fake_db):
+        # No snapshot row written — user hasn't played Queens yet.
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='queens', created_at=0)
+        assert _get_vote_weight(poll, 'ghost', GUILD) == 0
+
+    def test_queens_rating_does_not_leak_into_akari_formula(self, fake_db):
+        # The snapshots are game-keyed: a Queens rating must not weigh an
+        # akari-formula poll.
+        fake_db._seed_queens_rating('user1', GUILD, 1500)
+        Poll = namedtuple('Poll', 'formula created_at')
+        assert _get_vote_weight(Poll(formula='akari', created_at=0), 'user1', GUILD) == 0
+
+    def test_vote_weight_is_guild_scoped(self, fake_db):
+        other_guild = GUILD + 1
+        fake_db._seed_queens_rating('user1', GUILD, 1500)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='queens', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 1500
+        assert _get_vote_weight(poll, 'user1', other_guild) == 0
+
+    def test_opted_out_user_does_not_leak_rating(self, fake_db):
+        # Same privacy rule as the Akari formulas: a hidden rating must not be
+        # reconstructable from poll totals.
+        fake_db._seed_queens_rating('user1', GUILD, 1500)
+        fake_db._seed_queens_optout('user1', GUILD)
+        Poll = namedtuple('Poll', 'formula created_at')
+        for formula in ('queens', 'queensexp'):
+            poll = Poll(formula=formula, created_at=0)
+            assert _get_vote_weight(poll, 'user1', GUILD) == 0
+
+    def test_banned_user_contributes_nothing(self, fake_db):
+        fake_db._seed_queens_rating('user1', GUILD, 1700)
+        fake_db._seed_queens_ban('user1', GUILD)
+        Poll = namedtuple('Poll', 'formula created_at')
+        poll = Poll(formula='queens', created_at=0)
+        assert _get_vote_weight(poll, 'user1', GUILD) == 0
+
+
 class TestRefreshPollRatings:
     @pytest.fixture
     def fake_db(self):

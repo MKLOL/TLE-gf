@@ -119,6 +119,26 @@ class FakeRpollDb:
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE minigame_optout (
+                guild_id     TEXT NOT NULL,
+                game         TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                opted_out_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE minigame_ban (
+                guild_id   TEXT NOT NULL,
+                game       TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                banned_at  REAL NOT NULL,
+                banned_by  TEXT NOT NULL,
+                reason     TEXT,
+                PRIMARY KEY (guild_id, game, user_id)
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE akari_optout (
                 guild_id     TEXT NOT NULL,
                 user_id      TEXT NOT NULL,
@@ -176,6 +196,8 @@ class FakeRpollDb:
     get_handle = _UC.get_handle
     fetch_cf_user = _UC.fetch_cf_user
     get_minigame_rating = _UC.get_minigame_rating
+    is_minigame_opted_out = _UC.is_minigame_opted_out
+    is_minigame_banned = _UC.is_minigame_banned
     get_akari_rating = _UC.get_akari_rating
     is_akari_opted_out = _UC.is_akari_opted_out
     is_akari_banned = _UC.is_akari_banned
@@ -228,6 +250,36 @@ class FakeRpollDb:
             'INSERT OR REPLACE INTO akari_ban '
             '(guild_id, user_id, banned_at, banned_by, reason) '
             'VALUES (?, ?, 0, ?, NULL)',
+            (str(guild_id), str(user_id), str(banned_by))
+        )
+        self.conn.commit()
+
+    def _seed_queens_rating(self, user_id, guild_id, rating):
+        """Helper: write a LinkedIn Queens rating snapshot row for tests."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO minigame_rating '
+            '(guild_id, game, user_id, rating, games, peak, last_delta, '
+            ' skip_streak, last_puzzle, updated_at) '
+            "VALUES (?, 'queens', ?, ?, 0, ?, 0, 0, 0, 0)",
+            (str(guild_id), str(user_id), float(rating), float(rating))
+        )
+        self.conn.commit()
+
+    def _seed_queens_optout(self, user_id, guild_id):
+        """Helper: mark a user as opted out of Queens rating visibility."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO minigame_optout '
+            "(guild_id, game, user_id, opted_out_at) VALUES (?, 'queens', ?, 0)",
+            (str(guild_id), str(user_id))
+        )
+        self.conn.commit()
+
+    def _seed_queens_ban(self, user_id, guild_id, banned_by='mod'):
+        """Helper: ban a user from Queens ingestion."""
+        self.conn.execute(
+            'INSERT OR REPLACE INTO minigame_ban '
+            '(guild_id, game, user_id, banned_at, banned_by, reason) '
+            "VALUES (?, 'queens', ?, 0, ?, NULL)",
             (str(guild_id), str(user_id), str(banned_by))
         )
         self.conn.commit()
