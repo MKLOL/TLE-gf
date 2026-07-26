@@ -1,4 +1,4 @@
-"""Akari weekday / date-bound filters, +recalculate, and ;akari results."""
+"""Akari extended filters, +recalculate, and ;akari results."""
 import asyncio
 from types import SimpleNamespace
 
@@ -361,3 +361,41 @@ class TestAkariResultsCommand(_AkariFilterBase):
         with pytest.raises(MinigameCogError, match='No Daily Akari results'):
             asyncio.run(Minigames.akari_results.__wrapped__(
                 cog, ctx, f'#{_FRI}', '+dow=weekend'))
+
+    def test_results_time_sorts_display_without_changing_rating_deltas(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.get_handle = lambda _user_id, _guild_id: None
+        self._enable(db)
+        self._pin_today(monkeypatch, puzzle_number=_FRI)
+        _save_akari_result(
+            db, 1, 300, _FRI, time_seconds=60,
+            is_perfect=False, accuracy=90)
+        _save_akari_result(db, 2, 301, _FRI, time_seconds=120)
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(1, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=None)
+
+        rendered = []
+        monkeypatch.setattr(
+            minigames_module, '_get_akari_puzzle_table_image',
+            lambda rows, **_kwargs: rendered.append(rows) or object())
+
+        asyncio.run(Minigames.akari_results.__wrapped__(cog, ctx))
+        accuracy_rows = rendered[-1]
+        asyncio.run(Minigames.akari_results.__wrapped__(cog, ctx, '+time'))
+        time_rows = rendered[-1]
+
+        assert [str(row[1]).split(' (', 1)[0] for row in accuracy_rows] == [
+            'Bob', 'Alice']
+        assert [str(row[1]).split(' (', 1)[0] for row in time_rows] == [
+            'Alice', 'Bob']
+        assert {
+            str(row[1]).split(' (', 1)[0]: row[-1]
+            for row in accuracy_rows
+        } == {
+            str(row[1]).split(' (', 1)[0]: row[-1]
+            for row in time_rows
+        }

@@ -405,14 +405,14 @@ class AkariCmdsMixin:
         await self._cmd_akari_clean(ctx, start_date, end_date)
 
     @akari.group(name='results', brief='Show Akari puzzle/date leaderboard',
-                 usage='[date|#number] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
+                 usage='[date|#number] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
                  invoke_without_command=True)
     async def akari_results(self, ctx, *args):
         await self._cmd_akari_results(ctx, args)
 
     @akari_results.command(name='debug',
                            brief='(Mod) Puzzle/date results with ratings for ALL players',
-                           usage='[date|#number] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
+                           usage='[date|#number] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
     @akari_mod_only()
     async def akari_results_debug(self, ctx, *args):
         await self._cmd_akari_results(ctx, args, show_all=True)

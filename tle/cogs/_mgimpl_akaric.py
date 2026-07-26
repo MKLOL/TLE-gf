@@ -27,6 +27,16 @@ from tle.cogs._minigame_tables import _maybe_parse_puzzle_selector
 logger = logging.getLogger(__name__)
 
 
+def _akari_results_time_sort_key(row):
+    """Display Akari results by time, preserving stable tie-breakers."""
+    return (
+        int(getattr(row, 'time_seconds', 0)),
+        -int(bool(getattr(row, 'is_perfect', False))),
+        -int(getattr(row, 'accuracy', 0)),
+        int(getattr(row, 'message_id', 0)),
+    )
+
+
 class ImplAkariCMixin:
     # ── Extended filter parsing (weekdays / date bounds / +recalculate) ──
 
@@ -170,6 +180,8 @@ class ImplAkariCMixin:
         Thin front-end over ``_cmd_akari_stats_puzzle`` — the Akari analogue
         of ``;queens results``.
         """
+        sort_by_time = '+time' in args
+        args = [arg for arg in args if arg != '+time']
         (remaining, _include_decay, excluded_ids, included_ids,
          _include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
@@ -177,7 +189,7 @@ class ImplAkariCMixin:
             raise MinigameCogError(
                 'Usage: `;akari results [date|#number] [+test] [+exclude=…] '
                 '[+include=…] [+dow=mon,wed|weekday|weekend] '
-                '[d>=date] [d<date]`.')
+                '[d>=date] [d<date] [+time]`.')
         # '#N', not a bare number: a 4-digit bare number parses as a year
         # (see _maybe_parse_puzzle_selector), which would break the no-arg
         # default once puzzle numbers reach 1000.
@@ -187,4 +199,6 @@ class ImplAkariCMixin:
         await self._cmd_akari_stats_puzzle(
             ctx, selector, show_all=show_all,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds)
+            test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
+            sort_key_fn=(
+                _akari_results_time_sort_key if sort_by_time else None))

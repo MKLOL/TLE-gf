@@ -406,7 +406,8 @@ class ImplAkariBMixin:
     async def _cmd_akari_stats_puzzle(self, ctx, selector_arg, *,
                                        show_all=False, excluded_ids=None,
                                        included_ids=None, test_decay=False,
-                                       weekdays=None, date_bounds=None):
+                                       weekdays=None, date_bounds=None,
+                                       sort_key_fn=None):
         """Render a per-puzzle results image annotated with pre-puzzle ratings.
 
         ``show_all=False`` (public path): only opted-in users get the rating
@@ -468,6 +469,6 @@ class ImplAkariBMixin:
             weekdays=weekdays, date_bounds=date_bounds)
         discord_file = _mg()._get_akari_puzzle_table_image_file(
             ctx.guild, rows, title,
-            puzzle_info=puzzle_info, registrants=registrants)
+            puzzle_info=puzzle_info, registrants=registrants,
+            sort_key_fn=sort_key_fn)
         await ctx.send(file=discord_file)
-
