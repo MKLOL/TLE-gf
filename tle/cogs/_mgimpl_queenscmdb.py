@@ -30,6 +30,7 @@ from tle.cogs._minigame_queens_cog import (
     _parse_queens_date_or_number,
     _format_queens_date,
     _queens_best_results_by_date, _queens_streak_info,
+    _queens_current_puzzle_date,
 )
 from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
 
@@ -186,6 +187,7 @@ class ImplQueensCmdBMixin:
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._sync_queens_materialized_results(
             ctx.guild.id, migrate_legacy=False)
+        logical_today = _queens_current_puzzle_date()
         filter_args = list(args)
         filter_args, weekdays = _split_queens_weekday_filter(filter_args)
         member = ctx.author
@@ -197,7 +199,8 @@ class ImplQueensCmdBMixin:
                 member = ctx.author
 
         try:
-            dlo, dhi, plo, phi = parse_date_args(filter_args)
+            dlo, dhi, plo, phi = parse_date_args(
+                filter_args, reference_date=logical_today)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
 
@@ -233,6 +236,7 @@ class ImplQueensCmdBMixin:
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._sync_queens_materialized_results(
             ctx.guild.id, migrate_legacy=False)
+        logical_today = _queens_current_puzzle_date()
         filter_args = list(args)
         filter_args, weekdays = _split_queens_weekday_filter(filter_args)
         member = ctx.author
@@ -244,7 +248,8 @@ class ImplQueensCmdBMixin:
                 member = ctx.author
 
         try:
-            dlo, dhi, plo, phi = parse_date_args(filter_args)
+            dlo, dhi, plo, phi = parse_date_args(
+                filter_args, reference_date=logical_today)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
 
@@ -264,7 +269,8 @@ class ImplQueensCmdBMixin:
             results,
             display_name,
             title_suffix=_queens_weekday_filter_suffix(weekdays),
-            weekdays=weekdays)
+            weekdays=weekdays,
+            as_of_date=logical_today)
         await ctx.send(file=discord_file)
 
     async def _cmd_queens_stats_date(self, ctx, date_arg, *,

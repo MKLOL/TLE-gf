@@ -385,11 +385,15 @@ def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None,
 
 # ── Argument parsing ────────────────────────────────────────────────────
 
-def parse_date_args(args):
+def parse_date_args(args, *, reference_date=None):
     """Parse timeline and puzzle-number filter arguments.
 
     Returns ``(dlo, dhi, plo, phi)`` where dlo/dhi are timestamps and
     plo/phi are puzzle-number bounds (0 = unbounded).
+
+    ``reference_date`` controls the logical current date used by the
+    ``week``, ``month``, and ``year`` shortcuts. By default, those shortcuts
+    retain their existing host-local behavior.
 
     Raises ``ValueError`` on unrecognized arguments.
     """
@@ -397,18 +401,19 @@ def parse_date_args(args):
     dhi = _NO_TIME_BOUND
     plo = 0
     phi = 0
+    today = reference_date or dt.date.today()
 
     for arg in args:
         lower = arg.lower()
         if lower in _TIMELINE_KEYWORDS:
-            now = dt.datetime.now()
             if lower == 'week':
-                monday = now - dt.timedelta(days=now.weekday())
-                dlo = time.mktime(monday.replace(hour=0, minute=0, second=0, microsecond=0).timetuple())
+                start_date = today - dt.timedelta(days=today.weekday())
             elif lower == 'month':
-                dlo = time.mktime(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+                start_date = today.replace(day=1)
             elif lower == 'year':
-                dlo = time.mktime(now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+                start_date = today.replace(month=1, day=1)
+            start = dt.datetime.combine(start_date, dt.time.min)
+            dlo = time.mktime(start.timetuple())
         elif lower.startswith('d>='):
             dlo = max(dlo, cf_common.parse_date(arg[3:]))
         elif lower.startswith('d<'):

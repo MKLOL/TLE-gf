@@ -1,11 +1,13 @@
 """Queens direct registration and moderator overwrite tests."""
 
 import asyncio
+import datetime as dt
 from types import SimpleNamespace
 
 import pytest
 
 from tle import constants
+from tle.cogs import _mgimpl_queenscmdb as queens_cmd_impl
 from tle.cogs import minigames as minigames_module
 from tle.cogs._minigame_queens import normalize_queens_name
 from tle.cogs.minigames import MinigameCogError, Minigames
@@ -34,7 +36,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         fake_file = SimpleNamespace(filename='queens-stats.png')
 
         def fake_queens_stats(results, display_name, *, title_suffix='',
-                              weekdays=None):
+                              weekdays=None, as_of_date=None):
             rendered.append({
                 'dates': [
                     minigames_module.normalize_puzzle_date(row.puzzle_date)
@@ -43,11 +45,16 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
                 ],
                 'display_name': display_name,
                 'title_suffix': title_suffix,
+                'as_of_date': as_of_date,
             })
             return fake_file
 
         monkeypatch.setattr(
             minigames_module, 'plot_queens_stats', fake_queens_stats)
+        logical_today = dt.date(2026, 6, 11)
+        monkeypatch.setattr(
+            queens_cmd_impl, '_queens_current_puzzle_date',
+            lambda: logical_today)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5, True, 100)
         self._save_queens_result(db, 2, alice.id, '2026-06-09', 9, False, 0)
         self._save_queens_result(db, 3, alice.id, '2026-06-10', 4, True, 100)
@@ -57,10 +64,15 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         assert rendered[-1]['dates'] == [
             '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11',
         ]
+        assert rendered[-1]['as_of_date'] == logical_today
+        asyncio.run(cog._cmd_queens_stats(ctx, 'week'))
+        assert rendered[-1]['dates'] == [
+            '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11',
+        ]
         asyncio.run(cog._cmd_queens_stats(ctx, '+dow=mon,wed'))
         assert rendered[-1]['dates'] == ['2026-06-08', '2026-06-10']
 
-        asyncio.run(cog._cmd_queens_streak(ctx))
+        asyncio.run(cog._cmd_queens_streak(ctx, 'week'))
         assert '**2** consecutive clean day(s)' in ctx.sent['embed'].description
         assert 'Latest result: **2026-06-11**' in ctx.sent['embed'].description
 

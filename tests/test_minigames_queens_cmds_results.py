@@ -11,6 +11,8 @@ import pytest
 
 from tle import constants
 from tle.cogs import _mgcmds_queens as queens_cmds_module
+from tle.cogs import _mgimpl_sharedcmd as shared_cmd_impl
+from tle.cogs import _mgimpl_vs as vs_cmd_impl
 from tle.cogs import minigames as minigames_module
 from tle.util import codeforces_common as cf_common
 from tle.util.db.user_db_conn import namedtuple_factory
@@ -344,6 +346,9 @@ class TestQueensCommandsResults(_QueensCommandsBase):
 
     def test_vs_uses_time_only_scoring(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            vs_cmd_impl, '_queens_current_puzzle_date',
+            lambda: dt.date(2026, 6, 9))
         db.set_guild_config(100, 'queens', '1')
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
         bob = _FakeDiscordMember(301, 'bob', 'Bob')
@@ -360,7 +365,8 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         self._save_queens_result(db, 3, alice.id, '2026-06-09', 8, True, 100)
         self._save_queens_result(db, 4, bob.id, '2026-06-09', 8, False, 0)
 
-        asyncio.run(cog._cmd_vs(ctx, QUEENS_GAME, alice, bob))
+        asyncio.run(cog._cmd_vs(
+            ctx, QUEENS_GAME, alice, bob, 'week'))
 
         embed = ctx.sent['embed']
         assert '`Alice`: **1.5** points, **1** wins' in embed.description
@@ -369,6 +375,9 @@ class TestQueensCommandsResults(_QueensCommandsBase):
 
     def test_top_counts_fastest_winners(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            shared_cmd_impl, '_queens_current_puzzle_date',
+            lambda: dt.date(2026, 6, 10))
         db.set_guild_config(100, 'queens', '1')
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
         bob = _FakeDiscordMember(301, 'bob', 'Bob')
@@ -394,7 +403,7 @@ class TestQueensCommandsResults(_QueensCommandsBase):
             minigames_module.paginator, 'paginate',
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
 
-        asyncio.run(cog._cmd_top(ctx, QUEENS_GAME))
+        asyncio.run(cog._cmd_top(ctx, QUEENS_GAME, 'week'))
 
         assert len(pages) == 1
         embed = pages[0][1]

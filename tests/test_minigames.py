@@ -323,6 +323,17 @@ class TestArgs:
         assert plo == 1300
         assert phi == 1500
 
+    @pytest.mark.parametrize(('timeframe', 'expected'), [
+        ('week', dt.date(2026, 7, 20)),
+        ('month', dt.date(2026, 7, 1)),
+        ('year', dt.date(2026, 1, 1)),
+    ])
+    def test_parse_timeline_filters_use_reference_date(
+            self, timeframe, expected):
+        dlo, _dhi, _plo, _phi = parse_date_args(
+            (timeframe,), reference_date=dt.date(2026, 7, 26))
+        assert dt.datetime.fromtimestamp(dlo).date() == expected
+
     def test_parse_exact_puzzle_selector_number(self):
         assert _maybe_parse_puzzle_selector('445') == ('puzzle', 445)
 

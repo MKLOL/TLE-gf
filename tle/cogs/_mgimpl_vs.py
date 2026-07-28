@@ -8,6 +8,8 @@ from tle.util import ranking
 from tle.cogs._minigame_common import compute_vs, parse_date_args, resolve_scoring
 from tle.cogs._minigame_helpers import MinigameCogError, _format_score
 from tle.cogs._minigame_multi_vs import compute_multi_vs
+from tle.cogs._minigame_queens import QUEENS_GAME
+from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter,
     _filter_queens_weekday_rows,
@@ -88,7 +90,11 @@ class ImplVsMixin:
         try:
             args, scoring_name, scoring = resolve_scoring(game, args)
             args, weekdays = _split_queens_weekday_filter(args)
-            dlo, dhi, plo, phi = parse_date_args(args)
+            reference_date = (
+                _queens_current_puzzle_date()
+                if game.name == QUEENS_GAME.name else None)
+            dlo, dhi, plo, phi = parse_date_args(
+                args, reference_date=reference_date)
         except ValueError as exc:
             raise MinigameCogError(str(exc)) from exc
 

@@ -21,6 +21,7 @@ from tle.cogs._minigame_guessgame import GUESSGAME_GAME
 from tle.cogs._minigame_queens import (
     QUEENS_GAME,
 )
+from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _safe_member_name, _safe_user_name,
     _format_score,
@@ -289,7 +290,11 @@ class ImplSharedCmdMixin:
         try:
             args, scoring_name, scoring = resolve_scoring(game, args)
             args, weekdays = _split_queens_weekday_filter(args)
-            dlo, dhi, plo, phi = parse_date_args(args)
+            reference_date = (
+                _queens_current_puzzle_date()
+                if game.name == QUEENS_GAME.name else None)
+            dlo, dhi, plo, phi = parse_date_args(
+                args, reference_date=reference_date)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
 
