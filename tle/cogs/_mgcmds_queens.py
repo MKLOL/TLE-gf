@@ -1,8 +1,6 @@
 """Queens text command group and subcommands (Minigames cog command mixin; see minigames.py)."""
 
 
-import datetime as dt
-
 from discord.ext import commands
 
 from tle import constants
@@ -14,6 +12,7 @@ from tle.cogs._minigame_helpers import (
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
     _safe_member_name,
 )
+from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -137,11 +136,13 @@ class QueensCmdsMixin:
     async def queens_bans(self, ctx):
         await self._cmd_queens_bans(ctx)
 
-    @queens.command(name='vs', brief='Head-to-head comparison',
-                    usage='@user1 @user2 [filters...] [+dow=mon,wed|weekday|weekend]')
-    async def queens_vs(self, ctx, member1: CaseInsensitiveMember,
-                        member2: CaseInsensitiveMember, *args):
-        await self._cmd_vs(ctx, QUEENS_GAME, member1, member2, *args)
+    @queens.command(name='vs', brief='Compare two or more players',
+                    usage='@user1 @user2 [@user3 ...] '
+                          '[filters...] [+dow=mon,wed|weekday|weekend]')
+    async def queens_vs(self, ctx, *arguments):
+        members, filters = await self._resolve_vs_arguments(
+            ctx, QUEENS_GAME, arguments)
+        await self._cmd_vs_members(ctx, QUEENS_GAME, members, *filters)
 
     @queens.command(name='top', brief='Show fastest-result winners',
                     usage='[filters...] [+dow=mon,wed|weekday|weekend]')
@@ -170,7 +171,10 @@ class QueensCmdsMixin:
                 'Usage: `;queens results [date|number] '
                 '[+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date]`.')
-        date_arg = remaining[0] if remaining else dt.date.today().isoformat()
+        date_arg = (
+            remaining[0] if remaining
+            else _queens_current_puzzle_date().isoformat()
+        )
         await self._cmd_queens_stats_date(
             ctx, date_arg,
             excluded_ids=excluded_ids, included_ids=included_ids,
@@ -188,7 +192,10 @@ class QueensCmdsMixin:
                 'Usage: `;queens results debug [date|number] '
                 '[+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date]`.')
-        date_arg = remaining[0] if remaining else dt.date.today().isoformat()
+        date_arg = (
+            remaining[0] if remaining
+            else _queens_current_puzzle_date().isoformat()
+        )
         await self._cmd_queens_stats_date(
             ctx, date_arg, show_all=True,
             excluded_ids=excluded_ids, included_ids=included_ids,

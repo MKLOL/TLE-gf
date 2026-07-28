@@ -139,10 +139,12 @@ class AkariCmdsMixin:
             self.bot, ctx.channel, pages, wait_time=300,
             set_pagenum_footers=True, author_id=ctx.author.id)
 
-    @akari.command(name='vs', brief='Head-to-head comparison',
-                   usage='@user1 @user2 [filters...] [raw|all]')
-    async def akari_vs(self, ctx, member1: CaseInsensitiveMember, member2: CaseInsensitiveMember, *args):
-        await self._cmd_vs(ctx, AKARI_GAME, member1, member2, *args)
+    @akari.command(name='vs', brief='Compare two or more players',
+                   usage='@user1 @user2 [@user3 ...] [filters...] [raw|all]')
+    async def akari_vs(self, ctx, *arguments):
+        members, filters = await self._resolve_vs_arguments(
+            ctx, AKARI_GAME, arguments)
+        await self._cmd_vs_members(ctx, AKARI_GAME, members, *filters)
 
     @akari.command(name='streak', brief='Show current perfect streak',
                    usage='[@user] [filters...]')

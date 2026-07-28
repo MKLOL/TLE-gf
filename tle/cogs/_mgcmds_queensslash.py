@@ -1,6 +1,5 @@
 """Queens slash group (Minigames cog slash mixin; see minigames.py)."""
 
-import datetime as dt
 import logging
 from typing import Optional
 
@@ -10,6 +9,7 @@ from discord import app_commands
 
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_helpers import _SlashCtx
+from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
@@ -107,23 +107,33 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='vs', description='Head-to-head comparison')
+    @queens_slash.command(name='vs', description='Compare two to five players')
     @app_commands.describe(
         member1='First player', member2='Second player',
+        member3='Optional third player', member4='Optional fourth player',
+        member5='Optional fifth player',
         timeframe='Time period filter', mode='Scoring mode',
         weekdays='Queens days: mon,wed, weekday, or weekend')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
     async def slash_queens_vs(
         self, interaction: discord.Interaction,
         member1: discord.Member, member2: discord.Member,
+        member3: Optional[discord.Member] = None,
+        member4: Optional[discord.Member] = None,
+        member5: Optional[discord.Member] = None,
         timeframe: Optional[app_commands.Choice[str]] = None,
         mode: Optional[app_commands.Choice[str]] = None,
         weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
         try:
-            await self._cmd_vs(
-                _SlashCtx(interaction), QUEENS_GAME, member1, member2,
+            members = [
+                member for member in
+                (member1, member2, member3, member4, member5)
+                if member is not None
+            ]
+            await self._cmd_vs_members(
+                _SlashCtx(interaction), QUEENS_GAME, members,
                 *self._slash_choice_args(timeframe, mode),
                 *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
@@ -207,7 +217,8 @@ class QueensSlashMixin:
         await interaction.response.defer()
         try:
             await self._cmd_queens_stats_date(
-                _SlashCtx(interaction), date or dt.date.today().isoformat(),
+                _SlashCtx(interaction),
+                date or _queens_current_puzzle_date().isoformat(),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:

@@ -37,6 +37,10 @@ def _akari_results_time_sort_key(row):
     )
 
 
+def _akari_results_time_rank_key(row):
+    return int(getattr(row, 'time_seconds', 0))
+
+
 class ImplAkariCMixin:
     # ── Extended filter parsing (weekdays / date bounds / +recalculate) ──
 
@@ -201,4 +205,6 @@ class ImplAkariCMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
             sort_key_fn=(
-                _akari_results_time_sort_key if sort_by_time else None))
+                _akari_results_time_sort_key if sort_by_time else None),
+            rank_key_fn=(
+                _akari_results_time_rank_key if sort_by_time else None))

@@ -80,7 +80,7 @@ from tle.cogs._minigame_queens_cog import (  # noqa: F401
     _AKARI_DIFF_MAX_BYTES, _IMPORT_BATCH_SIZE, _IMPORT_RATE_DELAY,
     _parse_queens_date, _queens_puzzle_number_for_date,
     _queens_date_for_puzzle_number, _parse_queens_date_or_number,
-    _queens_puzzle_numbers_for_date,
+    _queens_current_puzzle_date, _queens_puzzle_numbers_for_date,
     _queens_puzzle_date_text, _queens_result_message_id, _format_queens_date,
     _is_queens_link_anonymous, _queens_public_link_name,
     _split_queens_anonymous_flag, _is_queens_anonymous_modal_request,
@@ -102,6 +102,7 @@ from tle.cogs._mgimpl_queenstextb import ImplQueensTextBMixin
 from tle.cogs._mgimpl_ingest import ImplIngestMixin
 from tle.cogs._mgimpl_import import ImplImportMixin
 from tle.cogs._mgimpl_sharedcmd import ImplSharedCmdMixin
+from tle.cogs._mgimpl_vs import ImplVsMixin
 from tle.cogs._mgimpl_akaria import ImplAkariAMixin
 from tle.cogs._mgimpl_akarib import ImplAkariBMixin
 from tle.cogs._mgimpl_akaric import ImplAkariCMixin
@@ -141,6 +142,7 @@ class Minigames(
     ImplIngestMixin,
     ImplImportMixin,
     ImplSharedCmdMixin,
+    ImplVsMixin,
     ImplAkariAMixin,
     ImplAkariBMixin,
     ImplAkariCMixin,

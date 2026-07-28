@@ -189,66 +189,6 @@ class ImplSharedCmdMixin:
             set_pagenum_footers=True, author_id=ctx.author.id,
         )
 
-    async def _cmd_vs(self, ctx, game, member1, member2, *args):
-        self._require_enabled(ctx.guild.id, game)
-        self._sync_minigame_results_for_read(ctx.guild.id, game)
-        try:
-            args, scoring_name, scoring = resolve_scoring(game, args)
-            args, weekdays = _split_queens_weekday_filter(args)
-            dlo, dhi, plo, phi = parse_date_args(args)
-        except ValueError as e:
-            raise MinigameCogError(str(e)) from e
-
-        rows1 = cf_common.user_db.get_minigame_results_for_user(
-            ctx.guild.id, game.name, member1.id, dlo, dhi, plo, phi)
-        rows2 = cf_common.user_db.get_minigame_results_for_user(
-            ctx.guild.id, game.name, member2.id, dlo, dhi, plo, phi)
-        rows1 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows1)
-        rows2 = self._filter_minigame_banned_rows(ctx.guild.id, game, rows2)
-        rows1 = _filter_queens_weekday_rows(rows1, weekdays)
-        rows2 = _filter_queens_weekday_rows(rows2, weekdays)
-        stats = compute_vs(
-            rows1, rows2,
-            score_fn=scoring.score_matchup,
-            missing_is_loss=(
-                scoring.missing_is_loss
-                if scoring.missing_is_loss is not None
-                else game.missing_is_loss
-            ),
-            best_result_sort_key_fn=scoring.best_result_sort_key,
-            group_key_fn=scoring.result_group_key,
-            missing_result=(
-                scoring.missing_result
-                if scoring.missing_result is not None
-                else game.missing_result
-            ),
-        )
-        if stats['common_count'] == 0:
-            raise MinigameCogError(
-                f'These users have no {game.display_name} puzzles to compare.')
-
-        suffix_parts = []
-        if scoring_name:
-            suffix_parts.append(scoring_name.title())
-        weekday_label = _format_queens_weekday_filter(weekdays)
-        if weekday_label:
-            suffix_parts.append(weekday_label)
-        title_suffix = f' ({", ".join(suffix_parts)})' if suffix_parts else ''
-        name1 = self._minigame_public_user_name(ctx.guild, game, member1.id)
-        name2 = self._minigame_public_user_name(ctx.guild, game, member2.id)
-        description = '\n'.join([
-            f'`{name1}`: **{stats["score1"]:g}** points, **{stats["wins1"]}** wins',
-            f'`{name2}`: **{stats["score2"]:g}** points, **{stats["wins2"]}** wins',
-            f'Ties: **{stats["ties"]}**',
-            f'Puzzles: **{stats["common_count"]}**',
-        ])
-        embed = discord.Embed(
-            title=f'{game.display_name} Head to Head{title_suffix}',
-            description=description,
-            color=discord_common.random_cf_color(),
-        )
-        await ctx.send(embed=embed)
-
     async def _cmd_guessgame_matchups(self, ctx, member1, member2, *args):
         game = GUESSGAME_GAME
         self._require_enabled(ctx.guild.id, game)
@@ -365,6 +305,7 @@ class ImplSharedCmdMixin:
             best_result_sort_key_fn=scoring.best_result_sort_key,
             winner_result_sort_key_fn=scoring.winner_result_sort_key,
             group_key_fn=scoring.result_group_key,
+            min_participants=(2 if game.name == QUEENS_GAME.name else 1),
         )
         if not winners:
             raise MinigameCogError(
@@ -410,4 +351,3 @@ class ImplSharedCmdMixin:
         await ctx.send(embed=discord_common.embed_success(
             f'Removed {game.display_name} result for '
             f'`{_safe_member_name(member)}` on puzzle `{puzzle_id}`.'))
-

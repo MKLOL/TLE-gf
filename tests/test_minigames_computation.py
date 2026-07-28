@@ -208,6 +208,21 @@ class TestComputation:
         result = compute_top(rows, is_eligible=lambda row: row.accuracy > 0)
         assert result == [('10', 1)]
 
+    def test_top_can_ignore_solo_puzzles(self):
+        rows = [
+            _row(1, 10, '2026-03-26', True, 60, number=445),
+            _row(2, 10, '2026-03-27', True, 55, number=446),
+            _row(3, 20, '2026-03-27', True, 65, number=446),
+        ]
+        assert compute_top(rows, min_participants=2) == [('10', 1)]
+
+    def test_top_participant_count_deduplicates_repeat_submissions(self):
+        rows = [
+            _row(1, 10, '2026-03-26', True, 60, number=445),
+            _row(2, 10, '2026-03-26', True, 55, number=445),
+        ]
+        assert compute_top(rows, min_participants=2) == []
+
     def test_resolve_scoring_uses_akari_raw_variant(self):
         args, scoring_name, scoring = resolve_scoring(AKARI_GAME, ('week', 'raw'))
         assert args == ('week',)

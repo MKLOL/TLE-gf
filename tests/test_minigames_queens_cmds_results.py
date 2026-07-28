@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from tle import constants
+from tle.cogs import _mgcmds_queens as queens_cmds_module
 from tle.cogs import minigames as minigames_module
 from tle.util import codeforces_common as cf_common
 from tle.util.db.user_db_conn import namedtuple_factory
@@ -61,6 +62,45 @@ from tests.minigames_test_utils import (
 
 
 class TestQueensCommandsResults(_QueensCommandsBase):
+    def test_current_puzzle_date_uses_pacific_reset(self):
+        before_summer_reset = dt.datetime(
+            2026, 7, 29, 6, 59, tzinfo=dt.timezone.utc)
+        at_summer_reset = before_summer_reset + dt.timedelta(minutes=1)
+        before_winter_reset = dt.datetime(
+            2026, 1, 15, 7, 59, tzinfo=dt.timezone.utc)
+        at_winter_reset = before_winter_reset + dt.timedelta(minutes=1)
+
+        assert minigames_module._queens_current_puzzle_date(
+            before_summer_reset) == dt.date(2026, 7, 28)
+        assert minigames_module._queens_current_puzzle_date(
+            at_summer_reset) == dt.date(2026, 7, 29)
+        assert minigames_module._queens_current_puzzle_date(
+            before_winter_reset) == dt.date(2026, 1, 14)
+        assert minigames_module._queens_current_puzzle_date(
+            at_winter_reset) == dt.date(2026, 1, 15)
+
+    def test_bare_results_uses_active_pacific_date(self, monkeypatch):
+        cog = Minigames(bot=None)
+        captured = {}
+
+        async def extract_filters(_ctx, _args):
+            return [], None, None, None, None
+
+        async def capture_results(_ctx, date_arg, **_kwargs):
+            captured['date'] = date_arg
+
+        monkeypatch.setattr(
+            queens_cmds_module, '_queens_current_puzzle_date',
+            lambda: dt.date(2026, 7, 28))
+        monkeypatch.setattr(
+            cog, '_extract_queens_rating_filters', extract_filters)
+        monkeypatch.setattr(cog, '_cmd_queens_stats_date', capture_results)
+
+        asyncio.run(Minigames.queens_results.__wrapped__(
+            cog, SimpleNamespace()))
+
+        assert captured['date'] == '2026-07-28'
+
     def test_queens_rating_filters_reject_decay(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
@@ -169,15 +209,31 @@ class TestQueensCommandsResults(_QueensCommandsBase):
             guild, [row], 'Queens Results',
             puzzle_info={
                 '300': minigames_module._PuzzlePlayerInfo(
-                    pre_rating=1200.0, delta=10.0),
+                    pre_rating=1200.0, delta=10.0, performance=1412.4),
             },
             registrants={'300'},
             identity_fn=lambda _guild, _row: 'Alice LinkedIn')
 
         assert captured['header'] == (
-            '#', 'Name', 'LinkedIn', 'Time', '\N{INCREMENT}')
+            '#', 'Name', 'LinkedIn', 'Time', 'Perf', '\N{INCREMENT}')
         assert captured['rows'] == [
-            (1, 'Alice (1200 E)', 'Alice LinkedIn', '0:05', '+10')]
+            (1, 'Alice (1200 E)', 'Alice LinkedIn', '0:05', '1412', '+10')]
+
+    def test_queens_results_equal_times_share_rank(self):
+        guild = _FakeGuild(100, members=[
+            _FakeDiscordMember(300, 'alice', 'Alice'),
+            _FakeDiscordMember(301, 'bob', 'Bob'),
+            _FakeDiscordMember(302, 'cara', 'Cara'),
+        ])
+        rows = [
+            _row(1, 300, '2026-06-08', True, 5, 100, 769),
+            _row(2, 301, '2026-06-08', True, 8, 100, 769),
+            _row(3, 302, '2026-06-08', False, 5, 0, 769),
+        ]
+        table_rows = minigames_module._queens_results_table_rows(
+            guild, rows,
+            identity_fn=lambda _guild, row: f'LinkedIn {row.user_id}')
+        assert [row[0] for row in table_rows] == [1, 1, 3]
 
     def test_queens_stats_keeps_number_args_as_personal_filters(
             self, db, monkeypatch):
@@ -324,10 +380,14 @@ class TestQueensCommandsResults(_QueensCommandsBase):
             100, 'queens', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
+        db.set_minigame_player_link(
+            100, 'queens', bob.id, 'Bob LinkedIn',
+            normalize_queens_name('Bob LinkedIn'), None, 1.0, bob.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 10, False, 0)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 5, True, 100)
         self._save_queens_result(db, 3, alice.id, '2026-06-09', 12, True, 100)
         self._save_queens_result(db, 4, bob.id, '2026-06-09', 4, False, 0)
+        self._save_queens_result(db, 5, alice.id, '2026-06-10', 3, True, 100)
 
         pages = []
         monkeypatch.setattr(
@@ -338,5 +398,5 @@ class TestQueensCommandsResults(_QueensCommandsBase):
 
         assert len(pages) == 1
         embed = pages[0][1]
-        assert '`Alice` — **2** wins' in embed.description
-        assert '`Bob`' not in embed.description
+        assert '`Bob` — **2** wins' in embed.description
+        assert '`Alice`' not in embed.description

@@ -11,6 +11,7 @@ import hashlib
 import re
 from collections import namedtuple
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -47,6 +48,7 @@ _QUEENS_ANONYMOUS_LABEL = 'Anonymous'
 _QUEENS_ANONYMOUS_FLAGS = {'+anon', '+anonymous'}
 _QUEENS_ANCHOR_DATE = dt.date(2026, 6, 8)
 _QUEENS_ANCHOR_NUMBER = 769
+_QUEENS_TIME_ZONE = ZoneInfo('America/Los_Angeles')
 
 _QUEENS_ADMINS_KEY = 'queens_admin_user_ids'
 # Backfill JSON files can be much larger (years of history × many
@@ -98,6 +100,13 @@ def _parse_queens_date_or_number(value):
         if text.isdigit():
             return _queens_date_for_puzzle_number(int(text))
         raise
+
+
+def _queens_current_puzzle_date(now=None):
+    """Return the active LinkedIn puzzle date at midnight Pacific Time."""
+    if now is None:
+        now = dt.datetime.now(dt.timezone.utc)
+    return now.astimezone(_QUEENS_TIME_ZONE).date()
 
 
 def _queens_puzzle_numbers_for_date(puzzle_date):

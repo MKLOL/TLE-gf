@@ -10,7 +10,6 @@ function through ``_mg()`` so the patch takes effect.
 
 import datetime as dt
 import io
-from collections import namedtuple
 
 import cairo
 import discord
@@ -20,12 +19,17 @@ gi.require_version('PangoCairo', '1.0')
 from gi.repository import Pango, PangoCairo
 
 from tle.util import codeforces_common as cf_common
-from tle.util import table
 from tle.util.akari_rating import rank_for_rating
-from tle.cogs._minigame_common import format_duration
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
-from tle.cogs._minigame_table_cells import (
-    _PreserveSuffixText, _draw_table_cell,
+from tle.cogs._minigame_table_cells import _draw_table_cell
+from tle.cogs._minigame_result_rows import (  # noqa: F401
+    _PuzzlePlayerInfo,
+    _format_akari_result_status,
+    _sort_akari_puzzle_results,
+    _akari_puzzle_table_rows,
+    _format_akari_puzzle_table,
+    _queens_results_table_rows,
+    _queens_result_sort_key,
 )
 
 
@@ -41,9 +45,9 @@ _AKARI_IMAGE_COLUMN_MARGIN = 10
 _AKARI_RATING_COLS = (54, 300, 260, 150, 96)
 _AKARI_WEEKLY_COLS = (54, 360, 340, 106)
 _AKARI_PUZZLE_COLS = (54, 300, 260, 150, 96)
-_AKARI_PUZZLE_DELTA_COLS = (54, 316, 230, 90, 90, 80)
+_AKARI_PUZZLE_DELTA_COLS = (54, 280, 200, 80, 80, 100, 66)
 _QUEENS_RESULTS_COLS = (54, 360, 340, 106)
-_QUEENS_RESULTS_DELTA_COLS = (54, 330, 320, 90, 66)
+_QUEENS_RESULTS_DELTA_COLS = (54, 300, 280, 90, 80, 56)
 
 _AKARI_IMAGE_FONTS = [
     'Noto Sans',
@@ -66,12 +70,6 @@ _SMOKE_WHITE = (250, 250, 250)
 # Same per-page count as ``;handles updates`` — embed descriptions cap at 4096
 # chars so 15 contest lines (~80 chars each) leave plenty of headroom.
 _AKARI_HISTORY_PER_PAGE = 15
-
-# Per-puzzle table annotation for one opted-in player: pre-puzzle rating and
-# the day's delta (contest + transfer share).  Built from a single full-history
-# replay so a stats request only costs one ``compute_ratings`` pass.
-_PuzzlePlayerInfo = namedtuple('_PuzzlePlayerInfo', 'pre_rating delta')
-
 
 def _maybe_parse_puzzle_selector(arg):
     """Resolve a single ``;akari stats`` argument into a puzzle/day selector.
@@ -103,83 +101,6 @@ def _maybe_parse_puzzle_selector(arg):
         return None
     day = dt.datetime.fromtimestamp(day_start).date()
     return ('day', day)
-
-
-def _format_akari_result_status(row):
-    """Accuracy cell for the per-puzzle table.
-
-    Uses ``100%`` instead of the word ``perfect`` so the cell stays narrow;
-    time lives in its own column next to it.
-    """
-    pct = 100 if row.is_perfect else int(row.accuracy)
-    return f'{pct}%'
-
-
-def _sort_akari_puzzle_results(rows, *, sort_key_fn=None):
-    if sort_key_fn is not None:
-        return sorted(rows, key=sort_key_fn)
-    return sorted(
-        rows,
-        key=lambda row: (
-            -int(bool(row.is_perfect)),
-            -int(getattr(row, 'accuracy', 0)),
-            int(getattr(row, 'time_seconds', 0)),
-            int(getattr(row, 'message_id', 0)),
-        ),
-    )
-
-
-def _akari_puzzle_table_rows(guild, rows, *, puzzle_info=None,
-                             registrants=None, identity_fn=None,
-                             sort_key_fn=None):
-    """Build display rows for a per-puzzle table.
-
-    When ``puzzle_info`` and ``registrants`` are both supplied, each opted-in
-    user's name cell gets ``(<pre-rating> <tier>)`` appended and a signed delta
-    cell (``+12`` / ``-8``) is included as the 5th column.  Unregistered users
-    get the plain name and an empty delta (privacy: we don't surface their
-    rating or its change).  Without ``puzzle_info`` the rows are 4-tuples so
-    the un-annotated text/image paths stay unchanged.
-    """
-    if identity_fn is None:
-        identity_fn = lambda g, row: _safe_cf_handle(g, row.user_id)
-    annotated = puzzle_info is not None and registrants is not None
-    result = []
-    for index, row in enumerate(
-            _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn),
-            start=1):
-        name = _safe_user_name(guild, row.user_id)
-        delta_cell = ''
-        if (annotated
-                and row.user_id in registrants
-                and row.user_id in puzzle_info):
-            info = puzzle_info[row.user_id]
-            r = round(info.pre_rating)
-            name = _PreserveSuffixText(
-                name, f' ({r} {rank_for_rating(r).title_abbr})')
-            delta_cell = f'{round(info.delta):+d}'
-        cells = [
-            index,
-            name,
-            identity_fn(guild, row),
-            _format_akari_result_status(row),
-            format_duration(row.time_seconds),
-        ]
-        if annotated:
-            cells.append(delta_cell)
-        result.append(tuple(cells))
-    return result
-
-
-def _format_akari_puzzle_table(guild, rows):
-    style = table.Style('{:>}  {:<}  {:<}  {:<}  {:>}')
-    t = table.Table(style)
-    t += table.Header('#', 'Name', 'Handle', 'Result', 'Time')
-    t += table.Line()
-
-    for row in _akari_puzzle_table_rows(guild, rows):
-        t += table.Data(*row)
-    return str(t)
 
 
 def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
@@ -273,12 +194,13 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
                                        *, puzzle_info=None, registrants=None,
                                        identity_label='Handle',
                                        identity_fn=None,
-                                       sort_key_fn=None):
+                                       sort_key_fn=None, rank_key_fn=None):
     rows = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
     displayed = rows[:_AKARI_IMAGE_MAX_ROWS]
     displayed_rows = _akari_puzzle_table_rows(
         guild, displayed, puzzle_info=puzzle_info, registrants=registrants,
-        identity_fn=identity_fn, sort_key_fn=sort_key_fn)
+        identity_fn=identity_fn, sort_key_fn=sort_key_fn,
+        rank_key_fn=rank_key_fn)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
     if annotated:
@@ -293,11 +215,11 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
     if annotated:
-        header = ('#', 'Name', identity_label, 'Result', 'Time', '\N{INCREMENT}')
+        header = (
+            '#', 'Name', identity_label, 'Result', 'Time', 'Perf',
+            '\N{INCREMENT}')
         cols = _AKARI_PUZZLE_DELTA_COLS
-        # Time and Δ both carry numeric content — right-align them so values
-        # line up at the column's right edge.
-        right_align_cols = (0, 4, 5)
+        right_align_cols = (0, 4, 5, 6)
     else:
         header = ('#', 'Name', identity_label, 'Result', 'Time')
         cols = _AKARI_PUZZLE_COLS
@@ -308,51 +230,21 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
         right_align_cols=right_align_cols, row_colors=row_colors)
 
 
-def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
-                               registrants=None, identity_fn=None,
-                               name_fn=None, sort_key_fn=None):
-    if identity_fn is None:
-        identity_fn = lambda _g, row: getattr(row, 'user_id', '-')
-    if name_fn is None:
-        name_fn = lambda g, row: _safe_user_name(g, row.user_id)
-    annotated = puzzle_info is not None and registrants is not None
-    result = []
-    for index, row in enumerate(
-            _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn),
-            start=1):
-        name = name_fn(guild, row)
-        delta_cell = ''
-        if (annotated
-                and row.user_id in registrants
-                and row.user_id in puzzle_info):
-            info = puzzle_info[row.user_id]
-            r = round(info.pre_rating)
-            name = _PreserveSuffixText(
-                name, f' ({r} {rank_for_rating(r).title_abbr})')
-            delta_cell = f'{round(info.delta):+d}'
-        cells = [
-            index,
-            name,
-            identity_fn(guild, row),
-            format_duration(row.time_seconds),
-        ]
-        if annotated:
-            cells.append(delta_cell)
-        result.append(tuple(cells))
-    return result
-
-
 def _get_queens_results_table_image_file(guild, rows, title,
                                          *, puzzle_info=None, registrants=None,
                                          identity_label='LinkedIn',
                                          identity_fn=None,
                                          name_fn=None,
-                                         sort_key_fn=None):
+                                         sort_key_fn=None,
+                                         rank_key_fn=None):
+    if sort_key_fn is None:
+        sort_key_fn = _queens_result_sort_key
     rows = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
     displayed = rows[:_AKARI_IMAGE_MAX_ROWS]
     displayed_rows = _queens_results_table_rows(
         guild, displayed, puzzle_info=puzzle_info, registrants=registrants,
-        identity_fn=identity_fn, name_fn=name_fn, sort_key_fn=sort_key_fn)
+        identity_fn=identity_fn, name_fn=name_fn, sort_key_fn=sort_key_fn,
+        rank_key_fn=rank_key_fn)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
     if annotated:
@@ -366,9 +258,10 @@ def _get_queens_results_table_image_file(guild, rows, title,
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
     if annotated:
-        header = ('#', 'Name', identity_label, 'Time', '\N{INCREMENT}')
+        header = (
+            '#', 'Name', identity_label, 'Time', 'Perf', '\N{INCREMENT}')
         cols = _QUEENS_RESULTS_DELTA_COLS
-        right_align_cols = (0, 3, 4)
+        right_align_cols = (0, 3, 4, 5)
     else:
         header = ('#', 'Name', identity_label, 'Time')
         cols = _QUEENS_RESULTS_COLS

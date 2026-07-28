@@ -340,7 +340,8 @@ def compute_longest_streak(rows, weekdays=None):
 
 
 def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None,
-                winner_result_sort_key_fn=None, group_key_fn=None):
+                winner_result_sort_key_fn=None, group_key_fn=None,
+                min_participants=1):
     if is_eligible is None:
         is_eligible = default_is_eligible_winner
     if best_result_sort_key_fn is None:
@@ -357,7 +358,13 @@ def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None,
             best_by_user_puzzle[key] = row
 
     best_per_puzzle = {}
+    participants_per_puzzle = {}
+    for _, puzzle_key in best_by_user_puzzle:
+        participants_per_puzzle[puzzle_key] = (
+            participants_per_puzzle.get(puzzle_key, 0) + 1)
     for (_, puzzle_key), row in best_by_user_puzzle.items():
+        if participants_per_puzzle[puzzle_key] < min_participants:
+            continue
         if not is_eligible(row):
             continue
         entry = best_per_puzzle.get(puzzle_key)

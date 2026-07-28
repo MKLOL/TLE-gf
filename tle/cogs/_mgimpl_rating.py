@@ -191,6 +191,7 @@ class ImplRatingMixin:
                     info[user_id] = _PuzzlePlayerInfo(
                         pre_rating=point.rating - point.delta,
                         delta=point.delta,
+                        performance=point.performance,
                     )
                     break
         return info
@@ -220,4 +221,3 @@ class ImplRatingMixin:
         ]
 
     # ── Queens helpers ─────────────────────────────────────────────────
-
