@@ -135,7 +135,7 @@ class TestQueensImportMigration:
         ])
         ctx = SimpleNamespace(
             guild=guild,
-            author=_FakeDiscordMember(999, 'bot', 'Bot'),
+            author=guild.get_member(300),
             channel=_FakeChannel(200),
             message=SimpleNamespace(id=555),
         )
@@ -148,13 +148,13 @@ class TestQueensImportMigration:
                 'Unknown Person\n'
                 '\U0001f913\U0001f48e No hints & no mistakes!\n'
                 '0:05\n'
-            ), skip_importer=True)
+            ))
 
         new_resolved, new_unresolved = cog._filter_new_queens_entries(
             100, preview)
         preview = preview._replace(
             resolved=new_resolved, unresolved=new_unresolved)
-        saved = cog._save_queens_import(ctx, preview, skip_wipe=True)
+        saved = cog._save_queens_import(ctx, preview)
 
         assert saved.resolved == 1
         assert saved.unresolved == 1

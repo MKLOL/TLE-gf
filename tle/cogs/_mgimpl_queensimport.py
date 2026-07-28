@@ -31,29 +31,22 @@ logger = logging.getLogger(__name__)
 
 
 class ImplQueensImportMixin:
-    def _resolve_queens_leaderboard(self, ctx, leaderboard, *,
-                                    skip_importer=False):
+    def _resolve_queens_leaderboard(self, ctx, leaderboard):
         """Resolve a parsed leaderboard into rated rows + unresolved names.
 
-        ``skip_importer=True`` is the bot-driven mode used by ``;queens play``
-        / ``;queens update``: no Discord user is treated as the importer, and
-        the "You" row (the bot's own scraper-paced solve) is dropped on sight
-        so it never enters the rating pool.  The default ``False`` is the
-        manual ``;queens import`` paste path — a human ran the command, their
-        Discord-side player_link supplies the "You" row's identity.
+        A manual import's ``You`` row belongs to the command author, whose
+        registered Queens name supplies its external identity.
         """
         entries = parse_queens_leaderboard(leaderboard)
         if not entries:
             raise MinigameCogError('No LinkedIn Queens leaderboard rows found.')
 
-        importer_link = None
-        if not skip_importer:
-            importer_link = cf_common.user_db.get_minigame_player_link(
-                ctx.guild.id, QUEENS_GAME.name, ctx.author.id)
-            if importer_link is None:
-                raise MinigameCogError(
-                    'Register the importer with `;queens register` before '
-                    'importing LinkedIn Queens leaderboard results.')
+        importer_link = cf_common.user_db.get_minigame_player_link(
+            ctx.guild.id, QUEENS_GAME.name, ctx.author.id)
+        if importer_link is None:
+            raise MinigameCogError(
+                'Register the importer with `;queens register` before '
+                'importing LinkedIn Queens leaderboard results.')
 
         resolved = []
         unresolved = []
@@ -62,9 +55,6 @@ class ImplQueensImportMixin:
         for entry in entries:
             normalized = normalize_queens_name(entry.linkedin_name)
             if entry.is_you:
-                if skip_importer:
-                    # Bot's own row — never imported.
-                    continue
                 link = importer_link
             else:
                 link = cf_common.user_db.get_minigame_player_link_by_name(
@@ -95,12 +85,11 @@ class ImplQueensImportMixin:
 
         return resolved, unresolved
 
-    def _make_queens_import_preview(self, ctx, date_text, leaderboard, *,
-                                    skip_importer=False):
+    def _make_queens_import_preview(self, ctx, date_text, leaderboard):
         puzzle_date = _parse_queens_date(date_text)
         puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
         resolved, unresolved = self._resolve_queens_leaderboard(
-            ctx, leaderboard, skip_importer=skip_importer)
+            ctx, leaderboard)
         if not resolved and not unresolved:
             raise MinigameCogError(
                 'No leaderboard rows matched Queens players.')
@@ -181,8 +170,7 @@ class ImplQueensImportMixin:
 
         return new_resolved, new_unresolved
 
-    def _save_queens_import(self, ctx, preview, *, skip_wipe=True):
-        del skip_wipe
+    def _save_queens_import(self, ctx, preview):
         new_resolved, new_unresolved = self._filter_new_queens_entries(
             ctx.guild.id, preview)
         preview = preview._replace(
@@ -387,4 +375,3 @@ class ImplQueensImportMixin:
             f'Removed {QUEENS_GAME.display_name} result for '
             f'`{label}` on #{_queens_puzzle_number_for_date(parsed_date)} '
             f'{parsed_date.isoformat()}.'))
-

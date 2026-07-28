@@ -10,7 +10,7 @@ imports by name or monkeypatches via ``tle.cogs.minigames``.
 import logging
 
 # Module objects / names the test suite patches as attributes of this module
-# (``minigames_module.cairo``/``Pango``/``PangoCairo``/``discord``/``ZoneInfo``);
+# (``minigames_module.cairo``/``Pango``/``PangoCairo``/``discord``);
 # importing them here makes those names resolve to the shared module objects, so
 # the patches propagate to the table renderers in ``_minigame_tables``.  They are
 # unused in this module's own body, hence the per-line F401 suppressions — keep
@@ -22,8 +22,6 @@ import gi
 gi.require_version('Pango', '1.0')
 gi.require_version('PangoCairo', '1.0')
 from gi.repository import Pango, PangoCairo  # noqa: F401
-from zoneinfo import ZoneInfo  # noqa: F401
-
 from discord.ext import commands
 
 from tle.util import discord_common
@@ -42,7 +40,7 @@ from tle.cogs._minigame_common import normalize_puzzle_date  # noqa: F401
 from tle.cogs._minigame_helpers import (  # noqa: F401
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
     akari_mod_only,
-    _FollowupChannel, _SlashCtx, _ScheduledCtx,
+    _FollowupChannel, _SlashCtx,
     _safe_member_name, _safe_user_name, _safe_cf_handle, _legend_name_for,
     _format_score, _format_akari_history_line, _format_minigame_history_line,
     _format_akari_ban_line,
@@ -74,29 +72,19 @@ from tle.cogs._minigame_queens_filters import (  # noqa: F401
 )
 from tle.cogs._minigame_queens_cog import (  # noqa: F401
     _QueensResolvedEntry, _QueensImportPreview, _QueensImportSaveResult,
-    _QueensBackfillResult, _QueensPendingRegistration,
+    _QueensBackfillResult,
     _QueensAnonymousRegisterModal, _QueensAnonymousRegisterView,
-    _QUEENS_CONNECTION_ACCOUNT_KEY, _QUEENS_DEFAULT_CONNECTION_ACCOUNT,
     _QUEENS_ANONYMOUS_LINK_MARKER, _QUEENS_ANONYMOUS_LABEL,
-    _QUEENS_ANONYMOUS_FLAGS, _QUEENS_PENDING_REGISTRATION_DELAY,
-    _QUEENS_CONNECT_TIMEOUT, _QUEENS_IMPORTER_KEY, _QUEENS_LINKEDIN_NAME_KEY,
-    _QUEENS_ADMINS_KEY, _QUEENS_STATE_PATH_KEY, _QUEENS_UPDATE_THROTTLE_PREFIX,
-    _QUEENS_UPDATE_THROTTLE_SECONDS, _QUEENS_DAILY_UPDATE_LAST_PREFIX,
-    _QUEENS_DAILY_UPDATE_CHECK_INTERVAL, _QUEENS_DAILY_UPDATE_PRECISE_WINDOW,
-    _QUEENS_DAILY_UPDATE_TIME, _QUEENS_DAILY_UPDATE_TZ,
-    _QUEENS_AUTO_PLAY_MIN_SECONDS, _QUEENS_SCRAPER_TIMEOUT,
-    _QUEENS_WHOAMI_TIMEOUT, _QUEENS_PLAYWRIGHT_PLATFORM,
-    _QUEENS_STATE_MAX_BYTES, _QUEENS_BACKFILL_MAX_BYTES,
-    _QUEENS_HISTORY_PER_PAGE, _QUEENS_SCRAPER_SCRIPT, _QUEENS_DEFAULT_STATE_PATH,
+    _QUEENS_ANONYMOUS_FLAGS, _QUEENS_ADMINS_KEY,
+    _QUEENS_BACKFILL_MAX_BYTES, _QUEENS_HISTORY_PER_PAGE,
     _AKARI_DIFF_MAX_BYTES, _IMPORT_BATCH_SIZE, _IMPORT_RATE_DELAY,
     _parse_queens_date, _queens_puzzle_number_for_date,
     _queens_date_for_puzzle_number, _parse_queens_date_or_number,
-    _queens_update_target_date, _queens_daily_update_target_datetime,
-    _parse_queens_update_args, _queens_puzzle_numbers_for_date,
+    _queens_puzzle_numbers_for_date,
     _queens_puzzle_date_text, _queens_result_message_id, _format_queens_date,
     _is_queens_link_anonymous, _queens_public_link_name,
     _split_queens_anonymous_flag, _is_queens_anonymous_modal_request,
-    _clean_queens_linkedin_name, _split_queens_connection_account_text,
+    _clean_queens_linkedin_name,
     _format_queens_result, _queens_best_results_by_date, _queens_streak_info,
 )
 
@@ -108,7 +96,6 @@ from tle.cogs._mgimpl_queensregb import ImplQueensRegBMixin
 from tle.cogs._mgimpl_queensimport import ImplQueensImportMixin
 from tle.cogs._mgimpl_queenscmd import ImplQueensCmdMixin
 from tle.cogs._mgimpl_queenscmdb import ImplQueensCmdBMixin
-from tle.cogs._mgimpl_queensscraper import ImplQueensScraperMixin
 from tle.cogs._mgimpl_queensbackfill import ImplQueensBackfillMixin
 from tle.cogs._mgimpl_queenstext import ImplQueensTextMixin
 from tle.cogs._mgimpl_queenstextb import ImplQueensTextBMixin
@@ -148,7 +135,6 @@ class Minigames(
     ImplQueensImportMixin,
     ImplQueensCmdMixin,
     ImplQueensCmdBMixin,
-    ImplQueensScraperMixin,
     ImplQueensBackfillMixin,
     ImplQueensTextMixin,
     ImplQueensTextBMixin,
@@ -173,9 +159,6 @@ class Minigames(
         self._import_tasks = {}   # (guild_id, game_name) -> asyncio.Task
         self._import_status = {}  # (guild_id, game_name) -> dict
         self._queens_pending_imports = {}  # (guild_id, user_id) -> _QueensImportPreview
-        self._queens_pending_registrations = {}
-        self._queens_connect_tasks = {}
-        self._queens_update_timers = {}
 
     @discord_common.send_error_if(MinigameCogError)
     async def cog_command_error(self, ctx, error):

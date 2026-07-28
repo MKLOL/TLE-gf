@@ -56,7 +56,7 @@ separate repo now; isolate in-repo first (~4–6 days, ~80% of the value).**
 - **Shared host tables**: `user_handle` (CF handle display in leaderboards,
   `minigames.py:292`), `guild_config` (feature flags + queens settings —
   accessors defined in the *starboard* mixin, `starboard_db.py:574-590`),
-  shared `kvs` table (`queens_update_throttle:*`, `mg_import_reply:*` keys).
+  shared `kvs` table (`mg_import_reply:*` keys).
 - **Raw transaction control on the shared connection**:
   `cf_common.user_db.conn.commit()` / `.rollback()` at
   `minigames.py:3283-3318,4462`. A failed minigame import rolls back *any*
@@ -73,9 +73,7 @@ separate repo now; isolate in-repo first (~4–6 days, ~80% of the value).**
 - **Environment**: Cairo/Pango image rendering depends on
   `font_config.configure()` running before any Pango import
   (`tle/__main__.py:13-16`) + downloaded Noto fonts; matplotlib style is set
-  by the host. The Queens scraper is spawned via a repo-root-relative path
-  (`minigames.py:161-168` → `extra/queens_scrape.py`) that breaks in a
-  site-packages install; `;queens install` self-runs `pip install playwright`.
+  by the host.
 - `AKARI_*` tuning constants live in `tle/constants.py:34-53` but the rating
   engine already takes them as kwargs — only defaults need moving.
 

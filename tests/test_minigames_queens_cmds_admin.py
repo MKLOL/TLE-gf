@@ -110,37 +110,30 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         asyncio.run(modal.on_submit(interaction))
 
         row = db.get_minigame_player_link(100, 'queens', alice.id)
-        assert row is None
-        assert cog._queens_pending_registrations[('100', '300')].name == (
-            'Alice LinkedIn')
+        assert row.external_name == 'Alice LinkedIn'
+        assert row.external_url == (
+            minigames_module._QUEENS_ANONYMOUS_LINK_MARKER)
         assert captured['content'] is None
         assert captured['ephemeral'] is True
         assert 'Alice LinkedIn' in captured['embed'].description
 
-    def test_connection_set_requires_and_stores_profile_url(self, db, monkeypatch):
+    def test_queens_here_sets_channel(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
+        monkeypatch.setattr(
+            minigames_module.discord_common, 'embed_success',
+            lambda desc: SimpleNamespace(description=desc))
         db.set_guild_config(100, 'queens', '1')
         mod = _FakeDiscordMember(999, 'mod', 'Mod')
-        guild = _FakeGuild(100, members=[mod])
+        channel = _FakeChannel(777)
+        guild = _FakeGuild(100, members=[mod], channels=[channel])
         ctx = self._make_ctx(guild, mod)
-        cog = Minigames(bot=None)
+        ctx.channel = channel
 
-        with pytest.raises(MinigameCogError, match='profile URL'):
-            asyncio.run(Minigames.queens_connection_set.__wrapped__(
-                cog, ctx, linkedin='Linked User'))
+        asyncio.run(Minigames.queens_here.__wrapped__(
+            Minigames(bot=None), ctx))
 
-        asyncio.run(Minigames.queens_connection_set.__wrapped__(
-            cog, ctx,
-            linkedin='Linked User https://www.linkedin.com/in/linked/'))
-
-        account = cog._get_queens_connection_account(100)
-        assert account == {
-            'name': 'Linked User',
-            'url': 'https://www.linkedin.com/in/linked/',
-        }
-        instruction = cog._queens_connection_instruction(100)
-        assert 'https://www.linkedin.com/in/linked/' in instruction
-        assert 'Linked User' not in instruction
+        assert db.get_minigame_channel(100, 'queens') == '777'
+        assert ctx.sent['embed'] is not None
 
     def test_queens_admin_allowlist_management(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

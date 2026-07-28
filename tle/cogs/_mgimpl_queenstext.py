@@ -1,4 +1,4 @@
-"""Queens text-command bodies (admins/links/connection/ban/import) (Minigames cog impl mixin; see minigames.py)."""
+"""Queens text-command bodies (admins/links/ban/import)."""
 
 import logging
 import time
@@ -13,14 +13,12 @@ from tle.cogs._minigame_queens import (
     QUEENS_GAME,
 )
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, _safe_member_name,
-    _format_akari_ban_line,
+    MinigameCogError, _format_akari_ban_line,
 )
 from tle.cogs._minigame_queens_cog import (
     _QUEENS_ANONYMOUS_FLAGS, _QUEENS_HISTORY_PER_PAGE,
     _queens_public_link_name,
     _split_queens_anonymous_flag, _is_queens_anonymous_modal_request,
-    _split_queens_connection_account_text,
     _QueensAnonymousRegisterView,
 )
 from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
@@ -108,28 +106,6 @@ class ImplQueensTextMixin:
             self.bot, ctx.channel, pages, wait_time=300,
             set_pagenum_footers=True, author_id=ctx.author.id)
 
-    async def _cmd_queens_connection(self, ctx):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        account = self._get_queens_connection_account(ctx.guild.id)
-        if account is None:
-            raise MinigameCogError(
-                'No LinkedIn connection account configured yet.')
-        await ctx.send(embed=discord_common.embed_neutral(
-            self._queens_connection_instruction(ctx.guild.id)))
-
-    async def _cmd_queens_connection_set(self, ctx, linkedin):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        name, external_url = _split_queens_connection_account_text(linkedin)
-        self._set_queens_connection_account(ctx.guild.id, name, external_url)
-        await ctx.send(embed=discord_common.embed_success(
-            self._queens_connection_instruction(ctx.guild.id)))
-
-    async def _cmd_queens_connection_clear(self, ctx):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._clear_queens_connection_account(ctx.guild.id)
-        await ctx.send(embed=discord_common.embed_success(
-            'Cleared the LinkedIn Queens connection account.'))
-
     async def _cmd_queens_ban(self, ctx, member, reason):
         """Forward-only ban, mirroring Akari's: new results from the user are
         blocked at every entry point (imports, manual adds, channel shares)
@@ -210,4 +186,3 @@ class ImplQueensTextMixin:
             f'Added {saved.resolved} registered {QUEENS_GAME.display_name} '
             f'result(s) for #{preview.puzzle_number} '
             f'{preview.puzzle_date.isoformat()}.{unresolved}'))
-

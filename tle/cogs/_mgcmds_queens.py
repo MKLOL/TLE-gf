@@ -14,11 +14,6 @@ from tle.cogs._minigame_helpers import (
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
     _safe_member_name,
 )
-from tle.cogs._minigame_queens_cog import (
-    _QUEENS_UPDATE_THROTTLE_SECONDS,
-    _QUEENS_STATE_PATH_KEY, _QUEENS_DEFAULT_STATE_PATH,
-    _parse_queens_update_args,
-)
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -81,7 +76,7 @@ class QueensCmdsMixin:
         await self._cmd_queens_register_cmd(ctx, first, linkedin)
 
     @queens.command(name='set',
-                    brief='(Mod) Link a Discord user without LinkedIn verification',
+                    brief='(Mod) Overwrite a Discord user Queens name',
                     usage='[+anon] DiscordUser LinkedIn Name [+anon]')
     @queens_mod_only()
     async def queens_set(self, ctx, member: str = None, *,
@@ -103,64 +98,6 @@ class QueensCmdsMixin:
     async def queens_links(self, ctx):
         await self._cmd_queens_links(ctx)
 
-    @queens.group(name='connection', aliases=['account'],
-                  brief='Show or set the LinkedIn account players connect to',
-                  invoke_without_command=True)
-    async def queens_connection(self, ctx):
-        await self._cmd_queens_connection(ctx)
-
-    @queens_connection.command(name='set',
-                               brief='(Mod) Set the LinkedIn connection account',
-                               usage='LinkedIn Name profile_url')
-    @queens_mod_only()
-    async def queens_connection_set(self, ctx, *, linkedin: str):
-        await self._cmd_queens_connection_set(ctx, linkedin)
-
-    @queens_connection.command(name='clear',
-                               brief='(Mod) Clear the LinkedIn connection account')
-    @queens_mod_only()
-    async def queens_connection_clear(self, ctx):
-        await self._cmd_queens_connection_clear(ctx)
-
-    # ── Scraper-driven commands (login / play / update / settings) ─────
-
-    @queens.command(
-        name='install',
-        brief='(Mod) Install Playwright + Chromium for the scraper')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_install(self, ctx):
-        await self._cmd_queens_install(ctx)
-
-    @queens.command(
-        name='login',
-        brief='(Mod) Upload a fresh LinkedIn session file',
-        usage='[LinkedIn Name] (attach extra/.queens_state.json to the message)')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_login(self, ctx, *, linkedin_name: str = None):
-        await self._cmd_queens_login(ctx, linkedin_name)
-
-    @queens.command(
-        name='play',
-        brief='(Mod) Solve today\'s puzzle + refresh the leaderboard')
-    @queens_mod_only()
-    async def queens_play(self, ctx):
-        await self._cmd_queens_play(ctx)
-
-    @queens.command(
-        name='update',
-        brief='Refresh the LinkedIn Queens leaderboard '
-              f'(rate-limited to once per {_QUEENS_UPDATE_THROTTLE_SECONDS}s)',
-        usage='[+yesterday]')
-    async def queens_update(self, ctx, *args):
-        results_day = _parse_queens_update_args(args)
-        await self._cmd_queens_update(ctx, results_day=results_day)
-
-    @queens.command(
-        name='settings',
-        brief='Show the LinkedIn Queens scraper config for this guild')
-    async def queens_settings(self, ctx):
-        await self._cmd_queens_settings(ctx)
-
     @queens.command(
         name='backfill', aliases=['backill'],
         brief='(Mod) Backfill historical Queens results',
@@ -168,28 +105,6 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_backfill(self, ctx, target: str = None):
         await self._cmd_queens_backfill(ctx, target)
-
-    @queens.command(
-        name='state-path', aliases=['statepath'],
-        brief='(Mod) Override where the scraper looks for state.json',
-        usage='/abs/path/to/state.json | clear')
-    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def queens_state_path(self, ctx, *, path: str = None):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        if path is None:
-            raise MinigameCogError(
-                'Usage: `;queens state-path /abs/path/to/state.json` '
-                'or `;queens state-path clear`.')
-        if path.strip().lower() == 'clear':
-            cf_common.user_db.delete_guild_config(
-                ctx.guild.id, _QUEENS_STATE_PATH_KEY)
-            await ctx.send(embed=discord_common.embed_success(
-                f'Cleared the override. Default is `{_QUEENS_DEFAULT_STATE_PATH}`.'))
-            return
-        cf_common.user_db.set_guild_config(
-            ctx.guild.id, _QUEENS_STATE_PATH_KEY, path.strip())
-        await ctx.send(embed=discord_common.embed_success(
-            f'Scraper will use `{path.strip()}` for the session file.'))
 
     @queens.command(name='ban',
                     brief='(Mod) Block a user from Queens imports/ratings',

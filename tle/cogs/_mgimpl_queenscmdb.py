@@ -163,16 +163,9 @@ class ImplQueensCmdBMixin:
         rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
             ctx.guild.id, QUEENS_GAME.name)
         dates = {_format_queens_date(row) for row in rows}
-        account = self._get_queens_connection_account(ctx.guild.id)
-        account_text = 'not set'
-        if account is not None:
-            account_text = account['name']
-            if account.get('url'):
-                account_text += f' <{account["url"]}>'
         lines = [
             f'feature: `{"enabled" if enabled else "disabled"}`',
             'ingest: manual leaderboard import',
-            f'connection account: {account_text}',
             f'linked players: **{len(links)}**',
             f'results: **{len(rows)}** across **{len(dates)}** date(s)',
         ]
@@ -324,4 +317,3 @@ class ImplQueensCmdBMixin:
                 int(getattr(row, 'message_id', 0)),
             ))
         await ctx.send(file=discord_file)
-

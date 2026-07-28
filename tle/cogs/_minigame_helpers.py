@@ -153,20 +153,6 @@ class _SlashCtx:
         pass
 
 
-class _ScheduledCtx:
-    """Minimal ctx for scheduled jobs that send into a configured channel."""
-
-    def __init__(self, bot, guild, channel):
-        self.bot = bot
-        self.guild = guild
-        self.channel = channel
-        self.author = getattr(guild, 'me', None) or getattr(bot, 'user', None)
-        self.message = type('_Msg', (), {'id': f'scheduled:{guild.id}:{channel.id}'})()
-
-    async def send(self, content=None, *, embed=None, **kw):
-        return await self.channel.send(content, embed=embed, **kw)
-
-
 def _safe_user_name(guild, user_id):
     member = guild.get_member(int(user_id))
     if member is not None:

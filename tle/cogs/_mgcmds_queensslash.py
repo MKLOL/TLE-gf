@@ -73,7 +73,7 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='set', description='Set a Queens LinkedIn name without verification')
+    @queens_slash.command(name='set', description='Overwrite a member Queens name')
     @app_commands.describe(
         member='Discord member to set',
         linkedin_name='LinkedIn display name',
@@ -104,20 +104,6 @@ class QueensSlashMixin:
         ctx = _SlashCtx(interaction)
         try:
             await self._cmd_queens_unregister(ctx, member)
-        except Exception as _slash_exc:
-            await self._slash_handle_error(interaction, _slash_exc)
-
-    @queens_slash.command(name='update', description='Refresh the LinkedIn Queens leaderboard')
-    @app_commands.describe(yesterday='Fetch the Yesterday results tab')
-    async def slash_queens_update(
-        self, interaction: discord.Interaction,
-        yesterday: bool = False,
-    ):
-        await interaction.response.defer()
-        try:
-            await self._cmd_queens_update(
-                _SlashCtx(interaction),
-                results_day='yesterday' if yesterday else 'today')
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

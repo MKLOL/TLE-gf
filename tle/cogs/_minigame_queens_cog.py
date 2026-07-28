@@ -8,11 +8,9 @@ names the test suite imports.
 
 import datetime as dt
 import hashlib
-import pathlib
 import re
 from collections import namedtuple
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import discord
 
@@ -41,61 +39,16 @@ _QueensBackfillResult = namedtuple(
     '_QueensBackfillResult',
     'link matched saved skipped malformed',
 )
-_QueensPendingRegistration = namedtuple(
-    '_QueensPendingRegistration',
-    (
-        'guild member channel_id linked_by name normalized_name '
-        'anonymous created_at'
-    ),
-)
 
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _QUEENS_HISTORY_PER_PAGE = 15
-_QUEENS_CONNECTION_ACCOUNT_KEY = 'queens_connection_account'
-_QUEENS_DEFAULT_CONNECTION_ACCOUNT = {
-    'name': 'TLE Queens',
-    'url': 'https://www.linkedin.com/in/tle-queens-33a339415/',
-}
 _QUEENS_ANONYMOUS_LINK_MARKER = 'tle:queens:anonymous'
 _QUEENS_ANONYMOUS_LABEL = 'Anonymous'
 _QUEENS_ANONYMOUS_FLAGS = {'+anon', '+anonymous'}
-_QUEENS_PENDING_REGISTRATION_DELAY = 60
-_QUEENS_CONNECT_TIMEOUT = 90
 _QUEENS_ANCHOR_DATE = dt.date(2026, 6, 8)
 _QUEENS_ANCHOR_NUMBER = 769
 
-# Scraper config — stored per-guild in guild_config.
-#  - Discord user id of the importer (resolved from `;queens login` whoami)
-#  - Optional override for the storage_state.json path
-# Rate-limit bookkeeping for `;queens update` lives in kvs under
-# `queens_update_throttle:{guild_id}`.
-_QUEENS_IMPORTER_KEY = 'queens_importer_user'  # legacy — cleared on login
-_QUEENS_LINKEDIN_NAME_KEY = 'queens_linkedin_name'  # display only
 _QUEENS_ADMINS_KEY = 'queens_admin_user_ids'
-_QUEENS_STATE_PATH_KEY = 'queens_state_path'
-_QUEENS_UPDATE_THROTTLE_PREFIX = 'queens_update_throttle:'
-_QUEENS_UPDATE_THROTTLE_SECONDS = 60
-_QUEENS_DAILY_UPDATE_LAST_PREFIX = 'queens_daily_update_last:'
-_QUEENS_DAILY_UPDATE_CHECK_INTERVAL = 60
-_QUEENS_DAILY_UPDATE_PRECISE_WINDOW = 300
-_QUEENS_DAILY_UPDATE_TIME = '00:00:10'
-_QUEENS_DAILY_UPDATE_TZ = 'US/Pacific'
-_QUEENS_AUTO_PLAY_MIN_SECONDS = 180
-_QUEENS_SCRAPER_TIMEOUT = 480  # seconds — playwright start + delayed auto-play
-_QUEENS_WHOAMI_TIMEOUT = 60    # seconds — quick /in/me/ visit only
-# Bleeding-edge Ubuntu (26.04+) isn't in Playwright's platform support
-# matrix yet, so ``playwright install chromium`` refuses with
-# ``Playwright does not support chromium on ubuntuXX.04-x64``.  Overriding
-# to ubuntu24.04-x64 forces the install AND the runtime browser lookup to
-# use the LTS binary, whose glibc dependency is compatible with anything
-# newer.  Harmless on Ubuntu 24.04 itself (the natural platform).  May not
-# work on Ubuntu <22 — those hosts have an older glibc than the 24.04
-# binary expects; admin would need to install older Playwright manually.
-_QUEENS_PLAYWRIGHT_PLATFORM = 'ubuntu24.04-x64'
-# Tolerate a state file up to ~256KiB.  Real Playwright state.json files for
-# LinkedIn are ~10-30KiB; this gives generous headroom without inviting
-# someone to upload a giant attachment.
-_QUEENS_STATE_MAX_BYTES = 256 * 1024
 # Backfill JSON files can be much larger (years of history × many
 # players).  10 MiB covers any realistic LinkedIn export.
 _QUEENS_BACKFILL_MAX_BYTES = 10 * 1024 * 1024
@@ -105,14 +58,6 @@ _QUEENS_BACKFILL_MAX_BYTES = 10 * 1024 * 1024
 _AKARI_DIFF_MAX_BYTES = 25 * 1024 * 1024
 _IMPORT_BATCH_SIZE = 500
 _IMPORT_RATE_DELAY = 0.5
-# tle/cogs/_minigame_queens_cog.py → repo root → extra/queens_scrape.py
-_QUEENS_SCRAPER_SCRIPT = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / 'extra' / 'queens_scrape.py'
-)
-_QUEENS_DEFAULT_STATE_PATH = (
-    _QUEENS_SCRAPER_SCRIPT.parent / '.queens_state.json'
-)
 
 
 def _parse_queens_date(date_text):
@@ -153,34 +98,6 @@ def _parse_queens_date_or_number(value):
         if text.isdigit():
             return _queens_date_for_puzzle_number(int(text))
         raise
-
-
-def _queens_update_target_date(results_day):
-    today = dt.datetime.now(ZoneInfo(_QUEENS_DAILY_UPDATE_TZ)).date()
-    if results_day == 'yesterday':
-        return today - dt.timedelta(days=1)
-    return dt.datetime.now(dt.timezone.utc).date()
-
-
-def _queens_daily_update_target_datetime(now):
-    parts = [int(part) for part in _QUEENS_DAILY_UPDATE_TIME.split(':')]
-    hour, minute = parts[:2]
-    second = parts[2] if len(parts) > 2 else 0
-    return now.replace(hour=hour, minute=minute, second=second, microsecond=0)
-
-
-def _parse_queens_update_args(args):
-    results_day = 'today'
-    for arg in args:
-        text = str(arg).strip().casefold()
-        if text in ('+today', 'today'):
-            results_day = 'today'
-        elif text in ('+yesterday', '+yday', '+yestrday', 'yesterday'):
-            results_day = 'yesterday'
-        else:
-            raise MinigameCogError(
-                'Usage: `;queens update [+yesterday]`.')
-    return results_day
 
 
 def _queens_puzzle_numbers_for_date(puzzle_date):
@@ -252,18 +169,6 @@ def _clean_queens_linkedin_name(text):
     if not name:
         raise MinigameCogError('A LinkedIn display name is required.')
     return name
-
-
-def _split_queens_connection_account_text(text):
-    urls = _URL_RE.findall(text or '')
-    if not urls:
-        raise MinigameCogError(
-            'A LinkedIn profile URL is required for the connection account.')
-    name = _URL_RE.sub('', text or '').strip()
-    name = ' '.join(name.split())
-    if not name:
-        raise MinigameCogError('A LinkedIn display name is required.')
-    return name, urls[0]
 
 
 def _format_queens_result(entry, *, name_override=None):
