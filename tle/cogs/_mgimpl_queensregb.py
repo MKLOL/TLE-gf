@@ -2,6 +2,7 @@
 
 import logging
 import time
+from types import SimpleNamespace
 
 
 from tle.util import codeforces_common as cf_common
@@ -245,7 +246,9 @@ class ImplQueensRegBMixin:
             for row in cf_common.user_db.get_live_minigame_results_for_guild(
                 guild_id, QUEENS_GAME.name)
         }
-        saved = 0
+        hidden_ids = self._minigame_hidden_user_ids(
+            guild_id, QUEENS_GAME)
+        pending = []
         for row in cf_common.user_db.get_minigame_unresolved_results_for_guild(
                 guild_id, QUEENS_GAME.name):
             link = links_by_name.get(row.normalized_name)
@@ -255,8 +258,7 @@ class ImplQueensRegBMixin:
             # (imports, adds, channel shares), so any source row that exists
             # here predates the ban and keeps materializing.  Only the sticky
             # self opt-out suppresses projection.
-            if cf_common.user_db.is_minigame_opted_out(
-                    guild_id, QUEENS_GAME.name, link.user_id):
+            if str(link.user_id) in hidden_ids:
                 continue
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
             message_id = _queens_result_message_id(
@@ -266,7 +268,7 @@ class ImplQueensRegBMixin:
             if self._same_queens_materialized_result(
                     existing, row, link, puzzle_number, puzzle_date):
                 continue
-            cf_common.user_db.save_minigame_result(
+            pending.append((
                 message_id,
                 guild_id,
                 QUEENS_GAME.name,
@@ -278,10 +280,23 @@ class ImplQueensRegBMixin:
                 row.time_seconds,
                 row.is_perfect,
                 row.raw_content,
+            ))
+            existing_rows[(str(message_id), int(puzzle_number))] = (
+                SimpleNamespace(
+                    message_id=message_id,
+                    channel_id=row.channel_id,
+                    user_id=link.user_id,
+                    puzzle_number=puzzle_number,
+                    puzzle_date=_queens_puzzle_date_text(puzzle_date),
+                    accuracy=row.accuracy,
+                    time_seconds=row.time_seconds,
+                    is_perfect=row.is_perfect,
+                    raw_content=row.raw_content,
+                )
             )
-            existing_rows[(str(message_id), int(puzzle_number))] = row
-            saved += 1
-        return saved
+        if not pending:
+            return 0
+        return cf_common.user_db.save_minigame_results(pending)
 
     def _claim_queens_unresolved_results(self, guild_id, user_id,
                                          normalized_name):
@@ -290,4 +305,3 @@ class ImplQueensRegBMixin:
         del user_id
         self._sync_queens_materialized_results(guild_id, migrate_legacy=False)
         return len(rows)
-

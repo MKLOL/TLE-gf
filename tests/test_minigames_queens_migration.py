@@ -319,15 +319,50 @@ class TestQueensImportMigration:
         assert cog._sync_queens_materialized_results(100) == 1
         writes = []
 
-        def record_write(*args, **kwargs):
-            writes.append(args)
+        def record_write(rows):
+            writes.extend(rows)
             raise AssertionError('current projection row was rewritten')
 
-        monkeypatch.setattr(db, 'save_minigame_result', record_write)
+        monkeypatch.setattr(db, 'save_minigame_results', record_write)
 
         assert cog._sync_queens_materialized_results(
             100, migrate_legacy=False) == 0
         assert writes == []
+
+    def test_sync_batches_projection_writes_and_optout_lookup(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_minigame_player_link(
+            100, 'queens', 300, 'Alice LinkedIn',
+            normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
+        for index, day in enumerate(('2026-06-08', '2026-06-09'), start=1):
+            db.save_minigame_unresolved_result(
+                100, 'queens', normalize_queens_name('Alice LinkedIn'),
+                'Alice LinkedIn', 200, _queens_number(day), day,
+                100, index + 3, True, f'source {index}')
+        cog = Minigames(bot=None)
+        batch_sizes = []
+        optout_reads = 0
+        original_batch = db.save_minigame_results
+        original_optouts = db.get_minigame_optouts
+
+        def record_batch(rows):
+            rows = list(rows)
+            batch_sizes.append(len(rows))
+            return original_batch(rows)
+
+        def record_optouts(*args, **kwargs):
+            nonlocal optout_reads
+            optout_reads += 1
+            return original_optouts(*args, **kwargs)
+
+        monkeypatch.setattr(db, 'save_minigame_results', record_batch)
+        monkeypatch.setattr(db, 'get_minigame_optouts', record_optouts)
+
+        assert cog._sync_queens_materialized_results(
+            100, migrate_legacy=False) == 2
+        assert batch_sizes == [2]
+        assert optout_reads == 1
 
     def test_generic_recompute_writes_queens_snapshot_only(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

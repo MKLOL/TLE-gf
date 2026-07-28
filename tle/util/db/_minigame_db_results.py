@@ -8,6 +8,14 @@ combined connection object exactly as before.
 from tle.util.db._minigame_db_common import _NO_TIME_BOUND, _timestamp_to_date_text
 
 
+_MINIGAME_RESULT_UPSERT = '''
+    INSERT OR REPLACE INTO minigame_result (
+        message_id, guild_id, game, channel_id, user_id, puzzle_number,
+        puzzle_date, accuracy, time_seconds, is_perfect, raw_content
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+'''
+
+
 class MinigameResultsDbMixin:
     """Config, result save/delete, raw-message storage and result queries."""
 
@@ -122,23 +130,38 @@ class MinigameResultsDbMixin:
 
     # ── Results ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _minigame_result_values(row):
+        (message_id, guild_id, game, channel_id, user_id, puzzle_number,
+         puzzle_date, accuracy, time_seconds, is_perfect,
+         raw_content) = row
+        return (
+            str(message_id), str(guild_id), game, str(channel_id),
+            str(user_id), int(puzzle_number), str(puzzle_date),
+            int(accuracy), int(time_seconds), int(bool(is_perfect)),
+            str(raw_content),
+        )
+
     def save_minigame_result(self, message_id, guild_id, game, channel_id, user_id,
                              puzzle_number, puzzle_date, accuracy, time_seconds, is_perfect,
                              raw_content):
         self.conn.execute(
-            '''
-            INSERT OR REPLACE INTO minigame_result (
-                message_id, guild_id, game, channel_id, user_id, puzzle_number,
-                puzzle_date, accuracy, time_seconds, is_perfect, raw_content
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                str(message_id), str(guild_id), game, str(channel_id), str(user_id),
-                int(puzzle_number), str(puzzle_date), int(accuracy), int(time_seconds),
-                int(bool(is_perfect)), str(raw_content)
-            )
+            _MINIGAME_RESULT_UPSERT,
+            self._minigame_result_values((
+                message_id, guild_id, game, channel_id, user_id,
+                puzzle_number, puzzle_date, accuracy, time_seconds,
+                is_perfect, raw_content))
         )
         self.conn.commit()
+
+    def save_minigame_results(self, rows):
+        """Atomically upsert an iterable of result argument tuples."""
+        values = [self._minigame_result_values(row) for row in rows]
+        if not values:
+            return 0
+        with self.conn:
+            self.conn.executemany(_MINIGAME_RESULT_UPSERT, values)
+        return len(values)
 
     def save_imported_minigame_result(self, message_id, guild_id, game, channel_id, user_id,
                                       puzzle_number, puzzle_date, accuracy, time_seconds,
