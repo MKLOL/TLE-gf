@@ -35,7 +35,8 @@ class ImplQueensTextBMixin:
             malformed = result['malformed']
             if saved:
                 self._sync_queens_materialized_results(ctx.guild.id)
-                self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+                self._recompute_minigame_ratings(
+                    ctx.guild.id, QUEENS_GAME, sync_results=False)
             lines = [
                 f'Backfilled **{saved}** LinkedIn-name result(s).',
                 f'- Parsed **{result["valid"]}** valid JSON result(s).',
@@ -74,7 +75,8 @@ class ImplQueensTextBMixin:
         malformed = result.malformed
         if saved:
             self._sync_queens_materialized_results(ctx.guild.id)
-            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+            self._recompute_minigame_ratings(
+                ctx.guild.id, QUEENS_GAME, sync_results=False)
 
         lines = [
             f'Backfilled **{saved}** result(s) for '

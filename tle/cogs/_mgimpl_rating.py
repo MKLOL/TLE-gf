@@ -58,12 +58,13 @@ class ImplRatingMixin:
     # historically overrode this with a played-day count; that override was
     # removed to standardize on the Akari semantics.
 
-    def _recompute_minigame_ratings(self, guild_id, game):
+    def _recompute_minigame_ratings(
+            self, guild_id, game, *, sync_results=True):
         try:
             rating = game.rating
             if rating is None:
                 return
-            if game.name == QUEENS_GAME.name:
+            if game.name == QUEENS_GAME.name and sync_results:
                 self._sync_queens_materialized_results(
                     guild_id, migrate_legacy=False)
             rows = cf_common.user_db.get_minigame_results_for_guild(

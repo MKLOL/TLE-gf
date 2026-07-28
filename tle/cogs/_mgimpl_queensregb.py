@@ -50,7 +50,8 @@ class ImplQueensRegBMixin:
                 f'{QUEENS_GAME.display_name} rankings.')
         self._sync_queens_materialized_results(
             ctx.guild.id, migrate_legacy=False)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME, sync_results=False)
         await ctx.send(embed=discord_common.embed_success('\n'.join([
             f'Removed {QUEENS_GAME.display_name} link for `{target_label}`.',
             f'`{target_label}` is now hidden from every '
@@ -124,18 +125,22 @@ class ImplQueensRegBMixin:
             _queens_puzzle_number_for_date(puzzle_date),
         )
 
-    def _queens_source_row_keys(self, guild_id):
+    def _queens_source_row_keys(self, guild_id, rows=None):
+        if rows is None:
+            rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
+                guild_id, QUEENS_GAME.name)
         return {
             self._queens_source_row_key(row.normalized_name, row)
-            for row in cf_common.user_db.get_minigame_unresolved_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+            for row in rows
         }
 
-    def _queens_source_identity_keys(self, guild_id):
+    def _queens_source_identity_keys(self, guild_id, rows=None):
+        if rows is None:
+            rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
+                guild_id, QUEENS_GAME.name)
         return {
             self._queens_source_identity_key(row.normalized_name, row.puzzle_date)
-            for row in cf_common.user_db.get_minigame_unresolved_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+            for row in rows
         }
 
     def _is_current_queens_projection_row(self, guild_id, row, link,
@@ -178,8 +183,13 @@ class ImplQueensRegBMixin:
     def _migrate_legacy_queens_results_to_external(
             self, guild_id, *, delete_migrated=True):
         links_by_user = self._queens_links_by_user(guild_id)
-        source_keys = self._queens_source_row_keys(guild_id)
-        source_identity_keys = self._queens_source_identity_keys(guild_id)
+        source_rows = (
+            cf_common.user_db.get_minigame_unresolved_results_for_guild(
+                guild_id, QUEENS_GAME.name)
+        )
+        source_keys = self._queens_source_row_keys(guild_id, source_rows)
+        source_identity_keys = self._queens_source_identity_keys(
+            guild_id, source_rows)
         migrated = 0
         rows = cf_common.user_db.get_stored_minigame_results_for_guild(
             guild_id, QUEENS_GAME.name)
@@ -241,6 +251,8 @@ class ImplQueensRegBMixin:
             for row in cf_common.user_db.get_minigame_player_links(
                 guild_id, QUEENS_GAME.name)
         }
+        if not links_by_name:
+            return 0
         existing_rows = {
             (str(row.message_id), int(row.puzzle_number)): row
             for row in cf_common.user_db.get_live_minigame_results_for_guild(

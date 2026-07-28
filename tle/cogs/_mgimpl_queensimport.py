@@ -184,7 +184,8 @@ class ImplQueensImportMixin:
                 ctx.guild.id, ctx.channel.id, entry, preview.puzzle_date,
                 preview.raw_content)
         self._sync_queens_materialized_results(ctx.guild.id)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME, sync_results=False)
         return _QueensImportSaveResult(
             resolved=len(preview.resolved),
             unresolved=len(preview.unresolved),
@@ -347,7 +348,8 @@ class ImplQueensImportMixin:
             ctx.guild.id, ctx.channel.id, entry, parsed_date,
             f'{linked.external_name}\n{status}\n{time_text}')
         self._sync_queens_materialized_results(ctx.guild.id)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME, sync_results=False)
         await ctx.send(embed=discord_common.embed_success(
             f'Added {QUEENS_GAME.display_name} result for '
             f'`{label}` on #{parsed_number} {parsed_date.isoformat()}: '
@@ -370,7 +372,8 @@ class ImplQueensImportMixin:
                 f'No {QUEENS_GAME.display_name} result found for '
                 f'`{label}` on {parsed_date.isoformat()}.')
         self._sync_queens_materialized_results(ctx.guild.id)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME, sync_results=False)
         await ctx.send(embed=discord_common.embed_success(
             f'Removed {QUEENS_GAME.display_name} result for '
             f'`{label}` on #{_queens_puzzle_number_for_date(parsed_date)} '

@@ -49,8 +49,8 @@ class ImplQueensRegMixin:
             linked_by):
         previous_link = cf_common.user_db.get_minigame_player_link(
             guild_id, QUEENS_GAME.name, member_id)
-        self._migrate_legacy_queens_results_to_external(guild_id)
         if previous_link is not None:
+            self._migrate_legacy_queens_results_to_external(guild_id)
             self._delete_queens_materialized_results_for_link(
                 guild_id, previous_link)
         cf_common.user_db.set_minigame_player_link(
@@ -59,7 +59,8 @@ class ImplQueensRegMixin:
         self._migrate_legacy_queens_results_to_external(guild_id)
         claimed = self._claim_queens_unresolved_results(
             guild_id, member_id, normalized_name)
-        self._recompute_minigame_ratings(guild_id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            guild_id, QUEENS_GAME, sync_results=False)
         return claimed
 
     def _cmd_queens_register_link(

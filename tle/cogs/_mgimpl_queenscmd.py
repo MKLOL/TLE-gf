@@ -107,7 +107,8 @@ class ImplQueensCmdMixin:
     async def _cmd_queens_ratings_recompute(self, ctx):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._sync_queens_materialized_results(ctx.guild.id)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        self._recompute_minigame_ratings(
+            ctx.guild.id, QUEENS_GAME, sync_results=False)
         await ctx.send(embed=discord_common.embed_success(
             f'{QUEENS_GAME.display_name} ratings recomputed.'))
 
