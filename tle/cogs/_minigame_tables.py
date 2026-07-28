@@ -338,10 +338,13 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
         row_colors=row_colors)
 
 
-def _akari_weekly_table_rows(guild, standings, *, identity_fn=None):
+def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
+                             name_fn=None):
     """Compact current-week rows: rank, player, handle, rounded score."""
     if identity_fn is None:
         identity_fn = lambda g, row: _safe_cf_handle(g, row.user_id)
+    if name_fn is None:
+        name_fn = lambda g, row: _safe_user_name(g, row.user_id)
     rows = []
     previous_score = None
     rank = 0
@@ -352,16 +355,20 @@ def _akari_weekly_table_rows(guild, standings, *, identity_fn=None):
             previous_score = rounded_score
         rows.append((
             rank,
-            _safe_user_name(guild, standing.user_id),
+            name_fn(guild, standing),
             identity_fn(guild, standing),
             rounded_score,
         ))
     return rows
 
 
-def _get_akari_weekly_table_image_file(guild, standings, *, title):
+def _get_akari_weekly_table_image_file(
+        guild, standings, *, title, identity_label='Handle',
+        identity_fn=None, name_fn=None,
+        filename='akari-weekly-scores.png'):
     displayed = standings[:_AKARI_IMAGE_MAX_ROWS]
-    table_rows = _akari_weekly_table_rows(guild, displayed)
+    table_rows = _akari_weekly_table_rows(
+        guild, displayed, identity_fn=identity_fn, name_fn=name_fn)
     footer = None
     if len(standings) > len(displayed):
         footer = f'Showing top {len(displayed)} of {len(standings)} players'
@@ -369,8 +376,8 @@ def _get_akari_weekly_table_image_file(guild, standings, *, title):
         table_rows,
         title=title,
         footer=footer,
-        header=('#', 'Player', 'Handle', 'Score'),
+        header=('#', 'Player', identity_label, 'Score'),
         cols=_AKARI_WEEKLY_COLS,
         right_align_cols=(0, 3),
-        filename='akari-weekly-scores.png',
+        filename=filename,
     )

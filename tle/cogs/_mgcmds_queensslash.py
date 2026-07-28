@@ -229,11 +229,13 @@ class QueensSlashMixin:
 
     @queens_slash.command(name='ratings', description='Show Queens rating leaderboard')
     @app_commands.describe(
+        weekly='Preview weekly-contest ratings and this week\'s scores',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         improved='Use the testing beta rating system')
     async def slash_queens_ratings(
         self, interaction: discord.Interaction,
+        weekly: bool = False,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         improved: bool = False,
@@ -244,7 +246,7 @@ class QueensSlashMixin:
                 _SlashCtx(interaction),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=improved)
+                improved=improved, weekly=weekly)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
