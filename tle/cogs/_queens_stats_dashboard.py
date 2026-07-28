@@ -106,6 +106,7 @@ def _queens_dashboard_data(results, weekdays=None, as_of_date=None):
     previous_rows = [
         best.get(day - dt.timedelta(days=7))
         for day in week_days
+        if weekdays is None or day.weekday() in weekdays
     ]
     previous_rows = [row for row in previous_rows if row is not None]
     times = [
@@ -382,8 +383,13 @@ def plot_queens_stats(results, display_name, *, title_suffix='',
         (int(row.time_seconds) for row in week_rows
          if int(row.time_seconds) > 0),
         default=None)
+    selected_days = [
+        day for day in data['week_days']
+        if day.weekday() in allowed
+    ]
+    progress_total = len(eligible_days) or len(selected_days)
     week_summary = (
-        f'{len(week_rows)}/{len(eligible_days)} PLAYED  ·  '
+        f'{len(week_rows)}/{progress_total} PLAYED  ·  '
         f'{sum(bool(row.is_perfect) for row in week_rows)} CLEAN'
     )
     if week_best is not None:

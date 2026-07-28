@@ -153,3 +153,13 @@ def test_safe_player_name_keeps_cjk_strips_emoji_and_truncates():
     assert len(safe) == 24
     assert all(ord(char) <= 0xFFFF for char in safe)
     assert not any(char in safe for char in '👑🧩🌍♛')
+
+
+def test_public_stats_module_reexports_the_dashboard_renderer():
+    from tle.cogs import _minigame_stats
+    from tle.cogs import _queens_stats_dashboard
+
+    assert (
+        _minigame_stats.plot_queens_stats
+        is _queens_stats_dashboard.plot_queens_stats
+    )
