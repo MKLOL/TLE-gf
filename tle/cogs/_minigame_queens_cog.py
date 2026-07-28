@@ -147,6 +147,14 @@ def _queens_public_link_name(link):
     return getattr(link, 'external_name', '-')
 
 
+def _queens_public_link_sort_key(link):
+    """Sort links using only values that are safe to expose publicly."""
+    return (
+        _queens_public_link_name(link).casefold(),
+        str(getattr(link, 'user_id', '')),
+    )
+
+
 def _split_queens_anonymous_flag(linkedin_text):
     tokens = str(linkedin_text or '').split()
     anonymous = any(

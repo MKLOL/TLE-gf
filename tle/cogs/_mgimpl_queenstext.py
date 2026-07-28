@@ -18,6 +18,7 @@ from tle.cogs._minigame_helpers import (
 from tle.cogs._minigame_queens_cog import (
     _QUEENS_ANONYMOUS_FLAGS, _QUEENS_HISTORY_PER_PAGE,
     _queens_public_link_name,
+    _queens_public_link_sort_key,
     _split_queens_anonymous_flag, _is_queens_anonymous_modal_request,
     _QueensAnonymousRegisterView,
 )
@@ -89,6 +90,11 @@ class ImplQueensTextMixin:
         if not rows:
             raise MinigameCogError(
                 f'No {QUEENS_GAME.display_name} links registered.')
+        # The database orders by normalized LinkedIn name for lookup
+        # efficiency. Re-sort on the public label so anonymous registrations
+        # are grouped as "Anonymous" instead of leaking their hidden names
+        # through their positions in this list.
+        rows = sorted(rows, key=_queens_public_link_sort_key)
         lines = []
         for row in rows:
             display_name = self._queens_public_user_name(

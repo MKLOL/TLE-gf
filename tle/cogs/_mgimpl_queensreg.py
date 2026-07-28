@@ -11,6 +11,7 @@ from tle.cogs._minigame_queens_cog import (
     _QUEENS_ANONYMOUS_LABEL,
     _QUEENS_ANONYMOUS_LINK_MARKER,
     _clean_queens_linkedin_name,
+    _is_queens_link_anonymous,
     _queens_public_link_name,
 )
 
@@ -22,6 +23,9 @@ class ImplQueensRegMixin:
         existing = cf_common.user_db.get_minigame_player_link_by_name(
             guild.id, QUEENS_GAME.name, normalized_name)
         if existing is not None and str(existing.user_id) != str(member.id):
+            if anonymous or _is_queens_link_anonymous(existing):
+                raise MinigameCogError(
+                    'That Queens name is already taken.')
             existing_label = self._queens_public_user_name(
                 guild, existing.user_id, {str(existing.user_id): existing})
             raise MinigameCogError(

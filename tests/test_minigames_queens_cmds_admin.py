@@ -362,7 +362,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
 
         assert db.get_minigame_player_link(100, 'queens', alice.id) is None
 
-    def test_register_duplicate_name_uses_discord_owner_name(
+    def test_register_duplicate_anonymous_name_hides_discord_owner(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
@@ -376,9 +376,10 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
             normalize_queens_name('Existing LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
 
-        with pytest.raises(MinigameCogError, match='already linked to Alice'):
+        with pytest.raises(MinigameCogError, match='already taken') as exc_info:
             asyncio.run(Minigames.queens_register.__wrapped__(
                 cog, ctx, 'Existing', linkedin='LinkedIn'))
+        assert 'Alice' not in str(exc_info.value)
 
     def test_queens_link_command_is_not_registered(self):
         assert not hasattr(Minigames, 'queens_link')
