@@ -23,7 +23,7 @@ from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _filter_queens_weekday_rows,
     _filter_queens_rating_date_history,
     _queens_weekday_filter_suffix,
-    _queens_filter_suffix,
+    _queens_filter_suffix, _queens_improved_title_suffix,
 )
 from tle.cogs._minigame_queens_cog import (
     _queens_puzzle_number_for_date,
@@ -40,21 +40,24 @@ class ImplQueensCmdBMixin:
     async def _cmd_queens_performance(self, ctx, members, *,
                                       require_registered=True,
                                       excluded_ids=None, included_ids=None,
-                                      weekdays=None, date_bounds=None):
+                                      weekdays=None, date_bounds=None,
+                                      improved=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        if not improved:
+            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         if require_registered:
             for member in members:
                 self._require_queens_registered_member(ctx.guild.id, member)
 
-        filtered = bool(excluded_ids or included_ids or weekdays is not None)
+        filtered = bool(
+            improved or excluded_ids or included_ids or weekdays is not None)
         per_member = []
         for member in members:
             if filtered:
                 row, history = self._minigame_user_data(
                     ctx.guild.id, QUEENS_GAME, member.id,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    weekdays=weekdays)
+                    weekdays=weekdays, improved=improved)
             else:
                 row = cf_common.user_db.get_minigame_rating(
                     ctx.guild.id, QUEENS_GAME.name, member.id)
@@ -90,7 +93,8 @@ class ImplQueensCmdBMixin:
             best_perf = max(h.performance for h in contest_history)
             best_rank = rank_for_rating(round(best_perf))
             embed = discord.Embed(
-                title=(f'{QUEENS_GAME.display_name} performance — '
+                title=(f'{QUEENS_GAME.display_name} performance'
+                       f'{_queens_improved_title_suffix(improved)} — '
                        f'{display_name}'),
                 color=last_rank.color_embed,
             )
@@ -110,7 +114,8 @@ class ImplQueensCmdBMixin:
                 for member, _row, _history, contest_history in per_member
             ]
             embed = discord.Embed(
-                title=(f'{QUEENS_GAME.display_name} performance — '
+                title=(f'{QUEENS_GAME.display_name} performance'
+                       f'{_queens_improved_title_suffix(improved)} — '
                        f'{len(per_member)} players'),
                 description='\n'.join(lines),
                 color=top_rank.color_embed,
@@ -122,16 +127,19 @@ class ImplQueensCmdBMixin:
     async def _cmd_queens_history(self, ctx, member, *,
                                   require_registered=True,
                                   excluded_ids=None, included_ids=None,
-                                  weekdays=None, date_bounds=None):
+                                  weekdays=None, date_bounds=None,
+                                  improved=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        if not improved:
+            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         if require_registered:
             self._require_queens_registered_member(ctx.guild.id, member)
 
         history = self._minigame_user_history(
             ctx.guild.id, QUEENS_GAME, member.id,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            weekdays=weekdays, date_bounds=date_bounds)
+            weekdays=weekdays, date_bounds=date_bounds,
+            improved=improved)
         played_history = [h for h in history if not h.is_decay]
         if not played_history:
             raise MinigameCogError(
@@ -141,7 +149,8 @@ class ImplQueensCmdBMixin:
         lines = [_format_minigame_history_line(h)
                  for h in reversed(played_history)]
         day_label = 'day' if len(played_history) == 1 else 'days'
-        title = (f'{QUEENS_GAME.display_name} rating history — '
+        title = (f'{QUEENS_GAME.display_name} rating history'
+                 f'{_queens_improved_title_suffix(improved)} — '
                  f'{self._queens_public_user_name(ctx.guild, member.id)} '
                  f'({len(played_history)} {day_label})')
         pages = []
@@ -261,7 +270,7 @@ class ImplQueensCmdBMixin:
     async def _cmd_queens_stats_date(self, ctx, date_arg, *,
                                      show_all=False, excluded_ids=None,
                                      included_ids=None, weekdays=None,
-                                     date_bounds=None):
+                                     date_bounds=None, improved=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._sync_queens_materialized_results(
             ctx.guild.id, migrate_legacy=False)
@@ -296,7 +305,8 @@ class ImplQueensCmdBMixin:
             puzzle_info = self._minigame_puzzle_change_info(
                 ctx.guild.id, QUEENS_GAME, next(iter(puzzle_numbers)),
                 excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds)
+                weekdays=weekdays, date_bounds=date_bounds,
+                improved=improved)
             registrants = (
                 set(puzzle_info.keys())
                 if show_all
@@ -306,6 +316,7 @@ class ImplQueensCmdBMixin:
             ctx.guild, rows,
             f'{QUEENS_GAME.display_name} #{puzzle_number} '
             f'{puzzle_date.isoformat()} Results'
+            f'{_queens_improved_title_suffix(improved)}'
             f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}',
             puzzle_info=puzzle_info,
             registrants=registrants,

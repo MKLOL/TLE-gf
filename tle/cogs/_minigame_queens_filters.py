@@ -116,6 +116,22 @@ def _split_queens_recalculate_filter(args):
     return remaining, recalculate
 
 
+def _split_queens_improved_filter(args):
+    """Remove every ``+improved`` flag and report whether one was present."""
+    remaining = []
+    improved = False
+    for arg in args:
+        if str(arg).strip().casefold() == '+improved':
+            improved = True
+        else:
+            remaining.append(arg)
+    return remaining, improved
+
+
+def _queens_improved_title_suffix(improved):
+    return ' (testing beta)' if improved else ''
+
+
 def _filter_queens_rating_date_rows(rows, date_bounds):
     if date_bounds is None:
         return rows

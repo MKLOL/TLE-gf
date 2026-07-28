@@ -8,6 +8,7 @@ import time
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util.minigame_rating import compute_ratings
+from tle.util.queens_improved_rating import compute_queens_improved_ratings
 
 from tle.cogs._minigame_akari import (
     AKARI_GAME,
@@ -130,14 +131,23 @@ class ImplRatingMixin:
             kwargs.update(extra_compute_kwargs)
         return kwargs
 
+    @staticmethod
+    def _minigame_rating_engine(game, improved):
+        if not improved:
+            return compute_ratings
+        if game.name != QUEENS_GAME.name:
+            raise ValueError('The improved rating beta is Queens-only.')
+        return compute_queens_improved_ratings
+
     def _minigame_rating_rows(self, guild_id, game, *, excluded_ids=None,
                               included_ids=None, weekdays=None,
-                              date_bounds=None, extra_compute_kwargs=None):
+                              date_bounds=None, extra_compute_kwargs=None,
+                              improved=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
             date_bounds=date_bounds)
-        states = compute_ratings(
+        states = self._minigame_rating_engine(game, improved)(
             rows, **self._minigame_compute_kwargs(game, extra_compute_kwargs))
         return sorted(
             states.values(),
@@ -147,13 +157,14 @@ class ImplRatingMixin:
     def _minigame_user_data(self, guild_id, game, user_id, *,
                             include_decay=False, excluded_ids=None,
                             included_ids=None, weekdays=None,
-                            date_bounds=None, extra_compute_kwargs=None):
+                            date_bounds=None, extra_compute_kwargs=None,
+                            improved=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
             date_bounds=date_bounds)
         histories = {}
-        states = compute_ratings(
+        states = self._minigame_rating_engine(game, improved)(
             rows, histories=histories,
             include_decay_in_history=include_decay,
             **self._minigame_compute_kwargs(game, extra_compute_kwargs))
@@ -163,25 +174,27 @@ class ImplRatingMixin:
     def _minigame_user_history(self, guild_id, game, user_id, *,
                                include_decay=False, excluded_ids=None,
                                included_ids=None, weekdays=None,
-                               date_bounds=None, extra_compute_kwargs=None):
+                               date_bounds=None, extra_compute_kwargs=None,
+                               improved=False):
         state, history = self._minigame_user_data(
             guild_id, game, user_id, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
-            extra_compute_kwargs=extra_compute_kwargs)
+            extra_compute_kwargs=extra_compute_kwargs, improved=improved)
         del state
         return history
 
     def _minigame_puzzle_change_info(self, guild_id, game, puzzle_number, *,
                                      excluded_ids=None, included_ids=None,
                                      weekdays=None, date_bounds=None,
-                                     extra_compute_kwargs=None):
+                                     extra_compute_kwargs=None,
+                                     improved=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
             date_bounds=date_bounds)
         histories = {}
-        compute_ratings(
+        self._minigame_rating_engine(game, improved)(
             rows, histories=histories,
             **self._minigame_compute_kwargs(game, extra_compute_kwargs))
         info = {}

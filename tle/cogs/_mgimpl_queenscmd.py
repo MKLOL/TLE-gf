@@ -20,6 +20,7 @@ from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _split_queens_rating_date_filter, _split_queens_recalculate_filter,
     _filter_queens_rating_date_history,
     _format_queens_weekday_filter, _format_queens_date_filter, _queens_filter_suffix,
+    _queens_improved_title_suffix,
     _filter_queens_contested_rating_history,
 )
 from tle.cogs._minigame_queens_cog import (
@@ -132,15 +133,18 @@ class ImplQueensCmdMixin:
 
     async def _cmd_queens_ratings(self, ctx, *, show_all=False,
                                   excluded_ids=None, included_ids=None,
-                                  weekdays=None, date_bounds=None):
+                                  weekdays=None, date_bounds=None,
+                                  improved=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
-        if (excluded_ids or included_ids or weekdays is not None
+        if not improved:
+            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        if (improved or excluded_ids or included_ids or weekdays is not None
                 or date_bounds is not None):
             rows = self._minigame_rating_rows(
                 ctx.guild.id, QUEENS_GAME,
                 excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds)
+                weekdays=weekdays, date_bounds=date_bounds,
+                improved=improved)
         else:
             rows = cf_common.user_db.get_minigame_ratings(
                 ctx.guild.id, QUEENS_GAME.name)
@@ -170,11 +174,13 @@ class ImplQueensCmdMixin:
             if date_label:
                 suffix_parts.append(date_label)
             title = (
-                f'{QUEENS_GAME.display_name} Ratings '
+                f'{QUEENS_GAME.display_name} Ratings'
+                f'{_queens_improved_title_suffix(improved)} '
                 f'({", ".join(suffix_parts)})')
         else:
             title = (
                 f'{QUEENS_GAME.display_name} Ratings'
+                f'{_queens_improved_title_suffix(improved)}'
                 f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}')
         discord_file = _mg()._get_akari_rating_table_image_file(
             ctx.guild, shown, linked_ids,
@@ -189,15 +195,16 @@ class ImplQueensCmdMixin:
                                  require_registered=True,
                                  excluded_ids=None, included_ids=None,
                                  weekdays=None, date_bounds=None,
-                                 recalculate=False):
+                                 recalculate=False, improved=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
+        if not improved:
+            self._recompute_minigame_ratings(ctx.guild.id, QUEENS_GAME)
         if require_registered:
             for member in members:
                 self._require_queens_registered_member(ctx.guild.id, member)
 
         replay_date_bounds = date_bounds if recalculate else None
-        filtered = bool(excluded_ids or included_ids or weekdays is not None
+        filtered = bool(improved or excluded_ids or included_ids or weekdays is not None
                         or replay_date_bounds is not None)
         per_member = []
         for member in members:
@@ -205,7 +212,8 @@ class ImplQueensCmdMixin:
                 row, history = self._minigame_user_data(
                     ctx.guild.id, QUEENS_GAME, member.id,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    weekdays=weekdays, date_bounds=replay_date_bounds)
+                    weekdays=weekdays, date_bounds=replay_date_bounds,
+                    improved=improved)
             else:
                 row = cf_common.user_db.get_minigame_rating(
                     ctx.guild.id, QUEENS_GAME.name, member.id)
@@ -250,7 +258,8 @@ class ImplQueensCmdMixin:
                 f'({rank_for_rating(round(last_contest.performance)).title_abbr})'
                 if last_contest is not None else '—')
             embed = discord.Embed(
-                title=(f'{QUEENS_GAME.display_name} rating — '
+                title=(f'{QUEENS_GAME.display_name} rating'
+                       f'{_queens_improved_title_suffix(improved)} — '
                        f'{display_name}'),
                 color=rank.color_embed,
             )
@@ -277,7 +286,8 @@ class ImplQueensCmdMixin:
                 for member, row, history, _graph_history in per_member
             ]
             embed = discord.Embed(
-                title=(f'{QUEENS_GAME.display_name} ratings — '
+                title=(f'{QUEENS_GAME.display_name} ratings'
+                       f'{_queens_improved_title_suffix(improved)} — '
                        f'{len(per_member)} players'),
                 description='\n'.join(lines),
                 color=top_rank.color_embed,
@@ -285,4 +295,3 @@ class ImplQueensCmdMixin:
 
         discord_common.attach_image(embed, discord_file)
         await ctx.send(embed=embed, file=discord_file)
-

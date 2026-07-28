@@ -65,7 +65,8 @@ from tle.cogs._minigame_slash_consts import (  # noqa: F401
 from tle.cogs._minigame_queens_filters import (  # noqa: F401
     _parse_queens_weekday_filter_arg, _split_queens_weekday_filter,
     _filter_queens_weekday_rows, _split_queens_rating_date_filter,
-    _split_queens_recalculate_filter, _filter_queens_rating_date_rows,
+    _split_queens_recalculate_filter, _split_queens_improved_filter,
+    _filter_queens_rating_date_rows,
     _filter_queens_rating_date_history, _format_queens_weekday_filter,
     _queens_weekday_filter_suffix, _format_queens_date_filter,
     _queens_filter_suffix, _filter_queens_contested_rating_history,
