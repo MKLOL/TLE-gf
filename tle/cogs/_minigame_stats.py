@@ -1,6 +1,5 @@
 """Stats plotting for minigames (Akari, Queens & GuessThe.Game)."""
 
-import datetime as dt
 from collections import Counter
 
 import numpy as np
@@ -17,12 +16,12 @@ from tle.cogs._minigame_common import (
 from tle.cogs._minigame_stats_plots import (  # noqa: F401
     plot_akari_rating, plot_akari_performance,
 )
+from tle.cogs._queens_stats_dashboard import plot_queens_stats  # noqa: F401
 
 # ── Akari ──────────────────────────────────────────────────────────────
 
 _AKARI_TIME_BINS = [0, 30, 60, 90, 120, 180, 300, 600, float('inf')]
 _AKARI_TIME_LABELS = ['<30s', '30-60s', '1-1.5m', '1.5-2m', '2-3m', '3-5m', '5-10m', '10m+']
-_WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 
 def _bin_times(times):
@@ -139,163 +138,6 @@ def plot_akari_stats(rows, display_name, weekdays=None):
                 ha='center', va='center', fontsize=12, color='#888')
         ax.set_xticks([])
         ax.set_yticks([])
-    ax.set_title('Time Trend', fontsize=13, fontweight='bold')
-
-    plt.tight_layout(rect=[0, 0, 1, 0.94])
-    discord_file = gc.get_current_figure_as_file()
-    plt.close(fig)
-    return discord_file
-
-
-# ── Queens ─────────────────────────────────────────────────────────────
-
-def _queens_streak_info(results):
-    best = {
-        normalize_puzzle_date(row.puzzle_date): row
-        for row in results
-    }
-    if not best:
-        return 0, 0, None
-
-    latest_day = max(best)
-    current = 0
-    day = latest_day
-    while day in best and best[day].is_perfect:
-        current += 1
-        day -= dt.timedelta(days=1)
-
-    longest = 0
-    run = 0
-    previous_day = None
-    for day in sorted(best):
-        if best[day].is_perfect:
-            is_consecutive = (
-                previous_day is not None
-                and day == previous_day + dt.timedelta(days=1)
-            )
-            run = run + 1 if is_consecutive else 1
-            longest = max(longest, run)
-        else:
-            run = 0
-        previous_day = day
-
-    return current, longest, best[latest_day]
-
-
-def _empty_panel(ax, text):
-    ax.text(0.5, 0.5, text, transform=ax.transAxes,
-            ha='center', va='center', fontsize=12, color='#888')
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-
-def plot_queens_stats(results, display_name, *, title_suffix='',
-                      weekdays=None):
-    """Generate a multi-panel Queens stats image. Returns a discord.File."""
-    results = sorted(
-        results,
-        key=lambda row: normalize_puzzle_date(row.puzzle_date))
-
-    total = len(results)
-    clean = [row for row in results if row.is_perfect]
-    no_mistakes = [row for row in results if int(row.accuracy) == 100]
-    times = [int(row.time_seconds) for row in results]
-    current, longest, latest = _queens_streak_info(results, weekdays)
-
-    weekday_rows = [[] for _ in range(7)]
-    for row in results:
-        weekday_rows[normalize_puzzle_date(row.puzzle_date).weekday()].append(row)
-    weekday_counts = [len(rows) for rows in weekday_rows]
-    weekday_medians = [
-        float(np.median([row.time_seconds for row in rows])) if rows else 0
-        for rows in weekday_rows
-    ]
-    active_weekdays = [
-        (index, weekday_counts[index], weekday_medians[index])
-        for index in range(7) if weekday_counts[index]
-    ]
-    most_active = max(active_weekdays, key=lambda item: item[1], default=None)
-    fastest = min(active_weekdays, key=lambda item: item[2], default=None)
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    fig.suptitle(
-        f'{display_name} — Queens Stats{title_suffix}',
-        fontsize=16, fontweight='bold', y=0.97)
-
-    ax = axes[0, 0]
-    ax.axis('off')
-    if times:
-        lines = [
-            f'Queens days:  {total}',
-            f'Clean:  {len(clean)}',
-            f'No mistakes:  {len(no_mistakes)}',
-            '',
-            f'Best time:  {format_duration(min(times))}',
-            f'Avg time:  {format_duration(sum(times) / len(times))}',
-            f'Median time:  {format_duration(float(np.median(times)))}',
-            '',
-            f'Current clean streak:  {current}',
-            f'Longest clean streak:  {longest}',
-            f'Latest:  {normalize_puzzle_date(latest.puzzle_date).isoformat()}',
-        ]
-        if most_active is not None:
-            lines.extend([
-                '',
-                f'Most active day:  {_WEEKDAY_LABELS[most_active[0]]} ({most_active[1]})',
-                f'Fastest weekday:  {_WEEKDAY_LABELS[fastest[0]]} ({format_duration(fastest[2])})',
-            ])
-        ax.text(0.08, 0.92, '\n'.join(lines), transform=ax.transAxes,
-                fontsize=12, verticalalignment='top', fontfamily='monospace',
-                linespacing=1.45)
-    else:
-        _empty_panel(ax, 'No Queens results')
-    ax.set_title('Overview', fontsize=13, fontweight='bold')
-
-    ax = axes[0, 1]
-    counts = _bin_times(times)
-    colors = ['#7E57C2' if count else '#ccc' for count in counts]
-    bars = ax.bar(range(len(counts)), counts, color=colors,
-                  edgecolor='white', linewidth=0.5)
-    ax.set_xticks(range(len(_AKARI_TIME_LABELS)))
-    ax.set_xticklabels(_AKARI_TIME_LABELS, rotation=30, ha='right', fontsize=9)
-    ax.set_ylabel('Count')
-    ax.set_title('Time Distribution', fontsize=13, fontweight='bold')
-    for bar, count in zip(bars, counts):
-        if count:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-                    str(count), ha='center', va='bottom', fontsize=9)
-
-    ax = axes[1, 0]
-    bar_colors = ['#26A69A' if count else '#d0d0d0'
-                  for count in weekday_counts]
-    bars = ax.bar(_WEEKDAY_LABELS, weekday_medians, color=bar_colors,
-                  edgecolor='white', linewidth=0.5)
-    ax.set_ylabel('Median seconds')
-    ax.set_title('Weekday Speed', fontsize=13, fontweight='bold')
-    for bar, count, median in zip(bars, weekday_counts, weekday_medians):
-        if count:
-            ax.text(bar.get_x() + bar.get_width() / 2, median + 0.3,
-                    f'n={count}', ha='center', va='bottom', fontsize=8)
-
-    ax = axes[1, 1]
-    if len(results) >= 3:
-        dates = [normalize_puzzle_date(row.puzzle_date) for row in results]
-        window = min(7, len(times))
-        rolling = np.convolve(times, np.ones(window) / window, mode='valid')
-        rolling_dates = dates[window - 1:]
-        ax.plot(rolling_dates, rolling, color='#5C6BC0',
-                linewidth=2, label=f'{window}-day avg')
-        ax.scatter(dates, times, color='#90CAF9', s=18,
-                   alpha=0.65, zorder=2, label='Result')
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        for label in ax.get_xticklabels():
-            label.set_rotation(30)
-            label.set_ha('right')
-        ax.set_ylabel('Seconds')
-        ax.legend(fontsize=9)
-    else:
-        _empty_panel(ax, 'Need 3+ results\nfor trend')
     ax.set_title('Time Trend', fontsize=13, fontweight='bold')
 
     plt.tight_layout(rect=[0, 0, 1, 0.94])
