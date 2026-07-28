@@ -108,6 +108,26 @@ class GreatdayDbMixin:
         ).fetchone()
         return row.cnt
 
+    def greatday_get_latest_pick(self, guild_id, user_id):
+        """Return a user's newest recorded pick in a guild, or ``None``."""
+        return self.conn.execute(
+            'SELECT message_id, picked_at FROM greatday_pick '
+            'WHERE guild_id = ? AND user_id = ? '
+            'ORDER BY picked_at DESC, CAST(message_id AS INTEGER) DESC, '
+            'message_id DESC LIMIT 1',
+            (str(guild_id), str(user_id))
+        ).fetchone()
+
+    def greatday_get_pick_history(self, guild_id, user_id):
+        """Return all of a user's recorded picks, newest first."""
+        return self.conn.execute(
+            'SELECT message_id, picked_at FROM greatday_pick '
+            'WHERE guild_id = ? AND user_id = ? '
+            'ORDER BY picked_at DESC, CAST(message_id AS INTEGER) DESC, '
+            'message_id DESC',
+            (str(guild_id), str(user_id))
+        ).fetchall()
+
     def greatday_is_banned(self, guild_id, user_id):
         """Check if a user is banned from great day."""
         row = self.conn.execute(

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import random
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -9,6 +8,16 @@ import discord
 from discord.ext import commands
 
 from tle import constants
+from tle.cogs._greatday_helpers import (
+    _BACKFILL_STOP_GAP_SECONDS,
+    _GREATDAY_RE as _GREATDAY_RE,
+    _MENTION_RE as _MENTION_RE,
+    _format_pick_time,
+    _parse_greatday_message,
+    _personal_rank_line,
+    _should_stop_backfill,
+    _target_datetime,
+)
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
@@ -23,63 +32,11 @@ _DEFAULT_TIME = '10:00'
 _DEFAULT_TZ = 'US/Eastern'
 _PICK_COUNT = 5
 _STATS_PER_PAGE = 15
+_HISTORY_PER_PAGE = 15
 # Edit the backfill progress embed every N scanned messages. Discord rate-
 # limits message edits to ~5/5s — 250 is a comfortable cadence even for
 # multi-thousand-message channels.
 _BACKFILL_PROGRESS_INTERVAL = 250
-# Stop the backfill once we've walked this far past the most recent
-# greatday match without finding another one. Greatday runs ~daily, so
-# a 5-day gap means we've collected the full history.
-_BACKFILL_STOP_GAP_SECONDS = 5 * 24 * 3600
-
-
-def _personal_rank_line(rows, user_id):
-    """Render the 'Your rank: #N — great-day'd K times' line for the
-    stats command. `rows` is sorted desc-by-count (the natural output
-    of greatday_get_stats). Uses standard competition ranking so users tied
-    on count share a rank. Returned as plain text — the caller puts it above
-    the embed as message content, not inside the embed."""
-    user_id_str = str(user_id)
-    for rank, row in ranking.rank_items(rows, lambda r: r.cnt):
-        if str(row.user_id) == user_id_str:
-            return (f"Your rank: **#{rank}** — great-day'd "
-                    f'**{row.cnt}** time(s).')
-    return "You haven't been great-day'd yet."
-
-
-def _should_stop_backfill(last_match_ts, current_msg_ts, max_gap_seconds):
-    """True if the gap between the most recent matched greatday and the
-    current (older) message exceeds the threshold. last_match_ts is None
-    until the first match — we must keep scanning until then."""
-    if last_match_ts is None:
-        return False
-    return last_match_ts - current_msg_ts > max_gap_seconds
-
-# Greatday message template: "I hope <@id> <@id> ... having a great day!"
-# Anchors: prefix "I hope " and the trailing "having a great day!" — anything
-# in between is treated as the mention list (we extract `<@id>` patterns).
-_GREATDAY_RE = re.compile(r'^I hope .*having a great day!\s*$')
-_MENTION_RE = re.compile(r'<@!?(\d+)>')
-
-
-def _parse_greatday_message(msg, bot_user_id):
-    """If the message is a real bot-authored greatday post, return the list
-    of mentioned user IDs; otherwise return None. Trusting any author would
-    let users (or webhooks) spoof picks into the leaderboard.
-    """
-    author_id = getattr(getattr(msg, 'author', None), 'id', None)
-    if author_id != bot_user_id:
-        return None
-    if not _GREATDAY_RE.match(msg.content or ''):
-        return None
-    uids = _MENTION_RE.findall(msg.content)
-    return uids or None
-
-
-def _target_datetime(now, time_str):
-    """Return today's target time as a timezone-aware datetime."""
-    hour, minute = map(int, time_str.split(':'))
-    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 class GreatDayCogError(commands.CommandError):
@@ -351,6 +308,55 @@ class GreatDay(commands.Cog):
             f'Signed up: **{len(rows)}** user(s)',
         ]
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
+
+    @greatday.command(name='latest', aliases=['last'],
+                      brief='Show the latest time a user was great-day\'d',
+                      usage='[@user]')
+    async def latest(self, ctx, member: discord.Member = None):
+        target = member or ctx.author
+        name = discord.utils.escape_markdown(
+            discord.utils.escape_mentions(target.display_name))
+        row = cf_common.user_db.greatday_get_latest_pick(
+            ctx.guild.id, target.id)
+        description = ('No Great Day picks have been recorded for this user.'
+                       if row is None else
+                       f'Last selected: {_format_pick_time(row.picked_at)}')
+        await ctx.send(embed=discord.Embed(
+            title=f'Latest Great Day — {name}',
+            description=description,
+            color=0x00aaff,
+        ))
+
+    @greatday.command(name='history',
+                      brief='Show a user\'s Great Day history',
+                      usage='[@user]')
+    async def history(self, ctx, member: discord.Member = None):
+        target = member or ctx.author
+        name = discord.utils.escape_markdown(
+            discord.utils.escape_mentions(target.display_name))
+        rows = cf_common.user_db.greatday_get_pick_history(
+            ctx.guild.id, target.id)
+        title = f'Great Day history — {name}'
+        if not rows:
+            await ctx.send(embed=discord.Embed(
+                title=title,
+                description='No Great Day picks have been recorded for this user.',
+                color=0x00aaff,
+            ))
+            return
+
+        numbered = list(enumerate(rows, start=1))
+        pages = []
+        for chunk in paginator.chunkify(numbered, _HISTORY_PER_PAGE):
+            lines = [f'**{number}.** {_format_pick_time(row.picked_at)}'
+                     for number, row in chunk]
+            pages.append((None, discord.Embed(
+                title=title,
+                description='\n'.join(lines),
+                color=0x00aaff,
+            )))
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     @greatday.command(name='stats', brief='Show how many times users have been great-day\'d',
                       usage='[@user]')

@@ -60,6 +60,8 @@ class FakeGreatDayDb:
     greatday_record_picks = UserDbConn.greatday_record_picks
     greatday_get_stats = UserDbConn.greatday_get_stats
     greatday_get_count = UserDbConn.greatday_get_count
+    greatday_get_latest_pick = UserDbConn.greatday_get_latest_pick
+    greatday_get_pick_history = UserDbConn.greatday_get_pick_history
     kvs_set = UserDbConn.kvs_set
     kvs_get = UserDbConn.kvs_get
     kvs_delete = UserDbConn.kvs_delete
