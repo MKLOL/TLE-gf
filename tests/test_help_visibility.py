@@ -61,16 +61,6 @@ class _Destination:
     async def send(self, content=None, **kwargs):
         self.calls.append((content, kwargs))
 
-    async def send_message(self, content=None, **kwargs):
-        self.calls.append((content, kwargs))
-
-
-class _Interaction:
-    def __init__(self, user_id):
-        self.user = types.SimpleNamespace(id=user_id)
-        self.response = _Destination()
-        self.followup = _Destination()
-
 
 def _context(*, user_id=123, interaction=None):
     ctx = types.SimpleNamespace(
@@ -109,7 +99,7 @@ def test_explicit_invalid_help_stays_in_the_channel(help_module):
     assert ctx.author.calls == []
 
 
-def test_automatic_prefix_help_uses_requester_bound_private_button(help_module):
+def test_automatic_prefix_help_is_public(help_module):
     ctx = _context()
     help_command = help_module.TleHelp()
     help_command.context = ctx
@@ -118,42 +108,13 @@ def test_automatic_prefix_help_uses_requester_bound_private_button(help_module):
     asyncio.run(help_command.send_pages())
 
     assert ctx.author.calls == []
-    assert len(ctx.channel.calls) == 1
-    prompt, kwargs = ctx.channel.calls[0]
-    assert prompt == 'Help is available privately.'
-    assert kwargs['delete_after'] == 300
-    view = kwargs['view']
-    assert view.requester_id == 123
-
-    interaction = _Interaction(123)
-    asyncio.run(view.children[0].callback(interaction))
-
-    assert interaction.response.calls == [
-        ('group help', {'ephemeral': True}),
-    ]
-    assert interaction.followup.calls == [
-        ('second page', {'ephemeral': True}),
+    assert ctx.channel.calls == [
+        ('group help', {}),
+        ('second page', {}),
     ]
 
 
-def test_automatic_help_button_rejects_other_users(help_module):
-    ctx = _context(user_id=123)
-    help_command = help_module.TleHelp()
-    help_command.context = ctx
-    help_command.paginator.pages = ['private help']
-
-    asyncio.run(help_command.send_pages())
-    view = ctx.channel.calls[0][1]['view']
-    interaction = _Interaction(999)
-    asyncio.run(view.children[0].callback(interaction))
-
-    assert interaction.response.calls == [
-        ('Only the requester can view this help.', {'ephemeral': True}),
-    ]
-    assert interaction.followup.calls == []
-
-
-def test_automatic_interaction_help_is_sent_directly_ephemeral(help_module):
+def test_automatic_interaction_help_is_also_public(help_module):
     ctx = _context(interaction=object())
     help_command = help_module.TleHelp()
     help_command.context = ctx
@@ -161,24 +122,20 @@ def test_automatic_interaction_help_is_sent_directly_ephemeral(help_module):
 
     asyncio.run(help_command.send_pages())
 
-    assert ctx.calls == [
-        ('first page', {'ephemeral': True}),
-        ('second page', {'ephemeral': True}),
+    assert ctx.channel.calls == [
+        ('first page', {}),
+        ('second page', {}),
     ]
-    assert ctx.channel.calls == []
+    assert ctx.calls == []
     assert ctx.author.calls == []
 
 
-def test_automatic_error_uses_private_help_button(help_module):
+def test_automatic_error_is_public(help_module):
     ctx = _context()
     help_command = help_module.TleHelp()
     help_command.context = ctx
 
     asyncio.run(help_command.send_error_message('Try another command.'))
 
-    view = ctx.channel.calls[0][1]['view']
-    interaction = _Interaction(123)
-    asyncio.run(view.children[0].callback(interaction))
-    assert interaction.response.calls == [
-        ('Try another command.', {'ephemeral': True}),
-    ]
+    assert ctx.channel.calls == [('Try another command.', {})]
+    assert ctx.author.calls == []
