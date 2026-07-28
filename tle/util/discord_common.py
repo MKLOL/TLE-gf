@@ -21,6 +21,8 @@ _BOT_PREFIX = ';'
 _EXPLICIT_HELP_INVOCATION = contextvars.ContextVar(
     'tle_explicit_help_invocation', default=False,
 )
+_PRIVATE_HELP_PROMPT = 'Help is available privately.'
+_PRIVATE_HELP_TIMEOUT = 300
 
 
 def embed_neutral(desc, color=None):
@@ -182,8 +184,46 @@ async def presence(bot):
 
     presence_task.start()
 
+
+class _PrivateHelpView(discord.ui.View):
+    """Reveal automatically-triggered prefix help only to its requester."""
+
+    def __init__(self, requester_id, pages):
+        super().__init__(timeout=_PRIVATE_HELP_TIMEOUT)
+        self.requester_id = int(requester_id)
+        self.pages = tuple(pages)
+        button = discord.ui.Button(
+            label='Show help privately',
+            style=discord.ButtonStyle.primary,
+        )
+        button.callback = self._show_help
+        self.add_item(button)
+
+    async def interaction_check(self, interaction):
+        if int(interaction.user.id) == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            'Only the requester can view this help.',
+            ephemeral=True,
+        )
+        return False
+
+    async def _show_help(self, interaction):
+        # The explicit check also keeps direct callback invocations safe.
+        if not await self.interaction_check(interaction):
+            return
+        if not self.pages:
+            return
+        await interaction.response.send_message(
+            self.pages[0],
+            ephemeral=True,
+        )
+        for page in self.pages[1:]:
+            await interaction.followup.send(page, ephemeral=True)
+
+
 class TleHelp(commands.DefaultHelpCommand):
-    """Keep requested help public while sending automatic help privately."""
+    """Keep requested help public and automatic help interaction-private."""
 
     async def command_callback(self, ctx, /, *, command=None):
         token = _EXPLICIT_HELP_INVOCATION.set(True)
@@ -193,31 +233,32 @@ class TleHelp(commands.DefaultHelpCommand):
             _EXPLICIT_HELP_INVOCATION.reset(token)
 
     def get_destination(self):
-        if _EXPLICIT_HELP_INVOCATION.get():
-            return self.context.channel
-        return self.context.author
+        # Never return the author: Messageable.send on a user opens a DM.
+        return self.context.channel
 
-    async def _send_help_message(self, content):
-        destination = self.get_destination()
-        try:
-            await destination.send(content)
-        except discord.Forbidden:
-            if _EXPLICIT_HELP_INVOCATION.get():
-                raise
-            logger.info(
-                'Could not DM automatic help to user %s',
-                getattr(self.context.author, 'id', 'unknown'),
-            )
-            return False
-        return True
+    async def _send_help_pages(self, pages):
+        if _EXPLICIT_HELP_INVOCATION.get():
+            for page in pages:
+                await self.get_destination().send(page)
+            return
+
+        if getattr(self.context, 'interaction', None) is not None:
+            for page in pages:
+                await self.context.send(page, ephemeral=True)
+            return
+
+        view = _PrivateHelpView(self.context.author.id, pages)
+        await self.context.channel.send(
+            _PRIVATE_HELP_PROMPT,
+            view=view,
+            delete_after=_PRIVATE_HELP_TIMEOUT,
+        )
 
     async def send_error_message(self, error, /):
-        await self._send_help_message(error)
+        await self._send_help_pages((error,))
 
     async def send_pages(self):
-        for page in self.paginator.pages:
-            if not await self._send_help_message(page):
-                return
+        await self._send_help_pages(tuple(self.paginator.pages))
 
     async def filter_commands(self, cmds, *, sort=False, key=None):
         """Like the default, but also drops commands whose ``extras`` declares a
