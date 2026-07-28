@@ -4,7 +4,10 @@ from collections import namedtuple
 
 import pytest
 
-from tle.util.db.user_db_conn import namedtuple_factory
+from tle.util.db.user_db_conn import (
+    _namedtuple_row_type,
+    namedtuple_factory,
+)
 
 
 @pytest.fixture
@@ -59,6 +62,34 @@ class TestNamedtupleFactory:
         assert len(rows) == 2
         assert rows[0].name == 'foo'
         assert rows[1].name == 'bar'
+        assert type(rows[0]) is type(rows[1])
+
+    def test_reuses_row_type_across_executions(self, db):
+        first = db.execute(
+            'SELECT id, name FROM test_table WHERE id = 1').fetchone()
+        second = db.execute(
+            'SELECT id, name FROM test_table WHERE id = 2').fetchone()
+
+        assert type(first) is type(second)
+
+    def test_duplicate_keyword_and_private_columns_are_safe(self, db):
+        row = db.execute(
+            'SELECT id AS value, value, name AS class, name AS _private '
+            'FROM test_table WHERE id = 1').fetchone()
+
+        assert row.value == 1
+        assert row.col_1 == 42
+        assert row.col_2 == 'foo'
+        assert row.col_3 == 'foo'
+
+    def test_row_type_cache_is_bounded(self):
+        _namedtuple_row_type.cache_clear()
+        for index in range(600):
+            _namedtuple_row_type((f'field_{index}',))
+
+        info = _namedtuple_row_type.cache_info()
+        assert info.maxsize == 512
+        assert info.currsize == 512
 
     def test_select_1_exists_pattern(self, db):
         """The pattern used in check_exists_starboard_message and friends."""

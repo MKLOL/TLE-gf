@@ -1,8 +1,10 @@
 import logging
 import sqlite3
 import unicodedata
+import keyword
 from enum import IntEnum
 from collections import namedtuple
+from functools import lru_cache
 
 from discord.ext import commands
 
@@ -132,12 +134,33 @@ class UniqueConstraintFailed(UserDbError):
     pass
 
 
+@lru_cache(maxsize=512)
+def _namedtuple_row_type(column_names):
+    """Return one reusable row type for a SQLite result shape."""
+    fields = []
+    used = set()
+    for index, raw_name in enumerate(column_names):
+        name = str(raw_name)
+        if (
+                not name.isidentifier()
+                or keyword.iskeyword(name)
+                or name.startswith('_')
+                or name in used):
+            name = f'col_{index}'
+        suffix = 2
+        base = name
+        while name in used:
+            name = f'{base}_{suffix}'
+            suffix += 1
+        fields.append(name)
+        used.add(name)
+    return namedtuple('Row', fields)
+
+
 def namedtuple_factory(cursor, row):
-    """Returns sqlite rows as named tuples."""
-    fields = [col[0] if col[0].isidentifier() else f'col_{i}'
-              for i, col in enumerate(cursor.description)]
-    Row = namedtuple("Row", fields)
-    return Row(*row)
+    """Return SQLite rows as named tuples, reusing types by result shape."""
+    column_names = tuple(column[0] for column in cursor.description)
+    return _namedtuple_row_type(column_names)(*row)
 
 
 class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
