@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 import functools
 import random
@@ -17,6 +18,9 @@ _CF_COLORS = (0xFFCA1F, 0x198BCC, 0xFF2020)
 _SUCCESS_GREEN = 0x28A745
 _ALERT_AMBER = 0xFFBF00
 _BOT_PREFIX = ';'
+_EXPLICIT_HELP_INVOCATION = contextvars.ContextVar(
+    'tle_explicit_help_invocation', default=False,
+)
 
 
 def embed_neutral(desc, color=None):
@@ -179,6 +183,42 @@ async def presence(bot):
     presence_task.start()
 
 class TleHelp(commands.DefaultHelpCommand):
+    """Keep requested help public while sending automatic help privately."""
+
+    async def command_callback(self, ctx, /, *, command=None):
+        token = _EXPLICIT_HELP_INVOCATION.set(True)
+        try:
+            return await super().command_callback(ctx, command=command)
+        finally:
+            _EXPLICIT_HELP_INVOCATION.reset(token)
+
+    def get_destination(self):
+        if _EXPLICIT_HELP_INVOCATION.get():
+            return self.context.channel
+        return self.context.author
+
+    async def _send_help_message(self, content):
+        destination = self.get_destination()
+        try:
+            await destination.send(content)
+        except discord.Forbidden:
+            if _EXPLICIT_HELP_INVOCATION.get():
+                raise
+            logger.info(
+                'Could not DM automatic help to user %s',
+                getattr(self.context.author, 'id', 'unknown'),
+            )
+            return False
+        return True
+
+    async def send_error_message(self, error, /):
+        await self._send_help_message(error)
+
+    async def send_pages(self):
+        for page in self.paginator.pages:
+            if not await self._send_help_message(page):
+                return
+
     async def filter_commands(self, cmds, *, sort=False, key=None):
         """Like the default, but also drops commands whose ``extras`` declares a
         ``help_hidden_when`` predicate that returns truthy for this invocation.
