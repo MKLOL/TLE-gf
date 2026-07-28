@@ -183,14 +183,16 @@ class ImplQueensRegBMixin:
     def _migrate_legacy_queens_results_to_external(
             self, guild_id, *, delete_migrated=True):
         links_by_user = self._queens_links_by_user(guild_id)
-        source_rows = (
+        existing_source_rows = (
             cf_common.user_db.get_minigame_unresolved_results_for_guild(
                 guild_id, QUEENS_GAME.name)
         )
-        source_keys = self._queens_source_row_keys(guild_id, source_rows)
+        source_keys = self._queens_source_row_keys(
+            guild_id, existing_source_rows)
         source_identity_keys = self._queens_source_identity_keys(
-            guild_id, source_rows)
-        migrated = 0
+            guild_id, existing_source_rows)
+        planned_sources = []
+        planned_deletions = []
         rows = cf_common.user_db.get_stored_minigame_results_for_guild(
             guild_id, QUEENS_GAME.name)
 
@@ -216,13 +218,10 @@ class ImplQueensRegBMixin:
                 normalized_name, puzzle_date)
             if identity_key in source_identity_keys:
                 if delete_migrated:
-                    cf_common.user_db.delete_stored_minigame_result_row(
-                        guild_id, QUEENS_GAME.name, row.storage,
-                        row.message_id, row.puzzle_number)
+                    planned_deletions.append((
+                        row.storage, row.message_id, row.puzzle_number))
                 continue
-            cf_common.user_db.save_minigame_unresolved_result(
-                guild_id,
-                QUEENS_GAME.name,
+            planned_sources.append((
                 normalized_name,
                 external_name,
                 row.channel_id,
@@ -232,15 +231,15 @@ class ImplQueensRegBMixin:
                 row.time_seconds,
                 row.is_perfect,
                 row.raw_content,
-            )
+            ))
             if delete_migrated:
-                cf_common.user_db.delete_stored_minigame_result_row(
-                    guild_id, QUEENS_GAME.name, row.storage, row.message_id,
-                    row.puzzle_number)
+                planned_deletions.append((
+                    row.storage, row.message_id, row.puzzle_number))
             source_keys.add(self._queens_source_row_key(normalized_name, row))
             source_identity_keys.add(identity_key)
-            migrated += 1
-        return migrated
+        cf_common.user_db.apply_minigame_source_migration(
+            guild_id, QUEENS_GAME.name, planned_sources, planned_deletions)
+        return len(planned_sources)
 
     def _sync_queens_materialized_results(self, guild_id, *,
                                           migrate_legacy=True):
