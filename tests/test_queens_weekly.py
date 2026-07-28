@@ -226,6 +226,38 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
             asyncio.run(cog._cmd_queens_ratings(
                 ctx, weekly=True, improved=True))
 
+    def test_weekly_uses_queens_time_scoring_not_ingestion_badges(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(_GUILD_ID, QUEENS_GAME.feature_flag, '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        _register(db, alice, 'Alice LinkedIn')
+        _register(db, bob, 'Bob LinkedIn')
+
+        today = dt.date(2030, 1, 9)
+        _logical_today(monkeypatch, today)
+        previous = (
+            today - dt.timedelta(days=today.weekday() + 7)
+        )
+        # Alice's faster row mimics a leaderboard import that retained a
+        # mistake badge. Bob's slower row mimics a direct share, which cannot
+        # retain that metadata. Weekly Queens must compare their times only.
+        self._save_queens_result(
+            db, 50, alice.id, previous.isoformat(), 30,
+            is_perfect=False, accuracy=0)
+        self._save_queens_result(
+            db, 51, bob.id, previous.isoformat(), 60,
+            is_perfect=True, accuracy=100)
+
+        ratings, _standings = Minigames(
+            bot=None)._queens_weekly_preview(_GUILD_ID)
+
+        assert [row.user_id for row in ratings] == [
+            str(alice.id), str(bob.id),
+        ]
+        assert ratings[0].rating > ratings[1].rating
+
     def test_prefix_and_slash_route_the_weekly_flag(self, monkeypatch):
         cog = Minigames(bot=None)
         author = _FakeDiscordMember(300, 'alice', 'Alice')

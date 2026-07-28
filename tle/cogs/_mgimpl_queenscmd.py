@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+from collections import namedtuple
 
 import discord
 
@@ -35,6 +36,11 @@ from tle.cogs._minigame_queens_cog import (
 )
 
 logger = logging.getLogger(__name__)
+
+_QueensWeeklyRow = namedtuple(
+    '_QueensWeeklyRow',
+    'user_id puzzle_number puzzle_date accuracy time_seconds is_perfect',
+)
 
 
 class ImplQueensCmdMixin:
@@ -225,20 +231,30 @@ class ImplQueensCmdMixin:
     def _queens_weekly_preview(self, guild_id, *, excluded_ids=None,
                                included_ids=None, weekdays=None,
                                date_bounds=None):
-        """Build equal-weight weekly ratings and this week's live scores."""
+        """Build speed-based weekly ratings and this week's live scores."""
         result_rows = self._filtered_minigame_result_rows(
             guild_id, QUEENS_GAME,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds)
+        # Queens' native competition rule is time-only. Direct share messages
+        # do not preserve hint/mistake badges while pasted leaderboards do, so
+        # feeding those badges into Akari's accuracy model would make the same
+        # solve worth different amounts based solely on its ingestion path.
+        scoring_rows = [
+            _QueensWeeklyRow(
+                row.user_id, row.puzzle_number, row.puzzle_date,
+                100, row.time_seconds, True)
+            for row in result_rows
+        ]
         today = _queens_current_puzzle_date()
         states = compute_weekly_ratings(
-            result_rows, {}, as_of_date=today)
+            scoring_rows, {}, as_of_date=today)
         rating_rows = sorted(
             states.values(),
             key=lambda state: (
                 -state.rating, -state.games, int(state.user_id)))
         standings = current_week_standings(
-            result_rows, {}, as_of_date=today)
+            scoring_rows, {}, as_of_date=today)
         return rating_rows, standings
 
     async def _send_queens_weekly_scores(
