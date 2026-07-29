@@ -272,9 +272,10 @@ class CoreMixin:
             raise StarboardCogError(f'Source channel {payload.channel_id} not found')
         message = await channel.fetch_message(payload.message_id)
 
+        snapshots = getattr(message, 'message_snapshots', None) or ()
         if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
                 or (len(message.content) == 0 and len(message.attachments) == 0
-                    and len(message.embeds) == 0)):
+                    and len(message.embeds) == 0 and not snapshots)):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')
 
         # Track the reactor under the raw emoji they actually used

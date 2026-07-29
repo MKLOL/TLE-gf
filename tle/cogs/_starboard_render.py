@@ -94,6 +94,22 @@ async def build_starboard_message(message, emoji_str, count, color):
     order is: content (author) → file attachment (video) → embeds.
     For non-video: author goes in the main embed via set_author.
     """
+    snapshots = getattr(message, 'message_snapshots', None) or ()
+    snapshot = snapshots[0] if snapshots else None
+    rendered = snapshot or message
+    reference = getattr(message, 'reference', None)
+    is_forward = (
+        snapshot is not None
+        or (
+            reference is not None
+            and getattr(reference, 'type', None)
+            == discord.MessageReferenceType.forward
+        )
+    )
+    forwarder_label = (
+        f'Forwarded by {message.author.display_name}'
+        if is_forward else message.author.display_name
+    )
     content = _starboard_content(emoji_str, count, message.jump_url)
     embeds = []
     files = []
@@ -104,7 +120,7 @@ async def build_starboard_message(message, emoji_str, count, color):
     audio_attachments = []
     spoiler_image_attachments = []
     other_attachments = []
-    for att in message.attachments:
+    for att in rendered.attachments:
         ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
         if ext in _IMAGE_EXTENSIONS:
             if att.is_spoiler():
@@ -128,7 +144,7 @@ async def build_starboard_message(message, emoji_str, count, color):
     # appears above the player (file attachments render after content
     # but before embeds).
     if has_media_files:
-        safe_name = discord.utils.escape_mentions(message.author.display_name)
+        safe_name = discord.utils.escape_mentions(forwarder_label)
         content = (
             f'{emoji_str} **{count}** \u00b7 **{safe_name}** '
             f'| {message.jump_url}'
@@ -145,7 +161,8 @@ async def build_starboard_message(message, emoji_str, count, color):
                 logger.debug(f'Failed to download attachment {att.filename}')
 
     # --- Reply context embed (goes first / above main embed) ---
-    if message.reference and message.reference.message_id:
+    if (not is_forward and message.reference
+            and message.reference.message_id):
         try:
             ref_msg = message.reference.resolved
             if ref_msg is None or isinstance(ref_msg, discord.DeletedReferencedMessage):
@@ -225,21 +242,21 @@ async def build_starboard_message(message, emoji_str, count, color):
 
     # --- Main embed ---
     # For media-only messages (no text), skip the main embed entirely.
-    has_text = bool(message.content)
+    has_text = bool(rendered.content)
     has_other = bool(other_attachments)
     need_embed = not has_media_files or has_text or has_other or image_url
 
     if need_embed:
-        embed = discord.Embed(color=color, timestamp=message.created_at)
+        embed = discord.Embed(color=color, timestamp=rendered.created_at)
         if not has_media_files:
             embed.set_author(
-                name=message.author.display_name,
+                name=forwarder_label,
                 icon_url=message.author.display_avatar.url,
                 url=message.jump_url,
             )
 
         if has_text:
-            text = message.content
+            text = rendered.content
             if len(text) > 4096:
                 text = text[:4093] + '...'
             embed.description = text
@@ -257,8 +274,8 @@ async def build_starboard_message(message, emoji_str, count, color):
         # already have any from attachments. For URL pastes that produce
         # multiple image-type embeds, collect all of them so the gallery
         # logic below can render them.
-        if not image_urls and message.embeds:
-            for e in message.embeds:
+        if not image_urls and rendered.embeds:
+            for e in rendered.embeds:
                 if e.type == 'image' and e.url:
                     image_urls.append(e.url)
                     continue
@@ -308,7 +325,7 @@ async def build_starboard_message(message, emoji_str, count, color):
     # Carry over rich and link embeds from the original message (bot
     # embeds like Codeforces problem cards, and URL previews like blog
     # post link previews). Skip image/video/gifv auto-embeds.
-    for e in message.embeds:
+    for e in rendered.embeds:
         if e.type in ('rich', 'link', 'article'):
             embeds.append(e)
 

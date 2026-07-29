@@ -191,6 +191,9 @@ _discord_mod.File = type('File', (), {
     ) and None,
 })
 _discord_mod.MessageType = type('MessageType', (), {'default': 0, 'reply': 1})
+_discord_mod.MessageReferenceType = type(
+    'MessageReferenceType', (), {'default': 0, 'reply': 0, 'forward': 1})
+_discord_mod.MessageSnapshot = type('MessageSnapshot', (), {})
 
 class _StubColor:
     @staticmethod
