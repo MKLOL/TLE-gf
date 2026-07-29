@@ -7,7 +7,7 @@ model:
 * every opponent contributes a bounded fraction of one daily result;
 * close times behave almost like ties instead of full wins/losses;
 * the field is averaged, so a 20-player day is not 19 independent games;
-* one common scale caps every day's movement at 20 points and preserves a
+* one common scale caps every day's movement at 32 points and preserves a
   zero-sum round.
 
 Displayed performance uses the same soft time bracket as rating changes.  A
@@ -28,8 +28,8 @@ _ELO_SCALE = 400.0 / math.log(10.0)
 # Monday from looking like an enormous percentage difference.
 _TIME_OFFSET_SECONDS = 4.0
 _TIME_MARGIN_WIDTH = 0.35
-_RATING_K = 40.0
-_MAX_DAILY_CHANGE = 20.0
+_RATING_K = 72.0
+_MAX_DAILY_CHANGE = 32.0
 _PERFORMANCE_SEARCH_MARGIN = 800.0
 _PERFORMANCE_SEARCH_ITERS = 60
 

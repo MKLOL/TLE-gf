@@ -59,6 +59,10 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     assert by_time[12] - by_time[13] < by_time[13] - by_time[16]
     assert abs((by_time[12] - by_time[13]) - 25.35) < 0.1
     assert abs((by_time[13] - by_time[16]) - 67.76) < 0.1
+    # The strengthened beta should make a clear win feel meaningful while the
+    # performance spacing itself remains closeness-aware.
+    assert updates['0'].delta > 17
+    assert updates['7'].delta < -20
 
 
 def test_replay_is_deterministic_and_dedupes_by_first_message():

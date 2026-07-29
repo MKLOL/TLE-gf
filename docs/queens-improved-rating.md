@@ -54,8 +54,8 @@ F(r) = mean(j in field, sigmoid((r - rating_j) / (400 / ln(10))))
 The raw rating change and shared safety cap are:
 
 ```text
-raw_delta_i = 40 * (A_i - F(rating_i))
-round_scale = min(1, 20 / max(abs(raw_delta)))
+raw_delta_i = 72 * (A_i - F(rating_i))
+round_scale = min(1, 32 / max(abs(raw_delta)))
 delta_i = round_scale * raw_delta_i
 ```
 
@@ -64,7 +64,7 @@ Consequences:
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
 - Every round is zero-sum; no Codeforces inflation correction is needed.
-- Everyone is capped at `±20`, and the same scale is applied to the whole
+- Everyone is capped at `±32`, and the same scale is applied to the whole
   round so relative changes and zero-sum balance are preserved.
 - Inactivity never changes skill.
 - New players receive the same bounded update rule as established players.
@@ -89,14 +89,14 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1384 | +9.69 |
-| 8 | 1346 | +7.94 |
-| 10 | 1280 | +4.51 |
-| 12 | 1224 | +1.35 |
-| 13 | 1198 | -0.11 |
-| 16 | 1130 | -3.95 |
-| 20 | 1054 | -7.95 |
-| 25 | 973 | -11.49 |
+| 7 | 1384 | +17.45 |
+| 8 | 1346 | +14.28 |
+| 10 | 1280 | +8.12 |
+| 12 | 1224 | +2.43 |
+| 13 | 1198 | -0.19 |
+| 16 | 1130 | -7.12 |
+| 20 | 1054 | -14.31 |
+| 25 | 973 | -20.68 |
 
 The performance drop from 12 to 13 seconds is about 25 points; the drop from
 13 to 16 is about 68 points. The larger time gap therefore matters about 2.7
@@ -111,19 +111,19 @@ rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| New improved beta | 5.63 | 13.38 | -20.00 to +18.59 |
+| New improved beta | 9.77 | 23.71 | -32.00 to +32.00 |
 | Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
 | Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 
 The beta preserved exactly `29 × 1200 = 34,800` total points. Final observed
-ratings ranged from about `1044` to `1394`, and the ordering remained close to
+ratings ranged from about `1026` to `1421`, and the ordering remained close to
 the ordinary ladder (Spearman correlation `0.973`).
 
 On chronological comparisons where both players already had five rated days,
-the beta predicted the strict faster/slower order 73.51% of the time versus
+the beta predicted the strict faster/slower order 73.90% of the time versus
 74.27% for ordinary Queens. That small loss is the intentional cost of treating
 close finishes as weaker evidence. Against the soft margin outcome it is built
-to model, the beta's log loss was `0.6278` versus `0.6555` for ordinary Queens.
+to model, the beta's log loss was `0.6214` versus `0.6555` for ordinary Queens.
 
 ## Commands
 
