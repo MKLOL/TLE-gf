@@ -1,70 +1,129 @@
 # Queens improved rating beta
 
-The `+improved` Queens mode is an on-demand Glicko-2 replay. It is separate
-from the persisted Codeforces-style Queens rating, so testing it cannot alter
-the established leaderboard or any feature that consumes the established
-rating.
+The `+improved` Queens mode is an on-demand, margin-aware multiplayer Elo
+replay. It is separate from the persisted Codeforces-style Queens rating:
+testing it cannot alter the ordinary leaderboard or anything that consumes the
+ordinary rating.
 
-## Why Glicko-2
+## Why the model changed
 
-The existing model stores one rating number. Glicko-2 additionally tracks a
-rating deviation (uncertainty) and volatility for each player. A new or
-returning player's result can therefore move their rating more than the same
-result would move a well-established player's rating.
+The first beta used Glicko-2. It expanded one daily placement into one result
+against every opponent and treated those correlated comparisons much like
+independent games. In the supplied snapshot, that produced first-day changes
+as large as `-286` and `+189`. One noisy puzzle should not carry that much
+evidence.
 
-Each contested Queens day is one Glicko-2 rating period. A player's placement
-is expanded into simultaneous head-to-head outcomes against that day's other
-participants: win for a faster time, draw for an equal time, and loss for a
-slower time. All players are updated from the same pre-day snapshot. Days with
-zero or one participant are not rating periods and have no effect.
+Queens also has many close and tied times. A one-second lead on a short Monday
+should be weaker evidence than a large gap, even when both leads change the
+ordinal rank. Research on score-aware rating models likewise finds that score
+differences can add information discarded by win/loss-only systems:
+[Score-Based Bayesian Skill Learning](https://www.microsoft.com/en-us/research/wp-content/uploads/2012/01/sbsl_ecml2012.pdf).
+The design also borrows the robust-response goal of native multiplayer systems
+such as [Elo-MMR](https://arxiv.org/abs/2101.00400), while staying small and
+explainable for a 12–20-player community.
 
-The beta uses these parameters:
+## Soft time bracket
 
-- Initial rating: `1200`
-- Initial rating deviation: `100`
-- Initial volatility: `0.06`
-- System constant (tau): `0.5`
-- Convergence tolerance: `0.000001`
+For player `i`, transform the time in seconds:
 
-The equations are the ones in the
-[official Glicko-2 specification](https://www.glicko.net/glicko/glicko2.pdf),
-with the rating scale translated from 1500 to 1200. The beta performance shown
-for one day is the specification's estimated pre-to-performance improvement
-(`Delta`) converted back to the public rating scale.
+```text
+x_i = ln(time_i + 4)
+```
 
-Glicko-2 is still fundamentally a match model rather than a native
-free-for-all model. Queens pair outcomes from one day are correlated, so this
-mode is deliberately labeled `testing beta`. Native multiplayer alternatives
-considered were
-[TrueSkill](https://www.microsoft.com/en-us/research/publication/trueskilltm-a-bayesian-skill-rating-system-2/)
-and the
-[Weng-Lin Plackett-Luce model](https://jmlr.csail.mit.edu/papers/volume12/weng11a/weng11a.pdf).
+The four-second offset is a low-time noise floor. It prevents a one-second gap
+on a very fast puzzle from looking like an enormous percentage difference.
+
+Each other time contributes a soft result, and a neutral self-result anchors
+the bracket:
+
+```text
+A_i = [0.5 + sum(j != i, sigmoid((x_j - x_i) / 0.35))] / n
+```
+
+Lower time is better. Equal times contribute exactly `0.5`; a wider gap moves
+smoothly toward `1` or `0`. Every person contributes at most `1/n`, so one
+extreme fastest or slowest time cannot stretch the middle of the field the way
+literal min/max normalization would.
+
+Given the pre-day ratings, the expected score for any candidate rating `r` is:
+
+```text
+F(r) = mean(j in field, sigmoid((r - rating_j) / (400 / ln(10))))
+```
+
+The raw rating change and shared safety cap are:
+
+```text
+raw_delta_i = 40 * (A_i - F(rating_i))
+round_scale = min(1, 20 / max(abs(raw_delta)))
+delta_i = round_scale * raw_delta_i
+```
+
+Consequences:
+
+- A day with fewer than two players is unrated.
+- A larger field does not multiply one puzzle into many independent games.
+- Every round is zero-sum; no Codeforces inflation correction is needed.
+- Everyone is capped at `±20`, and the same scale is applied to the whole
+  round so relative changes and zero-sum balance are preserved.
+- Inactivity never changes skill.
+- New players receive the same bounded update rule as established players.
+
+## Performance
+
+The displayed single-day performance is the unique rating `P_i` where:
+
+```text
+F(P_i) = A_i
+```
+
+The neutral self-result makes the best and worst performances finite. Tied
+times receive the same performance, and:
+
+```text
+performance_i > pre_rating_i  exactly when  delta_i > 0
+```
+
+For the example field `7, 8, 10, 12, 13, 16, 20, 25` seconds, with everyone
+starting at 1200:
+
+| Time | Performance | Rating change |
+|---:|---:|---:|
+| 7 | 1384 | +9.69 |
+| 8 | 1346 | +7.94 |
+| 10 | 1280 | +4.51 |
+| 12 | 1224 | +1.35 |
+| 13 | 1198 | -0.11 |
+| 16 | 1130 | -3.95 |
+| 20 | 1054 | -7.95 |
+| 25 | 973 | -11.49 |
+
+The performance drop from 12 to 13 seconds is about 25 points; the drop from
+13 to 16 is about 68 points. The larger time gap therefore matters about 2.7
+times as much without making either result catastrophic.
 
 ## Snapshot replay
 
-The supplied snapshot was read without modification. Its canonical
-first-submission merge contains 1,378 rows, 29 observed users, and 442 puzzle
-days. Of those days, 384 are solo and provide no rating signal. The remaining
-58 contests have 7–21 participants (17.14 on average). Equal-time finishes
-occur on 48 of the 58 contested days, so preserving draws is important.
+The supplied snapshot was read without modification. Its exact live/import
+first-submission merge contains 1,378 results, 29 observed users, and 442
+puzzle days. Of those days, 384 are solo and provide no rating signal. The 58
+rated days contain 994 participant-results and fields of 7–21 players.
 
-Chronological next-contest pairwise forecasts over 7,938 non-tied comparisons
-gave:
-
-| Model | Accuracy | Brier score | Log loss |
+| Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| Existing Codeforces-style | 72.58% | 0.1827 | 0.5425 |
-| Glicko-2 beta | 73.00% | 0.1782 | 0.5308 |
+| New improved beta | 5.63 | 13.38 | -20.00 to +18.59 |
+| Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
+| Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 
-Lower is better for Brier score and log loss. On only the final 28 contests,
-the two systems were effectively tied and the existing model was slightly
-ahead. The data therefore supports testing Glicko-2 for its uncertainty
-handling, not claiming a decisive predictive victory.
+The beta preserved exactly `29 × 1200 = 34,800` total points. Final observed
+ratings ranged from about `1044` to `1394`, and the ordering remained close to
+the ordinary ladder (Spearman correlation `0.973`).
 
-After all 58 contested days, replaying every observed identity produced beta
-ratings from about 834 to 1,593 (mean 1,122, median 1,058). The snapshot has no
-registration table, so these are research aggregates rather than the exact
-public leaderboard the bot will show.
+On chronological comparisons where both players already had five rated days,
+the beta predicted the strict faster/slower order 73.51% of the time versus
+74.27% for ordinary Queens. That small loss is the intentional cost of treating
+close finishes as weaker evidence. Against the soft margin outcome it is built
+to model, the beta's log loss was `0.6278` versus `0.6555` for ordinary Queens.
 
 ## Commands
 

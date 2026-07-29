@@ -1,13 +1,18 @@
-"""Experimental Glicko-2 rating replay for LinkedIn Queens.
+"""Experimental margin-aware multiplayer Elo replay for LinkedIn Queens.
 
-Every multiplayer puzzle day is one Glicko-2 rating period.  A player's
-standing becomes one simultaneous result against every other participant:
-win, draw, or loss according to rank.  Solo days remain visible in history but
-carry no rating information.
+The canonical Queens ladder remains Codeforces-style.  This module powers only
+the opt-in ``+improved`` views and deliberately uses a calmer, time-sensitive
+model:
 
-The implementation follows Mark Glickman's March 2022 Glicko-2 specification.
-Only the origin of the public scale is translated from 1500 to 1200; the
-173.7178 scale factor and all update equations are unchanged.
+* every opponent contributes a bounded fraction of one daily result;
+* close times behave almost like ties instead of full wins/losses;
+* the field is averaged, so a 20-player day is not 19 independent games;
+* one common scale caps every day's movement at 20 points and preserves a
+  zero-sum round.
+
+Displayed performance uses the same soft time bracket as rating changes.  A
+neutral self-comparison keeps the best and worst performance finite, while a
+single extreme time can affect every other player by only ``1 / field_size``.
 """
 
 import math
@@ -17,18 +22,21 @@ from tle.util.akari_rating import HistoryPoint, RatingState
 
 
 _START_RATING = 1200.0
-_INITIAL_RD = 100.0
-_INITIAL_VOLATILITY = 0.06
-_SCALE = 173.7178
-_TAU = 0.5
-_EPSILON = 0.000001
+# Traditional Elo's 400-point base-10 scale expressed for natural exp().
+_ELO_SCALE = 400.0 / math.log(10.0)
+# Adding a few seconds before taking logs stops a one-second gap on a very fast
+# Monday from looking like an enormous percentage difference.
+_TIME_OFFSET_SECONDS = 4.0
+_TIME_MARGIN_WIDTH = 0.35
+_RATING_K = 40.0
+_MAX_DAILY_CHANGE = 20.0
+_PERFORMANCE_SEARCH_MARGIN = 800.0
+_PERFORMANCE_SEARCH_ITERS = 60
 
 
 @dataclass(frozen=True)
 class _Player:
     rating: float = _START_RATING
-    rd: float = _INITIAL_RD
-    volatility: float = _INITIAL_VOLATILITY
     games: int = 0
     peak: float = _START_RATING
     last_delta: float = 0.0
@@ -37,108 +45,122 @@ class _Player:
 
 
 @dataclass(frozen=True)
-class _GlickoUpdate:
-    rating: float
-    rd: float
-    volatility: float
+class _RoundUpdate:
+    delta: float
     performance: float
 
 
-def _g(phi):
-    return 1.0 / math.sqrt(1.0 + 3.0 * phi * phi / (math.pi * math.pi))
+def _sigmoid(value):
+    """Numerically stable logistic function."""
+    if value >= 0:
+        exp_neg = math.exp(-value)
+        return 1.0 / (1.0 + exp_neg)
+    exp_pos = math.exp(value)
+    return exp_pos / (1.0 + exp_pos)
 
 
-def _expected(mu, opponent_mu, opponent_phi):
-    exponent = -_g(opponent_phi) * (mu - opponent_mu)
-    # Ordinary Queens ratings stay far from overflow, but this keeps malformed
-    # imported histories from making a deterministic replay fail.
-    if exponent >= 0:
-        z = math.exp(-exponent)
-        return z / (1.0 + z)
-    z = math.exp(exponent)
-    return 1.0 / (1.0 + z)
+def _time_log(time_seconds):
+    """Return the softened log-time used by the daily performance bracket."""
+    seconds = float(time_seconds)
+    if not math.isfinite(seconds):
+        raise ValueError(f'Queens time must be finite, got {time_seconds!r}.')
+    # Parsers reject negative times.  Clamp defensively so one malformed legacy
+    # row cannot make every +improved command fail.
+    return math.log(max(0.0, seconds) + _TIME_OFFSET_SECONDS)
 
 
-def _new_volatility(phi, volatility, delta, variance):
-    """Glicko-2 Step 5 (the stable Illinois-algorithm revision)."""
-    a = math.log(volatility * volatility)
+def _soft_time_score(time_self, time_other):
+    """Soft result for ``time_self`` against ``time_other``.
 
-    def objective(x):
-        exp_x = math.exp(x)
-        numerator = exp_x * (delta * delta - phi * phi - variance - exp_x)
-        denominator = 2.0 * (phi * phi + variance + exp_x) ** 2
-        return numerator / denominator - (x - a) / (_TAU * _TAU)
+    Lower is better.  Equal times return exactly 0.5; increasingly large gaps
+    approach a full 1/0 result without ever making performance infinite.
+    """
+    margin = (_time_log(time_other) - _time_log(time_self))
+    return _sigmoid(margin / _TIME_MARGIN_WIDTH)
 
-    point_a = a
-    if delta * delta > phi * phi + variance:
-        point_b = math.log(delta * delta - phi * phi - variance)
-    else:
-        k = 1
-        point_b = a - k * _TAU
-        while objective(point_b) < 0:
-            k += 1
-            point_b = a - k * _TAU
 
-    value_a = objective(point_a)
-    value_b = objective(point_b)
-    while abs(point_b - point_a) > _EPSILON:
-        point_c = (
-            point_a
-            + (point_a - point_b) * value_a / (value_b - value_a)
-        )
-        value_c = objective(point_c)
-        if value_c * value_b <= 0:
-            point_a, value_a = point_b, value_b
+def _elo_expected(rating, opponent_rating):
+    return _sigmoid((float(rating) - float(opponent_rating)) / _ELO_SCALE)
+
+
+def _field_expected(performance, field_ratings):
+    return sum(
+        _elo_expected(performance, rating) for rating in field_ratings
+    ) / len(field_ratings)
+
+
+def _performance_rating(field_ratings, target_score):
+    """Invert the common field expectation for a finite performance rating."""
+    lo = min(field_ratings) - _PERFORMANCE_SEARCH_MARGIN
+    hi = max(field_ratings) + _PERFORMANCE_SEARCH_MARGIN
+    span = _PERFORMANCE_SEARCH_MARGIN
+
+    # The neutral self-result keeps target_score strictly inside (0, 1), but
+    # expand defensively for unusually large fields or rating spreads.
+    while _field_expected(lo, field_ratings) > target_score:
+        span *= 2.0
+        lo -= span
+    span = _PERFORMANCE_SEARCH_MARGIN
+    while _field_expected(hi, field_ratings) < target_score:
+        span *= 2.0
+        hi += span
+
+    for _ in range(_PERFORMANCE_SEARCH_ITERS):
+        mid = (lo + hi) / 2.0
+        if _field_expected(mid, field_ratings) < target_score:
+            lo = mid
         else:
-            value_a /= 2.0
-        point_b, value_b = point_c, value_c
-
-    return math.exp(point_a / 2.0)
+            hi = mid
+    return (lo + hi) / 2.0
 
 
-def _rate_player(rating, rd, volatility, opponents):
-    """Update one player from simultaneous ``(rating, RD, score)`` results."""
-    mu = (float(rating) - _START_RATING) / _SCALE
-    phi = float(rd) / _SCALE
-    terms = []
-    for opponent_rating, opponent_rd, score in opponents:
-        opponent_mu = (float(opponent_rating) - _START_RATING) / _SCALE
-        opponent_phi = float(opponent_rd) / _SCALE
-        weight = _g(opponent_phi)
-        expectation = _expected(mu, opponent_mu, opponent_phi)
-        terms.append((weight, expectation, float(score)))
+def _compute_round(ratings, times):
+    """Return capped, zero-sum soft-Elo updates for one multiplayer day."""
+    users = sorted(ratings)
+    if set(users) != set(times):
+        raise ValueError('Queens round ratings and times must have the same users.')
+    if len(users) < 2:
+        return {
+            user: _RoundUpdate(delta=0.0, performance=float(ratings[user]))
+            for user in users
+        }
 
-    information = sum(
-        weight * weight * expectation * (1.0 - expectation)
-        for weight, expectation, _ in terms
+    count = len(users)
+    time_logs = {user: _time_log(times[user]) for user in users}
+    actual = {}
+    expected = {}
+    field_ratings = [float(ratings[user]) for user in users]
+
+    for user in users:
+        # Include a neutral self-comparison in both averages.  It cancels out
+        # of the rating residual, makes tied times share one performance, and
+        # provides finite high/low performance anchors.
+        actual[user] = sum(
+            _sigmoid(
+                (time_logs[opponent] - time_logs[user])
+                / _TIME_MARGIN_WIDTH
+            )
+            for opponent in users
+        ) / count
+        expected[user] = _field_expected(ratings[user], field_ratings)
+
+    raw_deltas = {
+        user: _RATING_K * (actual[user] - expected[user])
+        for user in users
+    }
+    max_change = max(abs(delta) for delta in raw_deltas.values())
+    round_scale = (
+        min(1.0, _MAX_DAILY_CHANGE / max_change)
+        if max_change else 1.0
     )
-    variance = 1.0 / information
-    residual = sum(
-        weight * (score - expectation)
-        for weight, expectation, score in terms
-    )
-    delta = variance * residual
-    new_volatility = _new_volatility(phi, volatility, delta, variance)
-    pre_period_phi = math.sqrt(phi * phi + new_volatility * new_volatility)
-    new_phi = 1.0 / math.sqrt(
-        1.0 / (pre_period_phi * pre_period_phi) + 1.0 / variance
-    )
-    new_mu = mu + new_phi * new_phi * residual
 
-    return _GlickoUpdate(
-        rating=_START_RATING + _SCALE * new_mu,
-        rd=_SCALE * new_phi,
-        volatility=new_volatility,
-        # Glickman defines Delta as the estimated improvement from the
-        # pre-period rating to the performance rating based only on results.
-        performance=float(rating) + _SCALE * delta,
-    )
-
-
-def _inactive_rd(rd, volatility):
-    """Glicko-2 Step 6 for a player absent from one rating period."""
-    phi = float(rd) / _SCALE
-    return _SCALE * math.sqrt(phi * phi + volatility * volatility)
+    return {
+        user: _RoundUpdate(
+            delta=raw_deltas[user] * round_scale,
+            performance=_performance_rating(field_ratings, actual[user]),
+        )
+        for user in users
+    }
 
 
 def _row_order_key(row):
@@ -158,26 +180,6 @@ def _row_order_key(row):
     )
 
 
-def _rank_by_time(rows):
-    ordered = sorted(
-        rows,
-        key=lambda row: (
-            int(getattr(row, 'time_seconds', 0)),
-            str(row.user_id),
-        ),
-    )
-    ranks = {}
-    previous_time = None
-    rank = 0
-    for index, row in enumerate(ordered):
-        time_seconds = int(getattr(row, 'time_seconds', 0))
-        if previous_time is None or time_seconds != previous_time:
-            rank = index + 1
-            previous_time = time_seconds
-        ranks[str(row.user_id)] = rank
-    return ranks
-
-
 def _history_point(puzzle_number, row, rating, delta, performance):
     return HistoryPoint(
         puzzle_number=puzzle_number,
@@ -195,16 +197,15 @@ def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
         rank_fn=None, **_ignored):
-    """Replay Queens results with the experimental Glicko-2 model.
+    """Replay Queens results with the experimental soft-bracket Elo model.
 
-    The return and history shapes intentionally match ``compute_ratings`` so
-    existing Queens tables and plots can select this engine without a separate
-    persistence format.  ``include_decay_in_history`` is accepted for that
-    interface but produces no extra points: inactivity changes uncertainty,
-    never the visible rating.
+    The return and history shapes match :func:`compute_ratings`, so every
+    existing ``+improved`` table and graph can use this engine without storing
+    a second rating snapshot.  Queens inactivity never changes visible skill;
+    ``include_decay_in_history`` and ``rank_fn`` are accepted only for shared
+    engine compatibility.
     """
-    del include_decay_in_history
-    rank_fn = rank_fn or _rank_by_time
+    del include_decay_in_history, rank_fn
 
     by_puzzle = {}
     for row in rows:
@@ -223,16 +224,14 @@ def compute_queens_improved_ratings(
         active_ids = sorted(day_rows)
 
         for user_id in active_ids:
-            if user_id not in players:
-                players[user_id] = _Player(last_puzzle=puzzle_number)
+            players.setdefault(
+                user_id, _Player(last_puzzle=puzzle_number))
 
         if len(active_ids) < 2:
             for user_id in active_ids:
                 old = players[user_id]
                 players[user_id] = _Player(
                     rating=old.rating,
-                    rd=old.rd,
-                    volatility=old.volatility,
                     games=old.games,
                     peak=old.peak,
                     last_delta=0.0,
@@ -244,42 +243,24 @@ def compute_queens_improved_ratings(
                         puzzle_number, day_rows[user_id], old.rating, 0.0, None))
             continue
 
-        raw_ranks = rank_fn([day_rows[user_id] for user_id in active_ids])
-        ranks = {str(user_id): int(rank) for user_id, rank in raw_ranks.items()}
-        missing = [user_id for user_id in active_ids if user_id not in ranks]
-        if missing:
-            raise ValueError(f'Rank function omitted participants: {missing!r}')
-
-        before = {user_id: players[user_id] for user_id in active_ids}
-        updates = {}
-        for user_id in active_ids:
-            opponents = []
-            for opponent_id in active_ids:
-                if opponent_id == user_id:
-                    continue
-                if ranks[user_id] < ranks[opponent_id]:
-                    score = 1.0
-                elif ranks[user_id] == ranks[opponent_id]:
-                    score = 0.5
-                else:
-                    score = 0.0
-                opponent = before[opponent_id]
-                opponents.append((opponent.rating, opponent.rd, score))
-            player = before[user_id]
-            updates[user_id] = _rate_player(
-                player.rating, player.rd, player.volatility, opponents)
+        before = {
+            user_id: players[user_id].rating for user_id in active_ids
+        }
+        times = {
+            user_id: int(day_rows[user_id].time_seconds)
+            for user_id in active_ids
+        }
+        updates = _compute_round(before, times)
 
         for user_id in active_ids:
-            old = before[user_id]
+            old = players[user_id]
             update = updates[user_id]
-            rating_delta = update.rating - old.rating
+            new_rating = old.rating + update.delta
             players[user_id] = _Player(
-                rating=update.rating,
-                rd=update.rd,
-                volatility=update.volatility,
+                rating=new_rating,
                 games=old.games + 1,
-                peak=max(old.peak, update.rating),
-                last_delta=rating_delta,
+                peak=max(old.peak, new_rating),
+                last_delta=update.delta,
                 skip_streak=0,
                 last_puzzle=puzzle_number,
             )
@@ -287,8 +268,8 @@ def compute_queens_improved_ratings(
                 histories.setdefault(user_id, []).append(_history_point(
                     puzzle_number,
                     day_rows[user_id],
-                    update.rating,
-                    rating_delta,
+                    new_rating,
+                    update.delta,
                     update.performance,
                 ))
 
@@ -303,8 +284,6 @@ def compute_queens_improved_ratings(
                 old = players[user_id]
                 players[user_id] = _Player(
                     rating=old.rating,
-                    rd=_inactive_rd(old.rd, old.volatility),
-                    volatility=old.volatility,
                     games=old.games,
                     peak=old.peak,
                     last_delta=0.0,
