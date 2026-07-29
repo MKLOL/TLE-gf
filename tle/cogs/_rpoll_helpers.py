@@ -49,9 +49,9 @@ _FORMULA_LABELS = {
     'mgg': 'monthly gitgud: score for poll creation month',
     'fffff': 'scaled linear: `max(0, 1 + (rating - 1900) / 1600) * 100`',
     'akari': 'sum of Daily Akari ratings',
-    'akariexp': 'exponential of Daily Akari rating: `2^(rating/400) * 100`',
+    'akariexp': 'exponential of Daily Akari rating: `2^(rating/250) * 100`',
     'queens': 'sum of LinkedIn Queens ratings',
-    'queensexp': 'exponential of LinkedIn Queens rating: `2^(rating/400) * 100`',
+    'queensexp': 'exponential of LinkedIn Queens rating: `2^(rating/250) * 100`',
 }
 
 class RpollError(commands.CommandError):
@@ -77,13 +77,13 @@ def _parse_duration(token):
 def _apply_formula(formula, ratings):
     """Apply a scoring formula to a list of individual ratings. Returns total score.
 
-    ``akari``/``akariexp`` and ``queens``/``queensexp`` share their
-    composition with ``sum`` / ``exp``; only the rating source (the minigame
-    snapshot vs CF) differs, and that happens in :func:`_get_vote_weight`
-    before the rating reaches this function.
+    The minigame exponential formulas use a tighter 250-point scale than the
+    400-point Codeforces exponential formula.
     """
-    if formula in ('exp', 'akariexp', 'queensexp'):
+    if formula == 'exp':
         return round(sum(2 ** (r / 400) * 100 for r in ratings))
+    if formula in ('akariexp', 'queensexp'):
+        return round(sum(2 ** (r / 250) * 100 for r in ratings))
     if formula == 'team':
         if not ratings:
             return 0

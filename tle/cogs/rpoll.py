@@ -206,8 +206,8 @@ class Rpoll(commands.Cog):
           +team: team Elo (solo rating with 50% win vs all)
           +osu: top vote full, then 0.67x decay
           +gg / +mgg: all-time / monthly gitgud score
-          +akari / +akariexp: Daily Akari rating (sum / exponential)
-          +queens / +queensexp: LinkedIn Queens rating (sum / exponential)
+          +akari / +akariexp: Daily Akari rating (sum / exponential, /250)
+          +queens / +queensexp: LinkedIn Queens rating (sum / exponential, /250)
         """
         if args is None:
             await ctx.send_help(ctx.command)

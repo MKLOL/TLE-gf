@@ -378,6 +378,10 @@ class TestBuildPollEmbedFormula:
 
 
 class TestRpollConstants:
+    def test_minigame_exp_labels_show_250_point_scale(self):
+        assert 'rating/250' in _FORMULA_LABELS['akariexp']
+        assert 'rating/250' in _FORMULA_LABELS['queensexp']
+
     def test_max_options(self):
         assert MAX_OPTIONS == 5
 

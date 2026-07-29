@@ -173,11 +173,10 @@ class TestAkariFormula:
     def test_akari_sum_empty(self):
         assert _apply_formula('akari', []) == 0
 
-    def test_akariexp_matches_exp_shape(self):
-        # akariexp's compositor is identical to exp — same formula, only the
-        # rating source upstream differs.
-        ratings = [1200, 1800, 2200]
-        assert _apply_formula('akariexp', ratings) == _apply_formula('exp', ratings)
+    def test_akariexp_uses_250_point_scale(self):
+        assert _apply_formula('akariexp', [0]) == 100
+        assert _apply_formula('akariexp', [250]) == 200
+        assert _apply_formula('akariexp', [250, 500]) == 600
 
     def test_akariexp_higher_rating_weighs_more(self):
         assert _apply_formula('akariexp', [2000]) > _apply_formula('akariexp', [1200])
@@ -262,9 +261,10 @@ class TestQueensFormula:
     def test_queens_sum_is_plain_addition(self):
         assert _apply_formula('queens', [1234, 1567]) == 2801
 
-    def test_queensexp_matches_exp_shape(self):
-        ratings = [1200, 1800, 2200]
-        assert _apply_formula('queensexp', ratings) == _apply_formula('exp', ratings)
+    def test_queensexp_uses_250_point_scale(self):
+        assert _apply_formula('queensexp', [0]) == 100
+        assert _apply_formula('queensexp', [250]) == 200
+        assert _apply_formula('queensexp', [500]) == 400
 
     def test_vote_weight_uses_queens_rating(self, fake_db):
         fake_db._seed_queens_rating('user1', GUILD, 1456.7)
