@@ -203,14 +203,11 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
         rank_key_fn=rank_key_fn)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
+    cell_colors = None
     if annotated:
-        # Only opted-in users get a tier colour; the rest stay default-black.
-        row_colors = [
-            _akari_row_text_color(puzzle_info[row.user_id].pre_rating)
-            if row.user_id in registrants and row.user_id in puzzle_info
-            else _BLACK
-            for row in displayed
-        ]
+        row_colors, cell_colors = _result_table_text_colors(
+            displayed, puzzle_info, registrants,
+            column_count=7, performance_index=5)
     footer = None
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
@@ -227,7 +224,8 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
     return _mg()._get_akari_puzzle_table_image(
         displayed_rows, title=title, footer=footer,
         header=header, cols=cols,
-        right_align_cols=right_align_cols, row_colors=row_colors)
+        right_align_cols=right_align_cols, row_colors=row_colors,
+        cell_colors=cell_colors)
 
 
 def _get_queens_results_table_image_file(guild, rows, title,
@@ -247,13 +245,11 @@ def _get_queens_results_table_image_file(guild, rows, title,
         rank_key_fn=rank_key_fn)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
+    cell_colors = None
     if annotated:
-        row_colors = [
-            _akari_row_text_color(puzzle_info[row.user_id].pre_rating)
-            if row.user_id in registrants and row.user_id in puzzle_info
-            else _BLACK
-            for row in displayed
-        ]
+        row_colors, cell_colors = _result_table_text_colors(
+            displayed, puzzle_info, registrants,
+            column_count=6, performance_index=4)
     footer = None
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
@@ -270,6 +266,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
         displayed_rows, title=title, footer=footer,
         header=header, cols=cols,
         right_align_cols=right_align_cols, row_colors=row_colors,
+        cell_colors=cell_colors,
         filename='queens-results.png')
 
 
@@ -314,6 +311,24 @@ def _akari_row_text_color(rating):
     """
     embed = rank_for_rating(round(rating)).color_embed
     return ((embed >> 16) & 0xFF, (embed >> 8) & 0xFF, embed & 0xFF)
+
+
+def _result_table_text_colors(rows, puzzle_info, registrants, *,
+                              column_count, performance_index):
+    """Keep each row's rating colour, but colour Perf by its own rank."""
+    row_colors = []
+    cell_colors = []
+    for row in rows:
+        visible = row.user_id in registrants and row.user_id in puzzle_info
+        info = puzzle_info[row.user_id] if visible else None
+        base_color = (
+            _akari_row_text_color(info.pre_rating) if visible else _BLACK)
+        colors = [base_color] * column_count
+        if info is not None and info.performance is not None:
+            colors[performance_index] = _akari_row_text_color(info.performance)
+        row_colors.append(base_color)
+        cell_colors.append(tuple(colors))
+    return row_colors, cell_colors
 
 
 def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
