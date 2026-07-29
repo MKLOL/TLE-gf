@@ -1,4 +1,4 @@
-"""Per-cell rank colors for Akari and Queens result tables."""
+"""Per-cell colors for Akari and Queens result tables."""
 
 from tle.cogs import minigames as minigames_module
 
@@ -39,7 +39,7 @@ def _result_fixtures():
     return guild, rows, info
 
 
-def test_akari_perf_uses_performance_rank_color(monkeypatch):
+def test_akari_time_perf_and_delta_colors(monkeypatch):
     captured = _capture_renderer(monkeypatch)
     guild, rows, info = _result_fixtures()
 
@@ -50,15 +50,18 @@ def test_akari_perf_uses_performance_rank_color(monkeypatch):
     blue = minigames_module._akari_row_text_color(1200)
     purple = minigames_module._akari_row_text_color(1300)
     orange = minigames_module._akari_row_text_color(1510)
+    black = (0, 0, 0)
+    gray = (128, 128, 128)
+    green = (0, 128, 0)
     assert orange != blue
     assert captured['row_colors'] == [blue, purple]
     assert captured['cell_colors'] == [
-        (blue, blue, blue, blue, blue, orange, blue),
-        (purple, purple, purple, purple, purple, purple, purple),
+        (blue, blue, blue, blue, black, orange, green),
+        (purple, purple, purple, purple, black, purple, gray),
     ]
 
 
-def test_queens_perf_uses_performance_rank_color(monkeypatch):
+def test_queens_time_perf_and_delta_colors(monkeypatch):
     captured = _capture_renderer(monkeypatch)
     guild, rows, info = _result_fixtures()
 
@@ -69,9 +72,38 @@ def test_queens_perf_uses_performance_rank_color(monkeypatch):
     blue = minigames_module._akari_row_text_color(1200)
     purple = minigames_module._akari_row_text_color(1300)
     orange = minigames_module._akari_row_text_color(1510)
+    black = (0, 0, 0)
+    gray = (128, 128, 128)
+    green = (0, 128, 0)
     assert orange != blue
     assert captured['row_colors'] == [blue, purple]
     assert captured['cell_colors'] == [
-        (blue, blue, blue, blue, orange, blue),
-        (purple, purple, purple, purple, purple, purple),
+        (blue, blue, blue, black, orange, green),
+        (purple, purple, purple, black, purple, gray),
     ]
+
+
+def test_displayed_zero_delta_is_gray(monkeypatch):
+    captured = _capture_renderer(monkeypatch)
+    guild, rows, info = _result_fixtures()
+    info['10'] = info['10']._replace(delta=0.4)
+
+    minigames_module._get_queens_results_table_image_file(
+        guild, rows, 'Queens Results', puzzle_info=info,
+        registrants={'10', '20'}, identity_fn=lambda _guild, row: row.user_id)
+
+    assert captured['rows'][0][-1] == '+0'
+    assert captured['cell_colors'][0][-1] == (128, 128, 128)
+
+
+def test_negative_delta_is_gray(monkeypatch):
+    captured = _capture_renderer(monkeypatch)
+    guild, rows, info = _result_fixtures()
+    info['10'] = info['10']._replace(delta=-12.0)
+
+    minigames_module._get_akari_puzzle_table_image_file(
+        guild, rows, 'Akari Results', puzzle_info=info,
+        registrants={'10', '20'}, identity_fn=lambda _guild, row: row.user_id)
+
+    assert captured['rows'][0][-1] == '-12'
+    assert captured['cell_colors'][0][-1] == (128, 128, 128)

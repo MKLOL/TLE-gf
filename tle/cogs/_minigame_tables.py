@@ -65,6 +65,8 @@ _AKARI_IMAGE_FONTS = [
 _DISCORD_GRAY = (.212, .244, .247)
 _TABLE_ROW_COLORS = ((0.95, 0.95, 0.95), (0.9, 0.9, 0.9))
 _BLACK = (0, 0, 0)
+_DELTA_GRAY = (128, 128, 128)
+_DELTA_GREEN = (0, 128, 0)
 _SMOKE_WHITE = (250, 250, 250)
 
 # Same per-page count as ``;handles updates`` — embed descriptions cap at 4096
@@ -207,7 +209,8 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
     if annotated:
         row_colors, cell_colors = _result_table_text_colors(
             displayed, puzzle_info, registrants,
-            column_count=7, performance_index=5)
+            column_count=7, time_index=4, performance_index=5,
+            delta_index=6)
     footer = None
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
@@ -249,7 +252,8 @@ def _get_queens_results_table_image_file(guild, rows, title,
     if annotated:
         row_colors, cell_colors = _result_table_text_colors(
             displayed, puzzle_info, registrants,
-            column_count=6, performance_index=4)
+            column_count=6, time_index=3, performance_index=4,
+            delta_index=5)
     footer = None
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
@@ -314,8 +318,9 @@ def _akari_row_text_color(rating):
 
 
 def _result_table_text_colors(rows, puzzle_info, registrants, *,
-                              column_count, performance_index):
-    """Keep each row's rating colour, but colour Perf by its own rank."""
+                              column_count, time_index, performance_index,
+                              delta_index):
+    """Apply rating, performance, time, and delta colours to result cells."""
     row_colors = []
     cell_colors = []
     for row in rows:
@@ -324,8 +329,12 @@ def _result_table_text_colors(rows, puzzle_info, registrants, *,
         base_color = (
             _akari_row_text_color(info.pre_rating) if visible else _BLACK)
         colors = [base_color] * column_count
+        colors[time_index] = _BLACK
         if info is not None and info.performance is not None:
             colors[performance_index] = _akari_row_text_color(info.performance)
+        if info is not None:
+            colors[delta_index] = (
+                _DELTA_GREEN if round(info.delta) > 0 else _DELTA_GRAY)
         row_colors.append(base_color)
         cell_colors.append(tuple(colors))
     return row_colors, cell_colors
