@@ -5,6 +5,9 @@ replay. It is separate from the persisted Codeforces-style Queens rating:
 testing it cannot alter the ordinary leaderboard or anything that consumes the
 ordinary rating.
 
+The full research, holdout, simulation, corruption, and pool-dynamics review
+is in [the robustness and inflation audit](queens-improved-rating-audit.md).
+
 ## Why the model changed
 
 The first beta used Glicko-2. It expanded one daily placement into one result
@@ -37,13 +40,18 @@ Each other time contributes a soft result, and a neutral self-result anchors
 the bracket:
 
 ```text
-A_i = [0.5 + sum(j != i, sigmoid((x_j - x_i) / 0.35))] / n
+z_ij = clip((x_j - x_i) / 0.35, -8, 8)
+A_i = [0.5 + sum(j != i, sigmoid(z_ij))] / n
 ```
 
 Lower time is better. Equal times contribute exactly `0.5`; a wider gap moves
 smoothly toward `1` or `0`. Every person contributes at most `1/n`, so one
 extreme fastest or slowest time cannot stretch the middle of the field the way
 literal min/max normalization would.
+
+The symmetric `±8` evidence limit activates only beyond a 16.4x adjusted-time
+ratio. It prevents numerical certainty and extreme long-run pair separation;
+it is not a cap on a player's rating change.
 
 Given the pre-day ratings, the expected score for any candidate rating `r` is:
 
@@ -71,7 +79,9 @@ Consequences:
 
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
-- Every round is zero-sum; no Codeforces inflation correction is needed.
+- Every round is zero-sum, so a fixed retained identity pool cannot create
+  nominal points. Active or visible averages can still move through churn,
+  selective submission, hidden accounts, or sybils.
 - There is no post-processing cap. Because both `A_i` and `F(rating_i)` are
   probabilities, the formula itself keeps `|delta_i|` below the K-factor of
   `144`.
@@ -79,6 +89,9 @@ Consequences:
 - New players receive the same bounded update rule as established players.
 - Playing more days supplies more evidence but does not award rating by itself;
   participation volume belongs to Queens XP rather than skill rating.
+- A malformed locked first time is quarantined from the beta replay after
+  first-submission deduplication. It cannot become a zero-second win, promote a
+  later retry, or break every `+improved` command.
 
 ## Performance
 

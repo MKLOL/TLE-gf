@@ -4,10 +4,16 @@ import math
 import random
 from collections import namedtuple
 
+import pytest
+
 from tle.util.queens_improved_rating import (
+    _ELO_SCALE,
     _RATING_K,
+    _TIME_MARGIN_LOGIT_LIMIT,
+    _TIME_MARGIN_WIDTH,
     _compute_round,
     _soft_time_score,
+    _time_log,
     compute_queens_improved_ratings,
 )
 
@@ -63,6 +69,19 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     # meaningful while the underlying closeness response stays unchanged.
     assert updates['0'].delta > 34
     assert updates['7'].delta < -41
+
+
+def test_extreme_pair_evidence_is_symmetric_and_never_separates():
+    ordinary = _soft_time_score(1, 2)
+    extreme = _soft_time_score(1, 10 ** 10_000)
+    reverse = _soft_time_score(10 ** 10_000, 1)
+    cap_ratio = math.exp(_TIME_MARGIN_WIDTH * _TIME_MARGIN_LOGIT_LIMIT)
+    beyond_cap = _soft_time_score(1, (1 + 4) * cap_ratio * 10 - 4)
+
+    assert 0 < reverse < ordinary < extreme < 1
+    assert extreme == beyond_cap
+    assert abs(extreme + reverse - 1) < 1e-15
+    assert _soft_time_score(30, 30) == 0.5
 
 
 def test_replay_is_deterministic_and_dedupes_by_first_message():
@@ -193,6 +212,130 @@ def test_one_time_outlier_cannot_flatten_the_middle():
         outlier['3'].performance - outlier['4'].performance
         < outlier['4'].performance - outlier['5'].performance
     )
+
+
+def test_random_rounds_preserve_points_and_natural_delta_bound():
+    rng = random.Random(20260729)
+    for trial in range(100):
+        count = rng.randint(2, 25)
+        users = [f'u{index}' for index in range(count)]
+        ratings = {
+            user: rng.uniform(400, 2400)
+            for user in users
+        }
+        times = {
+            user: rng.randint(1, 7200)
+            for user in users
+        }
+        updates = _compute_round(ratings, times)
+
+        assert abs(sum(update.delta for update in updates.values())) < 1e-10
+        natural_bound = _RATING_K * (count - 1) / count
+        for user, update in updates.items():
+            assert abs(update.delta) <= natural_bound + 1e-10
+            assert math.isfinite(update.performance)
+            assert (update.delta > 0) == (
+                update.performance > ratings[user])
+            assert (update.delta < 0) == (
+                update.performance < ratings[user])
+            assert abs(update.delta) <= (
+                _RATING_K / (4 * _ELO_SCALE)
+                * abs(update.performance - ratings[user])
+                + 1e-10
+            )
+
+        shifted_ratings = {
+            user: rating + 777 for user, rating in ratings.items()
+        }
+        shifted = _compute_round(shifted_ratings, times)
+        for user in users:
+            assert abs(shifted[user].delta - updates[user].delta) < 1e-10
+            assert abs(
+                shifted[user].performance
+                - updates[user].performance
+                - 777
+            ) < 1e-9
+
+
+def test_one_changed_time_has_bounded_influence_on_every_other_player():
+    rng = random.Random(731984)
+    for count in range(2, 26):
+        users = [f'u{index}' for index in range(count)]
+        ratings = {
+            user: rng.uniform(600, 2200)
+            for user in users
+        }
+        times = {
+            user: rng.randint(2, 600)
+            for user in users
+        }
+        victim = users[count // 2]
+        ordinary = _compute_round(ratings, times)
+        corrupted_times = dict(times)
+        corrupted_times[victim] = 10 ** 400
+        corrupted = _compute_round(ratings, corrupted_times)
+
+        for user in users:
+            change = abs(corrupted[user].delta - ordinary[user].delta)
+            if user == victim:
+                assert change <= _RATING_K * (count - 1) / count + 1e-10
+            else:
+                assert change <= _RATING_K / count + 1e-10
+
+
+def test_replay_conserves_starting_mean_as_players_enter():
+    rng = random.Random(424242)
+    rows = []
+    next_message = 1
+    for puzzle in range(1, 31):
+        # The observed pool grows, and some days deliberately have only one
+        # participant.  Neither entry nor a solo day may create rating drift.
+        observed = min(12, 1 + puzzle // 2)
+        field_size = 1 if puzzle % 7 == 0 else min(observed, 2 + puzzle % 8)
+        for user_index in rng.sample(range(observed), field_size):
+            rows.append(_row(
+                f'u{user_index}',
+                puzzle,
+                rng.randint(3, 300),
+                message_id=next_message,
+            ))
+            next_message += 1
+
+    states = compute_queens_improved_ratings(rows)
+
+    assert len(states) == 12
+    assert abs(sum(state.rating for state in states.values()) - 12 * 1200) < 1e-9
+
+
+def test_malformed_times_are_quarantined_from_improved_replay():
+    rows = [
+        _row('u1', 1, -5, message_id=1),
+        # A later valid share must not replace the malformed locked first one.
+        _row('u1', 1, 5, message_id=99),
+        _row('u2', 1, 10, message_id=2),
+        _row('u3', 1, 20, message_id=3),
+        _row('u4', 2, 0, message_id=4),
+        _row('u5', 2, math.nan, message_id=5),
+        _row('u6', 2, 1.5, message_id=6),
+        _row('u7', 2, math.inf, message_id=7),
+        _row('u8', 2, None, message_id=8),
+        _row('u9', 2, 'not-a-time', message_id=9),
+        # Quarantining u11 leaves a valid solo day, which must remain unrated.
+        _row('u10', 3, 15, message_id=10),
+        _row('u11', 3, -1, message_id=11),
+    ]
+
+    states = compute_queens_improved_ratings(rows)
+
+    assert set(states) == {'u2', 'u3', 'u10'}
+    assert states['u2'].rating > 1200 > states['u3'].rating
+    assert states['u10'].rating == 1200
+    assert states['u10'].games == 0
+    with pytest.raises(ValueError):
+        _time_log(-1)
+    with pytest.raises(ValueError):
+        _time_log(math.inf)
+    assert math.isfinite(_time_log(10 ** 10_000))
 
 
 def test_history_contract_and_inactivity_state():

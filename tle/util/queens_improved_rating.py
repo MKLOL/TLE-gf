@@ -33,8 +33,12 @@ _RATING_POINT_SCALE = 2.0
 _ELO_SCALE = _RATING_POINT_SCALE * 400.0 / math.log(10.0)
 # Adding a few seconds before taking logs stops a one-second gap on a very fast
 # Monday from looking like an enormous percentage difference.
-_TIME_OFFSET_SECONDS = 4.0
+_TIME_OFFSET_SECONDS = 4
 _TIME_MARGIN_WIDTH = 0.35
+# This is a bound on one pair's *evidence*, not on a player's rating change.
+# It activates only beyond a 16.4x adjusted-time ratio and prevents malformed
+# or repeated extreme margins from producing numerical 0/1 separation.
+_TIME_MARGIN_LOGIT_LIMIT = 8.0
 _RATING_K = _RATING_POINT_SCALE * 72.0
 _PERFORMANCE_SEARCH_MARGIN = _RATING_POINT_SCALE * 800.0
 _PERFORMANCE_SEARCH_ITERS = 60
@@ -67,12 +71,43 @@ def _sigmoid(value):
 
 def _time_log(time_seconds):
     """Return the softened log-time used by the daily performance bracket."""
-    seconds = float(time_seconds)
-    if not math.isfinite(seconds):
-        raise ValueError(f'Queens time must be finite, got {time_seconds!r}.')
-    # Parsers reject negative times.  Clamp defensively so one malformed legacy
-    # row cannot make every +improved command fail.
-    return math.log(max(0.0, seconds) + _TIME_OFFSET_SECONDS)
+    try:
+        if isinstance(time_seconds, int):
+            seconds = time_seconds
+        else:
+            seconds = float(time_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f'Queens time must be numeric, got {time_seconds!r}.') from exc
+    if (
+            isinstance(seconds, float) and not math.isfinite(seconds)
+            or seconds < 0):
+        raise ValueError(
+            f'Queens time must be finite and non-negative, '
+            f'got {time_seconds!r}.')
+    # Keep integer inputs as integers so even an unexpectedly huge legacy value
+    # can be logged without overflowing an intermediate float conversion.
+    return math.log(seconds + _TIME_OFFSET_SECONDS)
+
+
+def _result_time_seconds(time_seconds):
+    """Validate one stored result time, returning its integral seconds."""
+    try:
+        seconds = int(time_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f'Queens result time must be an integer, got {time_seconds!r}.'
+        ) from exc
+    if seconds <= 0:
+        raise ValueError(
+            f'Queens result time must be positive, got {time_seconds!r}.')
+    # Reject fractional floats rather than silently truncating them.  SQLite
+    # rows use integers, but this also protects imported/test row-like objects.
+    if isinstance(time_seconds, float) and time_seconds != seconds:
+        raise ValueError(
+            f'Queens result time must be an integer, got {time_seconds!r}.')
+    _time_log(seconds)
+    return seconds
 
 
 def _soft_time_score(time_self, time_other):
@@ -81,8 +116,18 @@ def _soft_time_score(time_self, time_other):
     Lower is better.  Equal times return exactly 0.5; increasingly large gaps
     approach a full 1/0 result without ever making performance infinite.
     """
-    margin = (_time_log(time_other) - _time_log(time_self))
-    return _sigmoid(margin / _TIME_MARGIN_WIDTH)
+    return _soft_time_score_from_logs(
+        _time_log(time_self), _time_log(time_other))
+
+
+def _soft_time_score_from_logs(log_self, log_other):
+    """Return bounded pair evidence from two already-transformed times."""
+    logit = (log_other - log_self) / _TIME_MARGIN_WIDTH
+    logit = max(
+        -_TIME_MARGIN_LOGIT_LIMIT,
+        min(_TIME_MARGIN_LOGIT_LIMIT, logit),
+    )
+    return _sigmoid(logit)
 
 
 def _elo_expected(rating, opponent_rating):
@@ -142,10 +187,8 @@ def _compute_round(ratings, times):
         # of the rating residual, makes tied times share one performance, and
         # provides finite high/low performance anchors.
         actual[user] = sum(
-            _sigmoid(
-                (time_logs[opponent] - time_logs[user])
-                / _TIME_MARGIN_WIDTH
-            )
+            _soft_time_score_from_logs(
+                time_logs[user], time_logs[opponent])
             for opponent in users
         ) / count
         expected[user] = _field_expected(ratings[user], field_ratings)
@@ -171,10 +214,15 @@ def _row_order_key(row):
         message_key = (0, int(message_id))
     except (TypeError, ValueError):
         message_key = (1, '' if message_id is None else str(message_id))
+    time_seconds = getattr(row, 'time_seconds', None)
+    try:
+        time_key = (0, int(time_seconds))
+    except (TypeError, ValueError, OverflowError):
+        time_key = (1, repr(time_seconds))
     return (
         message_key,
         str(getattr(row, 'puzzle_date', '')),
-        int(getattr(row, 'time_seconds', 0)),
+        time_key,
         -int(bool(getattr(row, 'is_perfect', False))),
         -int(getattr(row, 'accuracy', 0)),
         str(getattr(row, 'raw_content', '')),
@@ -222,6 +270,18 @@ def compute_queens_improved_ratings(
         day_rows = {}
         for row in sorted(by_puzzle[puzzle_number], key=_row_order_key):
             day_rows.setdefault(str(row.user_id), row)
+        valid_day_rows = {}
+        for user_id, row in day_rows.items():
+            try:
+                _result_time_seconds(row.time_seconds)
+            except ValueError:
+                # A malformed locked first result must not become a zero-second
+                # win, seed a ghost player, or break every +improved command.
+                # Do this after first-attempt deduplication so a later share
+                # cannot replace the quarantined first one.
+                continue
+            valid_day_rows[user_id] = row
+        day_rows = valid_day_rows
         active_ids = sorted(day_rows)
 
         for user_id in active_ids:
@@ -248,7 +308,7 @@ def compute_queens_improved_ratings(
             user_id: players[user_id].rating for user_id in active_ids
         }
         times = {
-            user_id: int(day_rows[user_id].time_seconds)
+            user_id: _result_time_seconds(day_rows[user_id].time_seconds)
             for user_id in active_ids
         }
         updates = _compute_round(before, times)
