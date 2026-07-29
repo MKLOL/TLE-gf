@@ -313,6 +313,12 @@ class AkariCmdsMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds)
 
+    @akari.command(name='skips',
+                   brief='Show skipped days since the first Akari submission',
+                   usage='[@user]')
+    async def akari_skips(self, ctx, member: CaseInsensitiveMember = None):
+        await self._cmd_akari_skips(ctx, member or ctx.author)
+
     @akari.group(name='history',
                  brief='Paginated rating delta log for a registered user',
                  usage='[@user] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',

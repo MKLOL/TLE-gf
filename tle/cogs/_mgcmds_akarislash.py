@@ -236,6 +236,21 @@ class AkariSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
+    @akari_slash.command(
+        name='skips',
+        description="Show a user's skipped Akari days")
+    @app_commands.describe(member='Player (defaults to you)')
+    async def slash_akari_skips(
+        self, interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer()
+        target = member or interaction.user
+        try:
+            await self._cmd_akari_skips(_SlashCtx(interaction), target)
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
     @akari_slash.command(name='here', description='Set the Daily Akari channel')
     async def slash_akari_here(self, interaction: discord.Interaction):
         await interaction.response.defer()

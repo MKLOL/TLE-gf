@@ -11,18 +11,23 @@ are shared verbatim by both games.
 import datetime as dt
 import logging
 
+import discord
+
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import paginator
 
 from tle.cogs._minigame_akari import AKARI_GAME, puzzle_date_for
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, _mg,
+    MinigameCogError, _mg, _safe_member_name,
 )
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _split_queens_rating_date_filter,
     _split_queens_recalculate_filter,
 )
-from tle.cogs._minigame_tables import _maybe_parse_puzzle_selector
+from tle.cogs._minigame_tables import (
+    _AKARI_HISTORY_PER_PAGE, _maybe_parse_puzzle_selector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,34 @@ def _akari_results_time_sort_key(row):
 
 def _akari_results_time_rank_key(row):
     return int(getattr(row, 'time_seconds', 0))
+
+
+def _akari_skipped_puzzles(rows, current_puzzle):
+    """Return ``(first_submission, skipped)`` for concluded Akari puzzles.
+
+    ``current_puzzle`` is still open, so only positive puzzle numbers below it
+    can be skipped. The current puzzle may still be the user's first stored
+    submission, however, so it remains a valid tracking boundary.
+    """
+    submitted = set()
+    for row in rows:
+        try:
+            puzzle_number = int(row.puzzle_number)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if 0 < puzzle_number <= int(current_puzzle):
+            submitted.add(puzzle_number)
+    if not submitted:
+        return None, []
+
+    first_submission = min(submitted)
+    skipped = [
+        puzzle_number
+        for puzzle_number in range(
+            int(current_puzzle) - 1, first_submission, -1)
+        if puzzle_number not in submitted
+    ]
+    return first_submission, skipped
 
 
 class ImplAkariCMixin:
@@ -103,6 +136,65 @@ class ImplAkariCMixin:
         await self._cmd_minigame_admins_remove(
             ctx, member, AKARI_GAME.display_name,
             self._akari_admin_ids, self._set_akari_admin_ids)
+
+    # ── Per-user skipped-day history ────────────────────────────────────
+
+    async def _cmd_akari_skips(self, ctx, member):
+        """List missing concluded puzzles since a user's first submission."""
+        self._require_enabled(ctx.guild.id, AKARI_GAME)
+        if not cf_common.user_db.is_akari_registered(
+                ctx.guild.id, member.id):
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` has not opted in to '
+                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
+        if cf_common.user_db.is_akari_banned(ctx.guild.id, member.id):
+            raise MinigameCogError(
+                f'`{_safe_member_name(member)}` is banned from '
+                f'{AKARI_GAME.display_name}.')
+
+        rows = cf_common.user_db.get_minigame_results_for_user(
+            ctx.guild.id, AKARI_GAME.name, member.id)
+        current_puzzle = _mg().expected_puzzle_number(dt.date.today())
+        first_submission, skipped = _akari_skipped_puzzles(
+            rows, current_puzzle)
+        if first_submission is None:
+            raise MinigameCogError(
+                f'No {AKARI_GAME.display_name} results found for '
+                f'`{_safe_member_name(member)}`.')
+
+        first_date = puzzle_date_for(first_submission)
+        if not skipped:
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{_safe_member_name(member)}` has no skipped '
+                f'{AKARI_GAME.display_name} days since first submitting '
+                f'**#{first_submission}** on **{first_date.isoformat()}**.'))
+            return
+
+        lines = []
+        for puzzle_number in skipped:
+            puzzle_date = puzzle_date_for(puzzle_number)
+            lines.append(
+                f'**#{puzzle_number}** \N{MIDDLE DOT} '
+                f'{puzzle_date.isoformat()} \N{MIDDLE DOT} '
+                f'{puzzle_date:%A}')
+        day_label = 'day' if len(skipped) == 1 else 'days'
+        title = (
+            f'{AKARI_GAME.display_name} skipped days — '
+            f'{_safe_member_name(member)} ({len(skipped)} {day_label})')
+        tracking_line = (
+            f'Since first submission: **#{first_submission}** '
+            f'\N{MIDDLE DOT} **{first_date.isoformat()}**')
+        pages = []
+        for chunk in paginator.chunkify(lines, _AKARI_HISTORY_PER_PAGE):
+            embed = discord.Embed(
+                title=title,
+                description=f'{tracking_line}\n\n' + '\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )
+            pages.append((None, embed))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
 
     # ── Bulk deletion (per date / date range) ───────────────────────────
 
