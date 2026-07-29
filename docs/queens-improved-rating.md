@@ -48,14 +48,24 @@ literal min/max normalization would.
 Given the pre-day ratings, the expected score for any candidate rating `r` is:
 
 ```text
-F(r) = mean(j in field, sigmoid((r - rating_j) / (400 / ln(10))))
+F(r) = mean(j in field, sigmoid((r - rating_j) / (800 / ln(10))))
 ```
 
 The rating change is:
 
 ```text
-delta_i = 72 * (A_i - F(rating_i))
+delta_i = 144 * (A_i - F(rating_i))
 ```
+
+The wider `800` expectation scale and `144` K-factor are an exact two-times
+re-expression of the original beta's rating points around the unchanged 1200
+start. Rating scales have arbitrary units—Microsoft's
+[TrueSkill explanation](https://www.microsoft.com/en-us/research/project/trueskill-ranking-system/)
+likewise calculates on one scale and multiplies into a useful display range.
+Applying the same factor to the expectation curve, update, and performance
+preserves every prediction, ordering, tie, and convergence property. It simply
+lets sustained skill differences use the rank bands already displayed by
+Queens.
 
 Consequences:
 
@@ -64,9 +74,11 @@ Consequences:
 - Every round is zero-sum; no Codeforces inflation correction is needed.
 - There is no post-processing cap. Because both `A_i` and `F(rating_i)` are
   probabilities, the formula itself keeps `|delta_i|` below the K-factor of
-  `72`.
+  `144`.
 - Inactivity never changes skill.
 - New players receive the same bounded update rule as established players.
+- Playing more days supplies more evidence but does not award rating by itself;
+  participation volume belongs to Queens XP rather than skill rating.
 
 ## Performance
 
@@ -88,17 +100,17 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1384 | +17.45 |
-| 8 | 1346 | +14.28 |
-| 10 | 1280 | +8.12 |
-| 12 | 1224 | +2.43 |
-| 13 | 1198 | -0.19 |
-| 16 | 1130 | -7.12 |
-| 20 | 1054 | -14.31 |
-| 25 | 973 | -20.68 |
+| 7 | 1568 | +34.90 |
+| 8 | 1492 | +28.57 |
+| 10 | 1360 | +16.25 |
+| 12 | 1247 | +4.87 |
+| 13 | 1196 | -0.38 |
+| 16 | 1061 | -14.23 |
+| 20 | 908 | -28.61 |
+| 25 | 746 | -41.35 |
 
-The performance drop from 12 to 13 seconds is about 25 points; the drop from
-13 to 16 is about 68 points. The larger time gap therefore matters about 2.7
+The performance drop from 12 to 13 seconds is about 51 points; the drop from
+13 to 16 is about 136 points. The larger time gap therefore matters about 2.7
 times as much without making either result catastrophic.
 
 ## Snapshot replay
@@ -110,12 +122,12 @@ rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| New improved beta | 9.82 | 23.69 | -37.30 to +35.45 |
+| New improved beta | 19.65 | 47.42 | -74.60 to +70.90 |
 | Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
 | Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 
 The beta preserved exactly `29 × 1200 = 34,800` total points. Final observed
-ratings ranged from about `1026` to `1421`, and the ordering remained close to
+ratings ranged from about `852` to `1643`, and the ordering remained close to
 the ordinary ladder (Spearman correlation `0.973`).
 
 On chronological comparisons where both players already had five rated days,

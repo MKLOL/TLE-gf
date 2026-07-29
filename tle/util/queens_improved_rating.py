@@ -8,7 +8,9 @@ model:
 * close times behave almost like ties instead of full wins/losses;
 * the field is averaged, so a 20-player day is not 19 independent games;
 * the averaged residual is naturally bounded by the K-factor and preserves a
-  zero-sum round without post-hoc clipping.
+  zero-sum round without post-hoc clipping;
+* player-facing rating points use a wider scale so sustained skill differences
+  span the existing minigame rank tiers.
 
 Displayed performance uses the same soft time bracket as rating changes.  A
 neutral self-comparison keeps the best and worst performance finite, while a
@@ -22,14 +24,19 @@ from tle.util.akari_rating import HistoryPoint, RatingState
 
 
 _START_RATING = 1200.0
-# Traditional Elo's 400-point base-10 scale expressed for natural exp().
-_ELO_SCALE = 400.0 / math.log(10.0)
+# Rating scales have arbitrary units.  The original beta's sound latent model
+# occupied only half of the rank bands used by Queens/Akari, so expose two
+# player-facing points per original beta point.  Scaling the expectation curve,
+# K, and performance search together preserves every probability and ordering.
+_RATING_POINT_SCALE = 2.0
+# Traditional Elo's base-10 scale, widened into player-facing rating points.
+_ELO_SCALE = _RATING_POINT_SCALE * 400.0 / math.log(10.0)
 # Adding a few seconds before taking logs stops a one-second gap on a very fast
 # Monday from looking like an enormous percentage difference.
 _TIME_OFFSET_SECONDS = 4.0
 _TIME_MARGIN_WIDTH = 0.35
-_RATING_K = 72.0
-_PERFORMANCE_SEARCH_MARGIN = 800.0
+_RATING_K = _RATING_POINT_SCALE * 72.0
+_PERFORMANCE_SEARCH_MARGIN = _RATING_POINT_SCALE * 800.0
 _PERFORMANCE_SEARCH_ITERS = 60
 
 

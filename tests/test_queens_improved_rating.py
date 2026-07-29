@@ -57,12 +57,12 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     }
 
     assert by_time[12] - by_time[13] < by_time[13] - by_time[16]
-    assert abs((by_time[12] - by_time[13]) - 25.35) < 0.1
-    assert abs((by_time[13] - by_time[16]) - 67.76) < 0.1
-    # The strengthened beta should make a clear win feel meaningful while the
-    # performance spacing itself remains closeness-aware.
-    assert updates['0'].delta > 17
-    assert updates['7'].delta < -20
+    assert abs((by_time[12] - by_time[13]) - 50.70) < 0.1
+    assert abs((by_time[13] - by_time[16]) - 135.52) < 0.1
+    # The wider player-facing point scale should make the existing rank bands
+    # meaningful while the underlying closeness response stays unchanged.
+    assert updates['0'].delta > 34
+    assert updates['7'].delta < -41
 
 
 def test_replay_is_deterministic_and_dedupes_by_first_message():
@@ -188,7 +188,7 @@ def test_one_time_outlier_cannot_flatten_the_middle():
     outlier = _compute_round(ratings, outlier_times)
 
     for user_id in list(ratings)[:-1]:
-        assert abs(outlier[user_id].delta - ordinary[user_id].delta) < 6
+        assert abs(outlier[user_id].delta - ordinary[user_id].delta) < 12
     assert (
         outlier['3'].performance - outlier['4'].performance
         < outlier['4'].performance - outlier['5'].performance
