@@ -5,7 +5,7 @@ import random
 from collections import namedtuple
 
 from tle.util.queens_improved_rating import (
-    _MAX_DAILY_CHANGE,
+    _RATING_K,
     _compute_round,
     _soft_time_score,
     compute_queens_improved_ratings,
@@ -150,7 +150,7 @@ def test_rating_delta_and_performance_follow_the_daily_result():
         assert (point.delta < 0) == (point.performance < 1200)
 
 
-def test_round_is_field_normalized_zero_sum_and_capped():
+def test_round_is_field_normalized_zero_sum_and_naturally_bounded():
     def equivalent_field(size):
         ratings = {'fast': 1200}
         times = {'fast': 10}
@@ -171,8 +171,10 @@ def test_round_is_field_normalized_zero_sum_and_capped():
     upset_times = {'favorite': 1000, 'a': 10, 'b': 20, 'c': 30}
     upset = _compute_round(upset_ratings, upset_times)
     deltas = [update.delta for update in upset.values()]
-    assert max(map(abs, deltas)) <= _MAX_DAILY_CHANGE
-    assert math.isclose(max(map(abs, deltas)), _MAX_DAILY_CHANGE)
+    # There is no post-hoc ±32 clip. Since actual and expected are both
+    # probabilities, the formula itself keeps every move below K in magnitude.
+    assert max(map(abs, deltas)) > 32
+    assert max(map(abs, deltas)) < _RATING_K
     assert abs(sum(deltas)) < 1e-12
 
 

@@ -51,12 +51,10 @@ Given the pre-day ratings, the expected score for any candidate rating `r` is:
 F(r) = mean(j in field, sigmoid((r - rating_j) / (400 / ln(10))))
 ```
 
-The raw rating change and shared safety cap are:
+The rating change is:
 
 ```text
-raw_delta_i = 72 * (A_i - F(rating_i))
-round_scale = min(1, 32 / max(abs(raw_delta)))
-delta_i = round_scale * raw_delta_i
+delta_i = 72 * (A_i - F(rating_i))
 ```
 
 Consequences:
@@ -64,8 +62,9 @@ Consequences:
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
 - Every round is zero-sum; no Codeforces inflation correction is needed.
-- Everyone is capped at `±32`, and the same scale is applied to the whole
-  round so relative changes and zero-sum balance are preserved.
+- There is no post-processing cap. Because both `A_i` and `F(rating_i)` are
+  probabilities, the formula itself keeps `|delta_i|` below the K-factor of
+  `72`.
 - Inactivity never changes skill.
 - New players receive the same bounded update rule as established players.
 
@@ -111,7 +110,7 @@ rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| New improved beta | 9.77 | 23.71 | -32.00 to +32.00 |
+| New improved beta | 9.82 | 23.69 | -37.30 to +35.45 |
 | Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
 | Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 

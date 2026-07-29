@@ -7,8 +7,8 @@ model:
 * every opponent contributes a bounded fraction of one daily result;
 * close times behave almost like ties instead of full wins/losses;
 * the field is averaged, so a 20-player day is not 19 independent games;
-* one common scale caps every day's movement at 32 points and preserves a
-  zero-sum round.
+* the averaged residual is naturally bounded by the K-factor and preserves a
+  zero-sum round without post-hoc clipping.
 
 Displayed performance uses the same soft time bracket as rating changes.  A
 neutral self-comparison keeps the best and worst performance finite, while a
@@ -29,7 +29,6 @@ _ELO_SCALE = 400.0 / math.log(10.0)
 _TIME_OFFSET_SECONDS = 4.0
 _TIME_MARGIN_WIDTH = 0.35
 _RATING_K = 72.0
-_MAX_DAILY_CHANGE = 32.0
 _PERFORMANCE_SEARCH_MARGIN = 800.0
 _PERFORMANCE_SEARCH_ITERS = 60
 
@@ -115,7 +114,7 @@ def _performance_rating(field_ratings, target_score):
 
 
 def _compute_round(ratings, times):
-    """Return capped, zero-sum soft-Elo updates for one multiplayer day."""
+    """Return naturally bounded, zero-sum updates for one multiplayer day."""
     users = sorted(ratings)
     if set(users) != set(times):
         raise ValueError('Queens round ratings and times must have the same users.')
@@ -148,15 +147,10 @@ def _compute_round(ratings, times):
         user: _RATING_K * (actual[user] - expected[user])
         for user in users
     }
-    max_change = max(abs(delta) for delta in raw_deltas.values())
-    round_scale = (
-        min(1.0, _MAX_DAILY_CHANGE / max_change)
-        if max_change else 1.0
-    )
 
     return {
         user: _RoundUpdate(
-            delta=raw_deltas[user] * round_scale,
+            delta=raw_deltas[user],
             performance=_performance_rating(field_ratings, actual[user]),
         )
         for user in users
