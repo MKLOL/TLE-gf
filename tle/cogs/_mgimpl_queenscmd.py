@@ -14,7 +14,7 @@ from tle.util.akari_weekly import (
 )
 
 from tle.cogs._minigame_queens import (
-    QUEENS_GAME,
+    QUEENS_GAME, queens_weekly_difficulty_map,
 )
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg,
@@ -248,14 +248,15 @@ class ImplQueensCmdMixin:
             for row in result_rows
         ]
         today = _queens_current_puzzle_date()
+        difficulties = queens_weekly_difficulty_map(scoring_rows)
         states = compute_weekly_ratings(
-            scoring_rows, {}, as_of_date=today)
+            scoring_rows, difficulties, as_of_date=today)
         rating_rows = sorted(
             states.values(),
             key=lambda state: (
                 -state.rating, -state.games, int(state.user_id)))
         standings = current_week_standings(
-            scoring_rows, {}, as_of_date=today)
+            scoring_rows, difficulties, as_of_date=today)
         return rating_rows, standings
 
     async def _send_queens_weekly_scores(

@@ -17,6 +17,10 @@ _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _DETECT_RE = re.compile(r'Queens|No hints|No mistakes|\b\d{1,2}:\d{2}\b', re.IGNORECASE)
 _QUEENS_ANCHOR_DATE = dt.date(2026, 6, 8)
 _QUEENS_ANCHOR_NUMBER = 769
+# LinkedIn ramps Queens up through each Monday-Sunday puzzle week.  Map the
+# four weekday bands directly to evenly spaced weekly-rating levels:
+# Easy, Medium, Hard, Very Hard.
+QUEENS_WEEKDAY_DIFFICULTIES = (1, 1, 2, 2, 3, 3, 4)
 
 QueensLeaderboardEntry = namedtuple(
     'QueensLeaderboardEntry',
@@ -26,6 +30,22 @@ QueensLeaderboardEntry = namedtuple(
 
 def normalize_queens_name(name):
     return ' '.join(str(name).strip().casefold().split())
+
+
+def queens_weekly_difficulty_map(rows):
+    """Return static LinkedIn weekday difficulties for every represented week.
+
+    Fill all seven puzzle numbers even when the database has results for only
+    some days.  The weekly scorer normalizes over the whole week, so leaving a
+    missing day at its neutral fallback would distort that week's weights.
+    """
+    difficulties = {}
+    for row in rows:
+        puzzle_date = normalize_puzzle_date(row.puzzle_date)
+        monday_number = int(row.puzzle_number) - puzzle_date.weekday()
+        for offset, difficulty in enumerate(QUEENS_WEEKDAY_DIFFICULTIES):
+            difficulties[monday_number + offset] = difficulty
+    return difficulties
 
 
 def parse_queens_time(time_text):

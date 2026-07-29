@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from tle.cogs import minigames as minigames_module
-from tle.cogs._minigame_queens import QUEENS_GAME, normalize_queens_name
+from tle.cogs._minigame_queens import (
+    QUEENS_GAME,
+    QUEENS_WEEKDAY_DIFFICULTIES,
+    normalize_queens_name,
+    queens_weekly_difficulty_map,
+)
 from tle.cogs.minigames import Minigames, MinigameCogError
 from tle.util import codeforces_common as cf_common
 
@@ -110,6 +115,53 @@ def _install_render_spies(monkeypatch):
 
 
 class TestQueensWeeklyRatings(_QueensCommandsBase):
+    def test_weekday_difficulties_follow_linkedin_weekly_ramp(self):
+        monday = dt.date(2030, 1, 7)
+        rows = [
+            SimpleNamespace(
+                puzzle_number=100 + offset,
+                puzzle_date=monday + dt.timedelta(days=offset),
+            )
+            for offset in (0, 3, 6)
+        ]
+
+        difficulties = queens_weekly_difficulty_map(rows)
+
+        assert QUEENS_WEEKDAY_DIFFICULTIES == (1, 1, 2, 2, 3, 3, 4)
+        assert difficulties == {
+            100: 1,  # Monday: Easy
+            101: 1,  # Tuesday: Easy
+            102: 2,  # Wednesday: Medium
+            103: 2,  # Thursday: Medium
+            104: 3,  # Friday: Hard
+            105: 3,  # Saturday: Hard
+            106: 4,  # Sunday: Very Hard
+        }
+
+    def test_weekly_preview_values_sunday_more_than_monday(
+            self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        _register(db, alice, 'Alice LinkedIn')
+        _register(db, bob, 'Bob LinkedIn')
+        sunday = dt.date(2030, 1, 13)
+        monday = sunday - dt.timedelta(days=6)
+        _logical_today(monkeypatch, sunday)
+
+        self._save_queens_result(
+            db, 1, alice.id, monday.isoformat(), 60)
+        self._save_queens_result(
+            db, 2, bob.id, sunday.isoformat(), 60)
+
+        _ratings, standings = Minigames(
+            bot=None)._queens_weekly_preview(_GUILD_ID)
+
+        assert [row.user_id for row in standings] == [
+            str(bob.id), str(alice.id),
+        ]
+        assert standings[0].score > standings[1].score
+
     def test_weekly_sends_ratings_and_pacific_current_week_scores(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
