@@ -156,20 +156,14 @@ def test_chart_cap_preserves_normal_values_and_clips_extreme_outlier():
 
 
 @pytest.mark.parametrize('value', ['👑🧩', '♛\ufe0f\u200d👑'])
-def test_safe_player_name_falls_back_when_only_emoji_remain(value):
-    assert _safe_player_name(value) == 'Player'
+def test_safe_player_name_preserves_emoji_only_names(value):
+    assert _safe_player_name(value) == value
 
 
-def test_safe_player_name_keeps_cjk_strips_emoji_and_truncates():
+def test_safe_player_name_preserves_long_cjk_and_emoji_without_truncating():
     raw = '非常に長い女王プレイヤー名' * 5 + ' 👑🧩🌍 ♛'
 
-    safe = _safe_player_name(raw, limit=24)
-
-    assert safe.startswith('非常に長い女王')
-    assert safe.endswith('…')
-    assert len(safe) == 24
-    assert all(ord(char) <= 0xFFFF for char in safe)
-    assert not any(char in safe for char in '👑🧩🌍♛')
+    assert _safe_player_name(raw) == raw
 
 
 def test_public_stats_module_reexports_the_dashboard_renderer():

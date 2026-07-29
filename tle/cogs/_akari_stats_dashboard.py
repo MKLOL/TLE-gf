@@ -1,14 +1,16 @@
 """Light seven-day player dashboard for Daily Akari."""
 
 import datetime as dt
-import os
 import statistics
-import unicodedata
 
 from matplotlib import dates as mdates
 from matplotlib import pyplot as plt
 
 from tle.util import graph_common as gc
+from tle.cogs._minigame_stats_text import (
+    draw_player_name,
+    safe_player_name as _safe_player_name,
+)
 from tle.cogs._minigame_common import (
     compute_longest_streak,
     compute_streak,
@@ -52,35 +54,6 @@ def _chart_time_cap(values):
     robust_limit = max(1, median * 3, q3 * 1.5)
     maximum = max(values)
     return min(maximum, robust_limit), maximum > robust_limit
-
-
-def _safe_player_name(value, limit=42):
-    """Keep headings readable and omit emoji glyphs matplotlib cannot render."""
-    cleaned = ''.join(
-        char for char in str(value)
-        if ord(char) <= 0xFFFF
-        and unicodedata.category(char) != 'So'
-        and char not in ('\u200d', '\ufe0f')
-    ).strip()
-    cleaned = cleaned or 'Player'
-    return cleaned if len(cleaned) <= limit else f'{cleaned[:limit - 1]}…'
-
-
-def _font_kwargs():
-    font_path = getattr(gc.fontprop, 'get_file', lambda: None)()
-    if font_path and os.path.isfile(font_path):
-        return {'fontproperties': gc.fontprop}
-    try:
-        from matplotlib import font_manager
-        installed = {font.name for font in font_manager.fontManager.ttflist}
-    except (AttributeError, ImportError):
-        installed = set()
-    for family in (
-            'Noto Sans CJK JP', 'Arial Unicode MS', 'Hiragino Sans GB',
-            'DejaVu Sans'):
-        if family in installed:
-            return {'fontfamily': family}
-    return {'fontfamily': 'sans-serif'}
 
 
 def _best_results_by_date(results):
@@ -380,9 +353,9 @@ def plot_akari_stats(results, display_name, weekdays=None, *,
     header.text(0, .72, 'AKARI  /  7-DAY PLAYER DASHBOARD',
                 transform=header.transAxes, color=_GREEN, fontsize=10,
                 fontweight='bold')
-    header.text(0, .08, _safe_player_name(display_name),
-                transform=header.transAxes, color=_TEXT, fontsize=24,
-                **_font_kwargs())
+    draw_player_name(
+        header, display_name, xy=(0, .08), transform=header.transAxes,
+        color=_TEXT, fontsize=24, max_width_px=760)
     header.text(1, .18, f'LATEST WEEK  ·  {data["week_start"]:%b %d, %Y}',
                 transform=header.transAxes, color=_MUTED, fontsize=9,
                 fontweight='bold', ha='right')
