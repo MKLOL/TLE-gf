@@ -392,10 +392,15 @@ class TestAkariResultsCommand(_AkariFilterBase):
             'Bob', 'Alice']
         assert [str(row[1]).split(' (', 1)[0] for row in time_rows] == [
             'Alice', 'Bob']
+        asyncio.run(Minigames.akari_stats.__wrapped__(
+            cog, ctx, str(_FRI), '+time'))
+        stats_time_rows = rendered[-1]
+        assert [str(row[1]).split(' (', 1)[0] for row in stats_time_rows] == [
+            'Alice', 'Bob']
         assert {
             str(row[1]).split(' (', 1)[0]: row[-1]
             for row in accuracy_rows
         } == {
             str(row[1]).split(' (', 1)[0]: row[-1]
-            for row in time_rows
+            for row in stats_time_rows
         }

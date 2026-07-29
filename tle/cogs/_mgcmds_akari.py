@@ -157,7 +157,7 @@ class AkariCmdsMixin:
         await self._cmd_top(ctx, AKARI_GAME, *args)
 
     @akari.group(name='stats', brief='Show personal stats with graphs',
-                 usage='[@user] [filters...] | [day | puzzle_id | #puzzle_id]',
+                 usage='[@user] [filters...] | [day | puzzle_id | #puzzle_id] [+time]',
                  invoke_without_command=True)
     async def akari_stats(self, ctx, *args):
         await self._cmd_stats(ctx, AKARI_GAME, *args)

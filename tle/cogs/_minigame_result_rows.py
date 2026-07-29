@@ -44,6 +44,20 @@ def _akari_result_rank_key(row):
     )
 
 
+def _akari_results_time_sort_key(row):
+    """Display Akari results by time, preserving stable tie-breakers."""
+    return (
+        int(getattr(row, 'time_seconds', 0)),
+        -int(bool(getattr(row, 'is_perfect', False))),
+        -int(getattr(row, 'accuracy', 0)),
+        int(getattr(row, 'message_id', 0)),
+    )
+
+
+def _akari_results_time_rank_key(row):
+    return int(getattr(row, 'time_seconds', 0))
+
+
 def _queens_result_rank_key(row):
     return int(getattr(row, 'time_seconds', 0))
 
