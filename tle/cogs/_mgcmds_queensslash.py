@@ -112,9 +112,9 @@ class QueensSlashMixin:
         member1='First player', member2='Second player',
         member3='Optional third player', member4='Optional fourth player',
         member5='Optional fifth player',
-        timeframe='Time period filter', mode='Scoring mode',
+        timeframe='Time period filter',
         weekdays='Queens days: mon,wed, weekday, or weekend')
-    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
     async def slash_queens_vs(
         self, interaction: discord.Interaction,
         member1: discord.Member, member2: discord.Member,
@@ -122,7 +122,6 @@ class QueensSlashMixin:
         member4: Optional[discord.Member] = None,
         member5: Optional[discord.Member] = None,
         timeframe: Optional[app_commands.Choice[str]] = None,
-        mode: Optional[app_commands.Choice[str]] = None,
         weekdays: Optional[str] = None,
     ):
         await interaction.response.defer()
@@ -134,7 +133,7 @@ class QueensSlashMixin:
             ]
             await self._cmd_vs_members(
                 _SlashCtx(interaction), QUEENS_GAME, members,
-                *self._slash_choice_args(timeframe, mode),
+                *self._slash_choice_args(timeframe),
                 *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)

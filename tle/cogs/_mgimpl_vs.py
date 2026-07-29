@@ -67,6 +67,8 @@ class ImplVsMixin:
                 try:
                     member = await self._resolve_member(ctx, argument)
                 except MinigameCogError:
+                    if len(members) >= 2:
+                        raise
                     resolving_members = False
                     filters.append(argument)
                     continue
@@ -88,8 +90,8 @@ class ImplVsMixin:
         self._require_enabled(ctx.guild.id, game)
         self._sync_minigame_results_for_read(ctx.guild.id, game)
         try:
-            args, scoring_name, scoring = resolve_scoring(game, args)
             args, weekdays = _split_queens_weekday_filter(args)
+            args, scoring_name, scoring = resolve_scoring(game, args)
             reference_date = (
                 _queens_current_puzzle_date()
                 if game.name == QUEENS_GAME.name else None)
@@ -203,16 +205,18 @@ class ImplVsMixin:
                 ctx.guild, game, member.id)
             lines.append(
                 f'**#{rank}** `{name}` — '
-                f'**{_format_score(row["score"])}** pts · '
-                f'**{row["wins"]}W {row["losses"]}L {row["ties"]}T**')
+                f'**{_format_score(row["score"])}** points · '
+                f'**{row["wins"]}** wins · '
+                f'**{row["losses"]}** losses · '
+                f'**{row["ties"]}** ties')
         lines.extend([
             '',
             f'Puzzles: **{stats["puzzle_count"]}**',
-            f'Round-robin pairs: **{stats["pair_count"]}**',
+            f'Comparisons: **{stats["comparison_count"]}**',
         ])
         await ctx.send(embed=discord.Embed(
             title=(
-                f'{game.display_name} Multi-player VS'
+                f'{game.display_name} Head to Head'
                 f'{self._vs_title_suffix(scoring_name, weekdays)}'),
             description='\n'.join(lines),
             color=discord_common.random_cf_color(),
