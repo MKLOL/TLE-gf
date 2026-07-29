@@ -26,6 +26,9 @@ from tle.cogs._minigame_queens_filters import (
 from tle.cogs._minigame_tables import (
     _maybe_parse_puzzle_selector,
 )
+from tle.cogs._minigame_result_rows import (
+    _akari_results_time_rank_key, _akari_results_time_sort_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +43,11 @@ class ImplStatsMixin:
         excluded_ids = set()
         included_ids = set()
         test_decay = False
+        sort_by_time = False
         args, weekdays = _split_queens_weekday_filter(args)
         if game.name == AKARI_GAME.name:
+            sort_by_time = '+time' in args
+            args = tuple(arg for arg in args if arg != '+time')
             (remaining, _include_decay, excluded_ids, included_ids,
              _include_inactive, test_decay) = await self._extract_akari_filters(
                 ctx, args)
@@ -51,8 +57,15 @@ class ImplStatsMixin:
                 await self._cmd_akari_stats_puzzle(
                     ctx, args[0],
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    test_decay=test_decay, weekdays=weekdays)
+                    test_decay=test_decay, weekdays=weekdays,
+                    sort_key_fn=(
+                        _akari_results_time_sort_key if sort_by_time else None),
+                    rank_key_fn=(
+                        _akari_results_time_rank_key if sort_by_time else None))
                 return
+        if sort_by_time:
+            raise MinigameCogError(
+                '`+time` is only supported when viewing one Akari puzzle.')
 
         filter_args = list(args)
         member = ctx.author
@@ -230,4 +243,3 @@ class ImplStatsMixin:
         result = ('\N{GLOWING STAR}' if is_perfect
                   else f'{accuracy}%')
         return f'{result} {format_duration(time_seconds)}'
-

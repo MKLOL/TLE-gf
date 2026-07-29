@@ -28,22 +28,11 @@ from tle.cogs._minigame_queens_filters import (
 from tle.cogs._minigame_tables import (
     _AKARI_HISTORY_PER_PAGE, _maybe_parse_puzzle_selector,
 )
+from tle.cogs._minigame_result_rows import (
+    _akari_results_time_rank_key, _akari_results_time_sort_key,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _akari_results_time_sort_key(row):
-    """Display Akari results by time, preserving stable tie-breakers."""
-    return (
-        int(getattr(row, 'time_seconds', 0)),
-        -int(bool(getattr(row, 'is_perfect', False))),
-        -int(getattr(row, 'accuracy', 0)),
-        int(getattr(row, 'message_id', 0)),
-    )
-
-
-def _akari_results_time_rank_key(row):
-    return int(getattr(row, 'time_seconds', 0))
 
 
 def _akari_skipped_puzzles(rows, current_puzzle):
