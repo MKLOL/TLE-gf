@@ -425,12 +425,12 @@ class CoreMixin:
     def _leaderboard_entry(self, ctx, emoji):
         """Validate the feature gate + emoji config for a leaderboard command.
 
-        Returns the starboard entry. Raises StarboardCogError on failure.
+        Returns the configured main emoji. Raises StarboardCogError on failure.
         """
         if cf_common.user_db.get_guild_config(ctx.guild.id, 'starboard_leaderboard') != '1':
             raise StarboardCogError('Starboard leaderboard is not enabled. '
                                     'An admin can enable it with `;meta config enable starboard_leaderboard`.')
-        entry = cf_common.user_db.get_starboard_entry(ctx.guild.id, emoji)
+        main_emoji, entry = self._resolve_emoji(ctx.guild.id, emoji)
         if entry is None:
             raise StarboardCogError(f'Emoji {emoji} is not configured for this starboard.')
-        return entry
+        return main_emoji

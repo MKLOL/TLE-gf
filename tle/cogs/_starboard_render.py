@@ -15,7 +15,29 @@ from tle.util import codeforces_common as cf_common
 
 logger = logging.getLogger(__name__)
 
-_TIMELINE_KEYWORDS = {'week', 'month', 'year'}
+_PERIOD_ALIASES = {
+    'day': 'day',
+    'today': 'day',
+    'dtd': 'day',
+    'week': 'week',
+    'wtd': 'week',
+    'month': 'month',
+    'mtd': 'month',
+    'year': 'year',
+    'ytd': 'year',
+    'all': 'all',
+    'alltime': 'all',
+    'all-time': 'all',
+    'lifetime': 'all',
+}
+_PERIOD_LABELS = {
+    'day': 'Today',
+    'week': 'Week to date',
+    'month': 'Month to date',
+    'year': 'Year to date',
+    'all': 'All time',
+}
+_TIMELINE_KEYWORDS = frozenset(_PERIOD_ALIASES)
 
 # No time bound sentinel — matches the DB layer constant
 _NO_TIME_BOUND = 10 ** 10
@@ -42,44 +64,88 @@ def _starboard_content(emoji_str, count, jump_url):
     return f'{emoji_str} **{count}** | {jump_url}'
 
 
-def _parse_starboard_args(args, default_emoji=constants._DEFAULT_STAR):
+def _period_start(period, now):
+    """Return the host-local start timestamp for a calendar period."""
+    if period == 'day':
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == 'week':
+        start = (now - datetime.timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+    elif period == 'month':
+        start = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == 'year':
+        start = now.replace(
+            month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        return 0
+    return time.mktime(start.timetuple())
+
+
+def _scope_date(timestamp):
+    value = datetime.datetime.fromtimestamp(timestamp)
+    return f'{value:%b} {value.day}, {value.year}'
+
+
+def _custom_scope_label(dlo, dhi):
+    if dlo > 0 and dhi < _NO_TIME_BOUND:
+        final_day = datetime.datetime.fromtimestamp(
+            dhi) - datetime.timedelta(days=1)
+        return f'{_scope_date(dlo)} – {final_day:%b} {final_day.day}, {final_day.year}'
+    if dlo > 0:
+        return f'Since {_scope_date(dlo)}'
+    return f'Before {_scope_date(dhi)}'
+
+
+def _parse_starboard_args(
+        args, default_emoji=constants._DEFAULT_STAR, *,
+        include_label=False, now=None):
     """Parse args for starboard leaderboard/top commands.
 
     Returns (emoji, dlo, dhi) where dlo/dhi are unix timestamps (seconds).
     Supports:
-      - timeline keywords: week, month, year
+      - calendar-to-date keywords: day, week, month, year
+      - aliases: today/dtd, wtd, mtd, ytd, all/alltime/lifetime
       - date ranges: d>=[[dd]mm]yyyy  d<[[dd]mm]yyyy
       - emoji (anything else that isn't a keyword or date arg)
     If no emoji is provided, defaults to default_emoji.
     If no time filter is provided, dlo=0 and dhi=_NO_TIME_BOUND.
+    With include_label=True, a fourth display-label value is returned.
     """
     emoji = None
-    dlo = 0
+    reference = now or datetime.datetime.now()
+    period_candidates = [(0, 'all')]
+    custom_dlo = 0
     dhi = _NO_TIME_BOUND
+    has_custom_bound = False
 
     for arg in args:
         lower = arg.lower()
-        if lower in _TIMELINE_KEYWORDS:
-            now = datetime.datetime.now()
-            if lower == 'week':
-                # Monday of this week at 00:00
-                monday = now - datetime.timedelta(days=now.weekday())
-                dlo = time.mktime(monday.replace(hour=0, minute=0, second=0, microsecond=0).timetuple())
-            elif lower == 'month':
-                dlo = time.mktime(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
-            elif lower == 'year':
-                dlo = time.mktime(now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).timetuple())
+        period = _PERIOD_ALIASES.get(lower)
+        if period is not None:
+            period_candidates.append(
+                (_period_start(period, reference), period))
         elif lower.startswith('d>='):
-            dlo = max(dlo, cf_common.parse_date(arg[3:]))
+            custom_dlo = max(custom_dlo, cf_common.parse_date(arg[3:]))
+            has_custom_bound = True
         elif lower.startswith('d<'):
             dhi = min(dhi, cf_common.parse_date(arg[2:]))
+            has_custom_bound = True
         else:
             emoji = arg
 
+    period_dlo, period = max(period_candidates, key=lambda item: item[0])
+    dlo = max(period_dlo, custom_dlo)
     if emoji is None:
         emoji = default_emoji
         logger.debug(f'No emoji specified, falling back to default: {default_emoji!r}')
-    return emoji, dlo, dhi
+    if not include_label:
+        return emoji, dlo, dhi
+    label = (
+        _custom_scope_label(dlo, dhi)
+        if has_custom_bound else _PERIOD_LABELS[period]
+    )
+    return emoji, dlo, dhi, label
 
 
 async def build_starboard_message(message, emoji_str, count, color):

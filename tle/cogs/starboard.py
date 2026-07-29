@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 
 import discord
 from discord.ext import commands
@@ -9,9 +8,11 @@ from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
-from tle.util import ranking
-from tle.cogs._starboard_helpers import _emoji_str, _looks_like_emoji, _CUSTOM_EMOJI_RE
+from tle.cogs._starboard_helpers import (
+    _emoji_str, _looks_like_emoji, _CUSTOM_EMOJI_RE,
+)
 from tle.cogs._starboard_backfill import BackfillMixin, _BACKFILL_UNKNOWN
+from tle.cogs._starboard_leaderboard_helpers import LeaderboardHelpersMixin
 from tle.util.discord_common import requires_guild_feature
 from tle.cogs._starboard_core import (
     CoreMixin,
@@ -26,14 +27,15 @@ from tle.cogs._starboard_render import (
     _IMAGE_EXTENSIONS,
     _VIDEO_EXTENSIONS,
     _NO_TIME_BOUND,
-    _TIMELINE_KEYWORDS,
     build_starboard_message as _build_sb_msg,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class Starboard(CoreMixin, ImplMixin, BackfillMixin, commands.Cog):
+class Starboard(
+        LeaderboardHelpersMixin, CoreMixin, ImplMixin, BackfillMixin,
+        commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.locks = {}
@@ -230,82 +232,97 @@ class Starboard(CoreMixin, ImplMixin, BackfillMixin, commands.Cog):
     # --- Leaderboard commands ---
 
     @starboard.command(brief='Show starboard leaderboard by message count',
-                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [day|week|month|year|all] [d>=date] [d<date]')
     async def leaderboard(self, ctx, *args):
         """Show top users by number of starboarded messages for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
-        Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(
-            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
-        self._leaderboard_entry(ctx, emoji)
+        Supports day/week/month/year-to-date, all-time, and date ranges."""
+        emoji, dlo, dhi, scope = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(
+                ctx.guild.id, ctx.author.id), include_label=True)
+        emoji = self._leaderboard_entry(ctx, emoji)
         rows = cf_common.user_db.get_starboard_leaderboard(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
-            raise StarboardCogError(f'No starboarded messages found for {emoji}.')
+            raise StarboardCogError(
+                f'No starboarded messages found for {emoji} · {scope}.')
         logger.info(f'CMD starboard leaderboard: guild={ctx.guild.id} emoji={emoji} '
-                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
-        self._paginate_leaderboard(ctx, rows, emoji, 'Starboard Leaderboard', 'messages')
+                    f'scope={scope} dlo={dlo} dhi={dhi} {len(rows)} users '
+                    f'by user={ctx.author.id}')
+        self._paginate_leaderboard(
+            ctx, rows, emoji, f'Starboard Leaderboard · {scope}', 'messages')
 
     @starboard.command(name='star-leaderboard', aliases=['rank'],
                        brief='Show starboard leaderboard by star count',
-                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [day|week|month|year|all] [d>=date] [d<date]')
     async def star_leaderboard(self, ctx, *args):
         """Show top users by total star count for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
-        Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(
-            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
-        self._leaderboard_entry(ctx, emoji)
+        Supports day/week/month/year-to-date, all-time, and date ranges."""
+        emoji, dlo, dhi, scope = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(
+                ctx.guild.id, ctx.author.id), include_label=True)
+        emoji = self._leaderboard_entry(ctx, emoji)
         rows = cf_common.user_db.get_starboard_star_leaderboard(ctx.guild.id, emoji, dlo, dhi)
         if not rows:
-            raise StarboardCogError(f'No star data found for {emoji}. '
+            raise StarboardCogError(f'No star data found for {emoji} · {scope}. '
                                     'Star counts are populated via backfill and live tracking.')
         logger.info(f'CMD starboard star-leaderboard: guild={ctx.guild.id} emoji={emoji} '
-                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
-        self._paginate_leaderboard(ctx, rows, emoji, 'Star Leaderboard', 'stars')
+                    f'scope={scope} dlo={dlo} dhi={dhi} {len(rows)} users '
+                    f'by user={ctx.author.id}')
+        self._paginate_leaderboard(
+            ctx, rows, emoji, f'Star Leaderboard · {scope}', 'stars')
 
     @starboard.command(name='star-givers', brief='Show top star givers',
-                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [day|week|month|year|all] [d>=date] [d<date]')
     async def star_givers(self, ctx, *args):
         """Show top users by number of stars given (reactions) for an emoji.
         Requires the `starboard_leaderboard` feature to be enabled.
-        Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(
-            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
-        self._leaderboard_entry(ctx, emoji)
+        Supports day/week/month/year-to-date, all-time, and date ranges."""
+        emoji, dlo, dhi, scope = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(
+                ctx.guild.id, ctx.author.id), include_label=True)
+        emoji = self._leaderboard_entry(ctx, emoji)
         emoji_family = cf_common.user_db.get_emoji_family(ctx.guild.id, emoji)
         rows = cf_common.user_db.get_star_givers_leaderboard(ctx.guild.id, emoji, dlo, dhi,
                                                               emoji_family=emoji_family)
         if not rows:
-            raise StarboardCogError(f'No reactor data found for {emoji}.')
+            raise StarboardCogError(
+                f'No reactor data found for {emoji} · {scope}.')
         logger.info(f'CMD starboard star-givers: guild={ctx.guild.id} emoji={emoji} '
-                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
-        self._paginate_leaderboard(ctx, rows, emoji, 'Star Givers', 'stars given')
+                    f'scope={scope} dlo={dlo} dhi={dhi} {len(rows)} users '
+                    f'by user={ctx.author.id}')
+        self._paginate_leaderboard(
+            ctx, rows, emoji, f'Star Givers · {scope}', 'stars given')
 
     @starboard.command(brief='Show who stars their own messages the most',
-                       usage='[emoji] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [day|week|month|year|all] [d>=date] [d<date]')
     async def narcissus(self, ctx, *args):
         """Show users who star their own messages the most.
         Requires the `starboard_leaderboard` feature to be enabled.
-        Supports timeline filters: week, month, year, d>=date, d<date."""
-        emoji, dlo, dhi = _parse_starboard_args(
-            args, default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
-        self._leaderboard_entry(ctx, emoji)
+        Supports day/week/month/year-to-date, all-time, and date ranges."""
+        emoji, dlo, dhi, scope = _parse_starboard_args(
+            args, default_emoji=self._user_default_emoji(
+                ctx.guild.id, ctx.author.id), include_label=True)
+        emoji = self._leaderboard_entry(ctx, emoji)
         emoji_family = cf_common.user_db.get_emoji_family(ctx.guild.id, emoji)
         rows = cf_common.user_db.get_narcissus_leaderboard(ctx.guild.id, emoji, dlo, dhi,
                                                             emoji_family=emoji_family)
         if not rows:
-            raise StarboardCogError(f'No self-stars found for {emoji}. How humble!')
+            raise StarboardCogError(
+                f'No self-stars found for {emoji} · {scope}. How humble!')
         logger.info(f'CMD starboard narcissus: guild={ctx.guild.id} emoji={emoji} '
-                    f'dlo={dlo} dhi={dhi} {len(rows)} users by user={ctx.author.id}')
-        self._paginate_leaderboard(ctx, rows, emoji, 'Narcissus Leaderboard', 'self-stars')
+                    f'scope={scope} dlo={dlo} dhi={dhi} {len(rows)} users '
+                    f'by user={ctx.author.id}')
+        self._paginate_leaderboard(
+            ctx, rows, emoji, f'Narcissus Leaderboard · {scope}', 'self-stars')
 
     @starboard.command(brief='Show top starred messages',
-                       usage='[emoji] [user] [week|month|year] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
+                       usage='[emoji] [user] [day|week|month|year|all] [d>=date] [d<date]')
     async def top(self, ctx, *args):
         """Show top starboarded messages sorted by star count for an emoji.
         Mention a user to see only their top messages.
         Requires the `starboard_leaderboard` feature to be enabled.
-        Supports timeline filters: week, month, year, d>=date, d<date."""
+        Supports day/week/month/year-to-date, all-time, and date ranges."""
         # Parse args with emoji always first: [emoji] [user] [timeline...]
         target_member, emoji_arg, timeline_args = self._parse_top_args(ctx, args)
         # Build args for _parse_starboard_args (emoji + timeline filters)
@@ -313,10 +330,11 @@ class Starboard(CoreMixin, ImplMixin, BackfillMixin, commands.Cog):
         if emoji_arg is not None:
             parse_args.append(emoji_arg)
         parse_args.extend(timeline_args)
-        emoji, dlo, dhi = _parse_starboard_args(
+        emoji, dlo, dhi, scope = _parse_starboard_args(
             parse_args,
-            default_emoji=self._user_default_emoji(ctx.guild.id, ctx.author.id))
-        self._leaderboard_entry(ctx, emoji)
+            default_emoji=self._user_default_emoji(
+                ctx.guild.id, ctx.author.id), include_label=True)
+        emoji = self._leaderboard_entry(ctx, emoji)
 
         author_id = target_member.id if target_member else None
         rows = cf_common.user_db.get_top_starboard_messages(ctx.guild.id, emoji, dlo, dhi,
@@ -330,70 +348,10 @@ class Starboard(CoreMixin, ImplMixin, BackfillMixin, commands.Cog):
         logger.info(f'CMD starboard top: guild={ctx.guild.id} emoji={emoji} '
                     f'dlo={dlo} dhi={dhi} author_filter={author_id} '
                     f'{len(rows)} messages by user={ctx.author.id}')
-        pages = self._make_top_pages(ctx, rows, emoji, target_member)
+        pages = self._make_top_pages(
+            ctx, rows, emoji, target_member, scope_label=scope)
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=300,
                            set_pagenum_footers=True, author_id=ctx.author.id)
-
-    def _parse_top_args(self, ctx, args):
-        """Split ;starboard top args into (target_member, emoji_arg, timeline_args)."""
-        target_member = None
-        emoji_arg = None
-        timeline_args = []
-        for arg in args:
-            # @mention → member
-            if target_member is None:
-                if m := re.match(r'<@!?(\d+)>$', arg):
-                    member = ctx.guild.get_member(int(m.group(1)))
-                    if member is not None:
-                        target_member = member
-                        continue
-            lower = arg.lower()
-            # Timeline keyword or date range → pass through
-            if lower in _TIMELINE_KEYWORDS or lower.startswith('d>=') or lower.startswith('d<'):
-                timeline_args.append(arg)
-                continue
-            # Emoji: first arg that looks like a Unicode or custom emoji
-            if emoji_arg is None and _looks_like_emoji(arg):
-                emoji_arg = arg
-                continue
-            # Plain text: try as username/display name
-            if target_member is None:
-                member = discord.utils.find(
-                    lambda m, a=lower: m.name.lower() == a
-                    or m.display_name.lower() == a,
-                    ctx.guild.members)
-                if member is not None:
-                    target_member = member
-                    continue
-                raise StarboardCogError(f'User `{arg}` not found in this server.')
-        return target_member, emoji_arg, timeline_args
-
-    def _make_top_pages(self, ctx, rows, emoji, target_member):
-        """Build paginated embed pages for the ;starboard top command."""
-        if target_member:
-            title = f'{emoji} Top Starred Messages — {target_member.display_name}'
-        else:
-            title = f'{emoji} Top Starred Messages'
-        # Standard competition ranking so messages tied on star count share a
-        # rank (and ties number correctly across page boundaries).
-        ranked = ranking.rank_items(rows, lambda r: r.star_count)
-        per_page = 10
-        chunks = paginator.chunkify(ranked, per_page)
-        pages = []
-        for chunk in chunks:
-            lines = []
-            for rank, row in chunk:
-                jump_url = f'https://discord.com/channels/{ctx.guild.id}/{row.channel_id}/{row.original_msg_id}'
-                member = ctx.guild.get_member(int(row.author_id))
-                name = member.mention if member else f'<@{row.author_id}>'
-                lines.append(f'**#{rank}** {name} — **{row.star_count}** {emoji} — {jump_url}')
-            embed = discord.Embed(
-                title=title,
-                description='\n'.join(lines),
-                color=discord_common.random_cf_color()
-            )
-            pages.append((None, embed))
-        return pages
 
     # --- Fix / resync commands ---
 
