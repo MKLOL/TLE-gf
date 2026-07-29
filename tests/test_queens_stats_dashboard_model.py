@@ -6,11 +6,22 @@ from types import SimpleNamespace
 import pytest
 
 from tle.cogs._queens_stats_dashboard import (
+    _BG,
+    _PANEL,
     _chart_time_cap,
     _queens_dashboard_data,
     _safe_player_name,
     _week_status,
 )
+
+
+def test_dashboard_uses_a_light_canvas_and_white_panels():
+    def channels(color):
+        return tuple(
+            int(color[index:index + 2], 16) for index in (1, 3, 5))
+
+    assert min(channels(_BG)) >= 240
+    assert channels(_PANEL) == (255, 255, 255)
 
 
 def _row(day, seconds=30, *, perfect=True, accuracy=100, message_id=1):
@@ -36,12 +47,13 @@ def test_one_result_uses_explicit_current_week_and_day_states():
         [result], as_of_date=wednesday)
 
     assert data['total'] == 1
-    assert data['clean'] == 1
-    assert data['clean_rate'] == 100
+    assert data['best_time'] == 42
+    assert data['median_time'] == 42
+    assert data['recent_median'] == 42
     assert data['week_start'] == monday
     assert data['view_date'] == wednesday
     assert data['week_rows'][monday] is result
-    assert _week_status(result, monday, data['view_date'])[0] == 'CLEAN'
+    assert _week_status(result, monday, data['view_date'])[0] == 'PLAYED'
     assert _week_status(
         None, monday + dt.timedelta(days=1), data['view_date'])[0] == 'MISSED'
     assert _week_status(None, wednesday, data['view_date'])[0] == 'OPEN'
@@ -50,7 +62,7 @@ def test_one_result_uses_explicit_current_week_and_day_states():
         data['view_date'])[0] == 'UP NEXT'
 
 
-def test_weekday_filter_keeps_seven_slots_and_filtered_streak_continuity():
+def test_weekday_filter_keeps_seven_slots():
     monday = dt.date(2030, 1, 7)
     wednesday = monday + dt.timedelta(days=2)
 
@@ -64,10 +76,6 @@ def test_weekday_filter_keeps_seven_slots_and_filtered_streak_continuity():
     assert data['week_rows'][monday] is not None
     assert data['week_rows'][monday + dt.timedelta(days=1)] is None
     assert data['week_rows'][wednesday] is not None
-    # Monday and Wednesday are consecutive under +dow=mon,wed. The renderer
-    # can therefore mark every other retained weekday slot as OFF.
-    assert data['current_streak'] == 2
-    assert data['longest_streak'] == 2
 
 
 def test_duplicate_day_keeps_fastest_result_once():
@@ -84,18 +92,27 @@ def test_duplicate_day_keeps_fastest_result_once():
     assert data['week_rows'][day] is fast
 
 
-def test_accuracy_100_imperfect_is_not_counted_as_clean():
+def test_dashboard_completion_status_ignores_result_badges():
     day = dt.date(2030, 1, 7)
     result = _row(day, perfect=False, accuracy=100)
 
     data = _queens_dashboard_data(
         [result], as_of_date=day)
 
-    assert data['clean'] == 0
-    assert data['clean_rate'] == 0
-    assert data['no_mistakes'] == 1
-    assert data['current_streak'] == 0
-    assert _week_status(result, day, day)[0] == 'NO MISTAKES'
+    assert _week_status(result, day, day)[0] == 'PLAYED'
+    assert data['weekday_stats'][0] == {'count': 1, 'median': 30}
+    assert not {'clean', 'clean_rate', 'no_mistakes'} & data.keys()
+
+
+def test_weekday_stats_only_use_time_and_count():
+    monday = dt.date(2030, 1, 7)
+    perfect = _queens_dashboard_data(
+        [_row(monday, perfect=True)], as_of_date=monday)
+    imperfect = _queens_dashboard_data(
+        [_row(monday, perfect=False, accuracy=0)], as_of_date=monday)
+
+    assert perfect['weekday_stats'] == imperfect['weekday_stats']
+    assert set(perfect['weekday_stats'][0]) == {'count', 'median'}
 
 
 def test_as_of_date_controls_logical_week_not_host_clock():
