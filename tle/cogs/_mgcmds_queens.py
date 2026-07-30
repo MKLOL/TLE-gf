@@ -94,6 +94,18 @@ class QueensCmdsMixin:
             target = await self._resolve_member(ctx, member)
         await self._cmd_queens_unregister(ctx, target)
 
+    @queens.command(
+        name='optout', aliases=['opt-out'],
+        brief='Keep stored results but leave Queens ratings')
+    async def queens_optout(self, ctx):
+        await self._cmd_queens_optout(ctx)
+
+    @queens.command(
+        name='optin', aliases=['opt-in'],
+        brief='Return to Queens ratings')
+    async def queens_optin(self, ctx):
+        await self._cmd_queens_optin(ctx)
+
     @queens.command(name='links', brief='List registered LinkedIn Queens names')
     async def queens_links(self, ctx):
         await self._cmd_queens_links(ctx)

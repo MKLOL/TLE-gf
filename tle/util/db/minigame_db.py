@@ -139,10 +139,9 @@ class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin,
 
     # ── Generic minigame self opt-out ─────────────────────────────────
     #
-    # Sticky: an ``unregister`` writes a row here and the user stays hidden
-    # from every ranking until they personally run ``register`` again (which
-    # deletes the row).  Imports, backfills, and mods registering on someone's
-    # behalf must NOT clear it — only the user themselves can rejoin.
+    # Sticky rating choice: ``optout`` writes a row here while identity links
+    # and source results stay intact. Imports/backfills and moderator ``set``
+    # must not clear it; only explicit self ``optin`` does.
 
     def optout_minigame_user(self, guild_id, game, user_id, opted_out_at):
         """Opt a user out of all rankings for ``game``.

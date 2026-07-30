@@ -234,24 +234,20 @@ class ImplCoreMixin:
 
     def _ensure_queens_registration_allowed(self, guild_id, actor_id,
                                             target_id, target_label):
-        """Gate Queens (re-)registration against a sticky self opt-out.
+        """Gate ordinary Queens registration against a rating opt-out.
 
-        A user who ran ``;queens unregister`` is hidden until *they themselves*
-        register again.  When the actor is the target, registering expresses
-        that intent, so we lift the opt-out and proceed.  When anyone else
-        (a mod, ``+username``, an import) tries to register an opted-out user,
-        we refuse so they cannot be re-surfaced against their will.
+        Registration only controls the LinkedIn identity link and never changes
+        the independent rating choice. An opted-out user may link themselves,
+        while moderators can update their link through ``queens set``.
         """
         if str(actor_id) == str(target_id):
-            cf_common.user_db.clear_minigame_optout(
-                guild_id, QUEENS_GAME.name, target_id)
             return
         if cf_common.user_db.is_minigame_opted_out(
                 guild_id, QUEENS_GAME.name, target_id):
             raise MinigameCogError(
                 f'`{target_label}` opted out of {QUEENS_GAME.display_name} '
-                'rankings. Only they can rejoin by running '
-                '`;queens register` themselves.')
+                'ratings. Use `;queens set` to update their LinkedIn link '
+                'without changing that rating choice.')
 
     def _sync_minigame_results_for_read(self, guild_id, game):
         if game.name == QUEENS_GAME.name:

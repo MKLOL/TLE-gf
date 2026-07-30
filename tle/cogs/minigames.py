@@ -94,6 +94,7 @@ from tle.cogs._mgimpl_core import ImplCoreMixin, _AKARI_ADMINS_KEY  # noqa: F401
 from tle.cogs._mgimpl_rating import ImplRatingMixin
 from tle.cogs._mgimpl_queensreg import ImplQueensRegMixin
 from tle.cogs._mgimpl_queensregb import ImplQueensRegBMixin
+from tle.cogs._mgimpl_queensprivacy import ImplQueensPrivacyMixin
 from tle.cogs._mgimpl_queensimport import ImplQueensImportMixin
 from tle.cogs._mgimpl_queenscmd import ImplQueensCmdMixin
 from tle.cogs._mgimpl_queenscmdb import ImplQueensCmdBMixin
@@ -134,6 +135,7 @@ class Minigames(
     ImplRatingMixin,
     ImplQueensRegMixin,
     ImplQueensRegBMixin,
+    ImplQueensPrivacyMixin,
     ImplQueensImportMixin,
     ImplQueensCmdMixin,
     ImplQueensCmdBMixin,

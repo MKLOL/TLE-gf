@@ -75,19 +75,22 @@ class ImplQueensRegMixin:
             self, ctx, member, name_text, anonymous=False):
         """Moderator overwrite path; unlike ``register``, replacement is allowed."""
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        self._ensure_queens_registration_allowed(
-            ctx.guild.id, ctx.author.id, member.id,
-            self._queens_public_user_name(ctx.guild, member.id))
         self._cmd_queens_register_link(
             ctx, member, name_text, anonymous=anonymous)
         link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, QUEENS_GAME.name, member.id)
         display_name = self._queens_public_user_name(
             ctx.guild, member.id, {str(member.id): link})
-        await ctx.send(embed=discord_common.embed_success(
+        message = (
             f'`{display_name}` is registered for '
             f'{QUEENS_GAME.display_name} as '
-            f'`{_queens_public_link_name(link)}`.'))
+            f'`{_queens_public_link_name(link)}`.')
+        if cf_common.user_db.is_minigame_opted_out(
+                ctx.guild.id, QUEENS_GAME.name, member.id):
+            message += (
+                ' Their rating opt-out remains active, so stored results '
+                'remain unrated.')
+        await ctx.send(embed=discord_common.embed_success(message))
 
     async def _cmd_queens_register(
             self, ctx, member, name_text, anonymous=False):
@@ -105,6 +108,8 @@ class ImplQueensRegMixin:
         self._ensure_queens_registration_allowed(
             ctx.guild.id, ctx.author.id, member.id,
             self._queens_public_user_name(ctx.guild, member.id))
+        rating_opted_out = cf_common.user_db.is_minigame_opted_out(
+            ctx.guild.id, QUEENS_GAME.name, member.id)
         claimed = self._cmd_queens_register_link(
             ctx, member, name_text, anonymous=anonymous)
         link = cf_common.user_db.get_minigame_player_link(
@@ -119,7 +124,11 @@ class ImplQueensRegMixin:
             f'`{display_name}` is registered for {QUEENS_GAME.display_name} '
             f'as `{registered_name}`.',
         ]
-        if claimed:
+        if rating_opted_out:
+            lines.append(
+                'Your rating opt-out remains active. Run `;queens optin` '
+                'when you want stored results to affect ratings.')
+        elif claimed:
             lines.append(
                 f'Claimed {claimed} stored Queens result(s) and recomputed '
                 'ratings.')

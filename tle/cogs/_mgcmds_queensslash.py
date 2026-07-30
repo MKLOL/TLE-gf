@@ -107,6 +107,26 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
+    @queens_slash.command(
+        name='opt-out',
+        description='Keep stored results but leave Queens ratings')
+    async def slash_queens_optout(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_optout(_SlashCtx(interaction))
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
+    @queens_slash.command(
+        name='opt-in',
+        description='Return to Queens ratings')
+    async def slash_queens_optin(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            await self._cmd_queens_optin(_SlashCtx(interaction))
+        except Exception as _slash_exc:
+            await self._slash_handle_error(interaction, _slash_exc)
+
     @queens_slash.command(name='vs', description='Compare two to five players')
     @app_commands.describe(
         member1='First player', member2='Second player',
