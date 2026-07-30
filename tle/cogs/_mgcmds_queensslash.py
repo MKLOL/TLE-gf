@@ -227,13 +227,13 @@ class QueensSlashMixin:
         date='Date or puzzle number (defaults to today)',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        improved='Use the testing beta rating system')
+        beta='Use the beta testing rating system')
     async def slash_queens_results(
         self, interaction: discord.Interaction,
         date: Optional[str] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
-        improved: bool = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         try:
@@ -242,7 +242,7 @@ class QueensSlashMixin:
                 date or _queens_current_puzzle_date().isoformat(),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=improved)
+                improved=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -251,13 +251,13 @@ class QueensSlashMixin:
         weekly='Preview weekly-contest ratings and this week\'s scores',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        improved='Use the testing beta rating system')
+        beta='Use the beta testing rating system')
     async def slash_queens_ratings(
         self, interaction: discord.Interaction,
         weekly: bool = False,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
-        improved: bool = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         try:
@@ -265,7 +265,7 @@ class QueensSlashMixin:
                 _SlashCtx(interaction),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=improved, weekly=weekly)
+                improved=beta, weekly=weekly)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -275,14 +275,14 @@ class QueensSlashMixin:
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         recalculate='Recalculate ratings from the filtered result set',
-        improved='Use the testing beta rating system')
+        beta='Use the beta testing rating system')
     async def slash_queens_rating(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         recalculate: Optional[bool] = False,
-        improved: bool = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -291,7 +291,7 @@ class QueensSlashMixin:
                 _SlashCtx(interaction), [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                recalculate=bool(recalculate), improved=improved)
+                recalculate=bool(recalculate), improved=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -300,13 +300,13 @@ class QueensSlashMixin:
         member='Player (defaults to you)',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        improved='Use the testing beta rating system')
+        beta='Use the beta testing rating system')
     async def slash_queens_performance(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
-        improved: bool = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -315,7 +315,7 @@ class QueensSlashMixin:
                 _SlashCtx(interaction), [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=improved)
+                improved=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -324,13 +324,13 @@ class QueensSlashMixin:
         member='Player (defaults to you)',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        improved='Use the testing beta rating system')
+        beta='Use the beta testing rating system')
     async def slash_queens_history(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
-        improved: bool = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -339,7 +339,7 @@ class QueensSlashMixin:
                 _SlashCtx(interaction), target,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=improved)
+                improved=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

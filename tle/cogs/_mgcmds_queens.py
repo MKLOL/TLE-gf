@@ -174,7 +174,7 @@ class QueensCmdsMixin:
         await self._cmd_queens_stats(ctx, *args)
 
     @queens.group(name='results', brief='Show Queens date leaderboard',
-                  usage='[date|number] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[date|number] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_results(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -183,7 +183,7 @@ class QueensCmdsMixin:
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;queens results [date|number] '
-                '[+improved] [+exclude=…] [+include=…] '
+                '[+beta] [+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date]`.')
         date_arg = (
