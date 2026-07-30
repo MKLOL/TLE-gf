@@ -178,6 +178,16 @@ class KeyPool:
             self.reload()
 
     @property
+    def db(self):
+        """The database this pool was built against.
+
+        Exposed so a caller can notice the connection changed underneath it —
+        a pool built during startup could otherwise hold a stale handle for
+        the life of the process.
+        """
+        return self._db
+
+    @property
     def models(self):
         return list(self._models)
 

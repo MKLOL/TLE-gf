@@ -35,6 +35,31 @@ _MIN_KEY_LENGTH = 20
 _KEY_SHAPED = re.compile(r'^[A-Za-z0-9_\-]{%d,}$' % _MIN_KEY_LENGTH)
 
 
+class LlmNotReadyError(commands.CommandError):
+    """The database is not connected yet.
+
+    ``cf_common.initialize`` fetches Codeforces data *before* it assigns
+    ``user_db``, and the bot accepts commands throughout — so for the first
+    seconds after a restart ``cf_common.user_db`` is None. Every command in
+    this cog needs it, so the window is worth naming rather than raising
+    AttributeError from three frames deep.
+    """
+
+
+def _db():
+    """The user database, or raise if the bot has not finished starting.
+
+    Always looked up fresh: caching the value risks capturing the ``None``
+    that exists during startup and holding it for the life of the process.
+    """
+    database = cf_common.user_db
+    if database is None:
+        raise LlmNotReadyError(
+            'The bot is still starting up and the database is not connected '
+            'yet. Try again in a few seconds.')
+    return database
+
+
 def looks_like_api_key(token):
     """True if a message token could plausibly be a live credential."""
     return bool(_KEY_SHAPED.match(_strip_wrapping(token)))
@@ -71,8 +96,11 @@ class Llm(commands.Cog):
     # on_ready), so the pool is built on first use rather than in __init__.
 
     def _get_pool(self):
-        if self._pool is None:
-            self._pool = KeyPool(cf_common.user_db, constants.LLM_MODELS)
+        database = _db()
+        # Rebuild if the connection object changed under us, so a pool built
+        # against a stale (or absent) database is never reused.
+        if self._pool is None or self._pool.db is not database:
+            self._pool = KeyPool(database, constants.LLM_MODELS)
             self._bootstrap_env_keys()
             self._pool.reload()
         return self._pool
@@ -89,7 +117,7 @@ class Llm(commands.Cog):
         for index, key in enumerate(part.strip() for part in raw.split(',')):
             if len(key) < _MIN_KEY_LENGTH:
                 continue
-            if cf_common.user_db.llm_add_key(key, label=f'env-{index + 1}') != 'duplicate':
+            if _db().llm_add_key(key, label=f'env-{index + 1}') != 'duplicate':
                 added += 1
         if added:
             logger.info('Loaded %d Gemini key(s) from GEMINI_API_KEYS', added)
@@ -102,18 +130,28 @@ class Llm(commands.Cog):
     # ── Gating ──────────────────────────────────────────────────────────
 
     async def cog_command_error(self, ctx, error):
-        """Handle a failed permission check on the key commands.
+        """Turn this cog's expected failures into replies, not tracebacks.
 
-        Without this, a non-moderator running ``;llm keys <key>`` gets nothing:
-        the role check fails *before* the command body runs, so the message is
-        never deleted, and ``MissingAnyRole`` is a ``CheckFailure`` that the
-        global handler only logs. Someone who did not realise they lack the
-        role would paste a live key and watch nothing happen.
+        Two cases. First, the bot not being ready: every command here needs the
+        database, and it is None for the first seconds after a restart.
+
+        Second, a failed permission check on the key commands. Without this, a
+        non-moderator running ``;llm keys <key>`` gets nothing: the role check
+        fails *before* the command body runs, so the message is never deleted,
+        and ``MissingAnyRole`` is a ``CheckFailure`` that the global handler
+        only logs. Someone who did not realise they lack the role would paste a
+        live key and watch nothing happen.
 
         ``;llm keys`` also swallows ordinary sentences — "keys", "keylist" and
         "keystatus" are English words — so a message with no key-shaped token
         gets an explanation instead of a deletion.
         """
+        cause = getattr(error, 'original', error)
+        if isinstance(cause, LlmNotReadyError):
+            error.handled = True
+            await ctx.send(embed=discord_common.embed_alert(str(cause)))
+            return
+
         if not isinstance(error, commands.MissingAnyRole):
             return
         error.handled = True
@@ -222,7 +260,7 @@ class Llm(commands.Cog):
             # requests that actually reached Google, so `;llm keystatus` shows
             # true consumption rather than only successful calls.
             if stats.get('attempts'):
-                cf_common.user_db.llm_bump_usage(
+                _db().llm_bump_usage(
                     ctx.guild.id, ctx.author.id, _today())
             if isinstance(failure, (gemini_api.ModelUnavailableError,)):
                 logger.error('Gemini model misconfigured: %s', failure)
@@ -234,7 +272,7 @@ class Llm(commands.Cog):
                 self._describe_failure(failure)))
             return
 
-        cf_common.user_db.llm_bump_usage(ctx.guild.id, ctx.author.id, _today())
+        _db().llm_bump_usage(ctx.guild.id, ctx.author.id, _today())
         tier_note = f'{lease.model} ({tier})' if tier else lease.model
         for embed in llm_format.build_answer_embeds(
                 answer, tier_note, author=ctx.author,
@@ -332,7 +370,7 @@ class Llm(commands.Cog):
                 counts['rejected'] += 1
                 continue
             label = f'{ctx.author.display_name}-{datetime.now(timezone.utc):%Y%m%d}'
-            counts[cf_common.user_db.llm_add_key(
+            counts[_db().llm_add_key(
                 api_key, label=label, guild_id=ctx.guild.id,
                 added_by=ctx.author.id)] += 1
 
@@ -357,7 +395,7 @@ class Llm(commands.Cog):
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def keylist(self, ctx):
         """Show which keys are stored. Values are always redacted."""
-        rows = cf_common.user_db.llm_get_keys(active_only=True)
+        rows = _db().llm_get_keys(active_only=True)
         await ctx.send(embed=discord.Embed(
             title='Stored Gemini keys',
             description=llm_format.format_key_rows(rows),
@@ -367,7 +405,7 @@ class Llm(commands.Cog):
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def keyforget(self, ctx, key_id: int):
         """Remove a key from the pool by its id (see `;llm keylist`)."""
-        if cf_common.user_db.llm_forget_key(key_id):
+        if _db().llm_forget_key(key_id):
             self._get_pool().reload()
             await ctx.send(embed=discord_common.embed_success(
                 f'Key #{key_id} removed from the pool.'))
@@ -385,7 +423,7 @@ class Llm(commands.Cog):
         """
         pool = self._get_pool()
         description = llm_format.format_pool_status(pool.status())
-        top = cf_common.user_db.llm_top_users(ctx.guild.id, _today())
+        top = _db().llm_top_users(ctx.guild.id, _today())
         description += '\n\n' + llm_format.format_usage(top)
         await ctx.send(embed=discord.Embed(
             title='Gemini key pool',

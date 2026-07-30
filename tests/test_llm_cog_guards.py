@@ -164,6 +164,58 @@ class TestFailureMessages:
         assert 'LLM_MODELS' in llm_cog.Llm._describe_failure(err)
 
 
+class TestNotReadyDuringStartup:
+    """``cf_common.initialize`` assigns ``user_db`` only after fetching
+    Codeforces data, and the bot accepts commands throughout — so for the
+    first seconds after a restart every command in this cog hit
+    ``AttributeError: 'NoneType' object has no attribute 'llm_get_keys'``.
+    """
+
+    def test_db_helper_raises_a_named_error(self, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', None, raising=False)
+        with pytest.raises(llm_cog.LlmNotReadyError):
+            llm_cog._db()
+
+    def test_the_error_tells_the_user_to_wait(self, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', None, raising=False)
+        try:
+            llm_cog._db()
+        except llm_cog.LlmNotReadyError as err:
+            assert 'starting up' in str(err)
+
+    def test_asking_before_ready_gets_a_message_not_a_traceback(self, cog,
+                                                                monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', None, raising=False)
+        ctx = FakeCtx()
+        error = None
+        try:
+            run(llm_cog.Llm.llm.__wrapped__(cog, ctx, question='hi?'))
+        except llm_cog.LlmNotReadyError as err:
+            error = err
+        assert error is not None
+        run(cog.cog_command_error(ctx, error))
+        assert 'starting up' in ctx.text
+        assert error.handled is True
+
+    def test_a_none_database_is_never_cached_into_the_pool(self, cog, db,
+                                                           monkeypatch):
+        # The original bug snapshotted user_db at first use, so a None grabbed
+        # during startup would persist for the life of the process.
+        monkeypatch.setattr(cf_common, 'user_db', None, raising=False)
+        with pytest.raises(llm_cog.LlmNotReadyError):
+            cog._get_pool()
+        monkeypatch.setattr(cf_common, 'user_db', db, raising=False)
+        assert cog._get_pool().db is db
+
+    def test_the_pool_is_rebuilt_when_the_connection_changes(self, cog, db,
+                                                             monkeypatch):
+        first = cog._get_pool()
+        replacement = FakeLlmDb()
+        monkeypatch.setattr(cf_common, 'user_db', replacement, raising=False)
+        assert cog._get_pool() is not first
+        assert cog._get_pool().db is replacement
+
+
 class TestCogUnload:
     def test_unloading_without_a_running_loop_does_not_raise(self, cog):
         cog._session = _FakeSession()
