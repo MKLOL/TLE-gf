@@ -176,21 +176,35 @@ def _compute_round(ratings, times):
             for user in users
         }
 
-    count = len(users)
     time_logs = {user: _time_log(times[user]) for user in users}
-    actual = {}
-    expected = {}
-    field_ratings = [float(ratings[user]) for user in users]
-
-    for user in users:
-        # Include a neutral self-comparison in both averages.  It cancels out
-        # of the rating residual, makes tied times share one performance, and
-        # provides finite high/low performance anchors.
-        actual[user] = sum(
+    actual = {
+        user: sum(
             _soft_time_score_from_logs(
                 time_logs[user], time_logs[opponent])
             for opponent in users
-        ) / count
+        ) / len(users)
+        for user in users
+    }
+    return _compute_round_from_actual(ratings, actual)
+
+
+def _compute_round_from_actual(ratings, actual):
+    """Convert complementary field scores into beta deltas/performance."""
+    users = sorted(ratings)
+    if set(users) != set(actual):
+        raise ValueError(
+            'Beta round ratings and actual scores must have the same users.')
+    if len(users) < 2:
+        return {
+            user: _RoundUpdate(delta=0.0, performance=float(ratings[user]))
+            for user in users
+        }
+
+    field_ratings = [float(ratings[user]) for user in users]
+    expected = {}
+    for user in users:
+        # The pair-score average includes a neutral self-comparison. It
+        # cancels out of the residual and keeps extreme performances finite.
         expected[user] = _field_expected(ratings[user], field_ratings)
 
     raw_deltas = {
@@ -205,6 +219,22 @@ def _compute_round(ratings, times):
         )
         for user in users
     }
+
+
+def _compute_pair_round(ratings, rows, pair_score_fn):
+    """Run a beta round using a game-specific complementary pair score."""
+    users = sorted(ratings)
+    if set(users) != set(rows):
+        raise ValueError('Beta round ratings and rows must have the same users.')
+    actual = {
+        user: sum(
+            0.5 if opponent == user
+            else pair_score_fn(rows[user], rows[opponent])
+            for opponent in users
+        ) / len(users)
+        for user in users
+    }
+    return _compute_round_from_actual(ratings, actual)
 
 
 def _row_order_key(row):
@@ -245,7 +275,7 @@ def _history_point(puzzle_number, row, rating, delta, performance):
 def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
-        rank_fn=None, **_ignored):
+        rank_fn=None, pair_score_fn=None, **_ignored):
     """Replay Queens results with the experimental soft-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
@@ -311,7 +341,11 @@ def compute_queens_improved_ratings(
             user_id: _result_time_seconds(day_rows[user_id].time_seconds)
             for user_id in active_ids
         }
-        updates = _compute_round(before, times)
+        updates = (
+            _compute_round(before, times)
+            if pair_score_fn is None
+            else _compute_pair_round(before, day_rows, pair_score_fn)
+        )
 
         for user_id in active_ids:
             old = players[user_id]
