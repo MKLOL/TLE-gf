@@ -62,6 +62,21 @@ def _run_reparse(cog, ctx):
     asyncio.run(cog._cmd_reparse(ctx, QUEENS_GAME))
 
 
+def _generic_queens_puzzles(db, table):
+    return [
+        row.puzzle_number
+        for row in db.conn.execute(
+            f'''
+            SELECT puzzle_number
+            FROM {table}
+            WHERE guild_id = ? AND game = ?
+            ORDER BY puzzle_number
+            ''',
+            ('1', 'queens'),
+        ).fetchall()
+    ]
+
+
 def test_history_import_keeps_message_provenance_for_edit_and_delete(
         db, monkeypatch):
     """A history row remains attached to its Discord message after migration."""
@@ -133,6 +148,9 @@ def test_reparse_correction_preserves_override_and_moves_source_without_stale(
     assert (source.puzzle_number, source.time_seconds) == (774, 30)
     assert (source.is_rated, source.rating_override) == (0, 0)
     assert source.stored_at == first_stored_at
+    assert _generic_queens_puzzles(db, 'minigame_result') == []
+    assert _generic_queens_puzzles(db, 'minigame_import_result') == []
+    assert db.get_minigame_ratings(1, 'queens') == []
 
     db.update_raw_message(123, _share(775, 31))
     _run_reparse(cog, ctx)
@@ -147,6 +165,76 @@ def test_reparse_correction_preserves_override_and_moves_source_without_stale(
     ) == (775, '2026-06-14', 31, '123')
     assert (source.is_rated, source.rating_override) == (0, 0)
     assert source.stored_at == first_stored_at
+    # The unrated canonical source is the sole representation of this
+    # message: neither its old nor its new puzzle may leak into a generic
+    # live/import table or the persisted rating projection.
+    assert _generic_queens_puzzles(db, 'minigame_result') == []
+    assert _generic_queens_puzzles(db, 'minigame_import_result') == []
+    assert db.get_minigame_ratings(1, 'queens') == []
+
+
+def test_unrated_history_source_stays_unrated_across_unchanged_reparse(
+        db, monkeypatch):
+    """Reparse cannot rematerialize an opted-out history result."""
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    _enable_and_link(db)
+    db.optout_minigame_user(
+        1, 'queens', 999, 1.0, _X_NORM)
+    guild = _FakeGuild(1)
+    moderator = _FakeDiscordMember(
+        999, 'mod',
+        roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+    ctx = _ctx(guild, moderator)
+    cog = Minigames(bot=None)
+    db.save_raw_message(
+        123, 1, 10, 999, '2026-06-13T12:00:00', _share(774, 26))
+
+    _run_reparse(cog, ctx)
+    first = db.get_minigame_unresolved_result_for_source_message(
+        1, 'queens', 123)
+    assert first is not None
+    assert (first.is_rated, first.rating_override) == (0, None)
+
+    _run_reparse(cog, ctx)
+    unchanged = db.get_minigame_unresolved_result_for_source_message(
+        1, 'queens', 123)
+    assert unchanged is not None
+    assert (unchanged.puzzle_number, unchanged.time_seconds) == (774, 26)
+    assert (unchanged.is_rated, unchanged.rating_override) == (0, None)
+    assert unchanged.stored_at == first.stored_at
+    assert _generic_queens_puzzles(db, 'minigame_result') == []
+    assert _generic_queens_puzzles(db, 'minigame_import_result') == []
+    assert db.get_minigame_ratings(1, 'queens') == []
+
+
+def test_reparse_removes_source_when_raw_message_is_no_longer_a_result(
+        db, monkeypatch):
+    """A valid history result disappears when its raw message stops parsing."""
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    _enable_and_link(db)
+    guild = _FakeGuild(1)
+    moderator = _FakeDiscordMember(
+        999, 'mod',
+        roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+    ctx = _ctx(guild, moderator)
+    cog = Minigames(bot=None)
+    db.save_raw_message(
+        123, 1, 10, 999, '2026-06-13T12:00:00', _share(774, 26))
+
+    _run_reparse(cog, ctx)
+    assert db.get_minigame_unresolved_result_for_source_message(
+        1, 'queens', 123) is not None
+
+    db.update_raw_message(123, 'This message is no longer a Queens result.')
+    _run_reparse(cog, ctx)
+
+    assert db.get_minigame_unresolved_result_for_source_message(
+        1, 'queens', 123) is None
+    assert db.get_minigame_unresolved_results_for_guild(
+        1, 'queens') == []
+    assert _generic_queens_puzzles(db, 'minigame_result') == []
+    assert _generic_queens_puzzles(db, 'minigame_import_result') == []
+    assert db.get_minigame_ratings(1, 'queens') == []
 
 
 def test_moderator_override_survives_optout_identity_round_trip_and_correction(
