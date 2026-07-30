@@ -116,6 +116,14 @@ def split_selector(text):
     return spec, tier, rest.strip()
 
 
+# Sentinel tier meaning "whatever the least reasoning this model allows is".
+# The families disagree on the name — 2.5 calls it `off`, 3.x calls it
+# `minimal` — so a caller that just wants a cheap, fast answer cannot name a
+# tier that works across a fallback. Since `tiers` is ordered cheapest-first,
+# resolving this per model is a lookup.
+LEAST = 'least'
+
+
 def thinking_config(model_id, tier):
     """Encode a reasoning tier for ``generationConfig.thinkingConfig``.
 
@@ -126,7 +134,11 @@ def thinking_config(model_id, tier):
     if not tier:
         return None
     spec = find(model_id)
-    if spec is None or tier not in spec.tiers:
+    if spec is None:
+        return None
+    if tier == LEAST:
+        tier = spec.tiers[0]
+    if tier not in spec.tiers:
         return None
     if tier == 'off':
         # The 2.5 family has no "off" level; a zero budget is how thinking is

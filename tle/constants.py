@@ -120,7 +120,10 @@ GEMINI_API_KEYS = os.environ.get('GEMINI_API_KEYS', '')
 # can see who is consuming the shared allowance, but nothing is enforced —
 # there is deliberately no per-user cap or cooldown.
 LLM_MAX_PROMPT_CHARS = _int_env('LLM_MAX_PROMPT_CHARS', 4000)
-LLM_MAX_OUTPUT_TOKENS = _int_env('LLM_MAX_OUTPUT_TOKENS', 900)
+# Reasoning tokens are drawn from this same budget on thinking models, so it
+# has to cover the model's thinking as well as the reply — a value sized for
+# the answer alone comes back empty on a hard question.
+LLM_MAX_OUTPUT_TOKENS = _int_env('LLM_MAX_OUTPUT_TOKENS', 2048)
 # Image attachments forwarded to the model (Gemini is multimodal, so a
 # screenshot of a problem statement or a WA verdict just works). The total cap
 # matters as much as the per-image one: inline data is base64-encoded, which

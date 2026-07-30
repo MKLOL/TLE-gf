@@ -63,6 +63,15 @@ class ModelUnavailableError(GeminiError):
     """The configured model id does not exist or is not accessible."""
 
 
+class EmptyOutputBudgetError(GeminiError):
+    """The output budget ran out before any visible text was produced.
+
+    On a thinking model, reasoning tokens come out of ``maxOutputTokens``, so a
+    budget that looks generous for an answer can be consumed entirely by
+    reasoning — yielding a 200 response with no text.
+    """
+
+
 # ── Pure payload helpers ────────────────────────────────────────────────
 
 def build_parts(prompt, images=None):
@@ -83,7 +92,8 @@ def build_parts(prompt, images=None):
 
 
 def build_payload(parts, system_instruction=None, max_output_tokens=None,
-                  temperature=None, thinking=None):
+                  temperature=None, thinking=None, response_mime_type=None,
+                  response_schema=None):
     """Assemble a ``generateContent`` request body.
 
     ``thinking`` is the encoded reasoning config from ``llm_models`` — either
@@ -100,6 +110,10 @@ def build_payload(parts, system_instruction=None, max_output_tokens=None,
         generation_config['temperature'] = temperature
     if thinking:
         generation_config['thinkingConfig'] = dict(thinking)
+    if response_mime_type:
+        generation_config['responseMimeType'] = response_mime_type
+    if response_schema:
+        generation_config['responseSchema'] = dict(response_schema)
     if generation_config:
         payload['generationConfig'] = generation_config
     return payload
@@ -133,6 +147,15 @@ def extract_text(payload):
                              'RECITATION', 'SPII'):
             raise BlockedError(
                 f"Gemini withheld the answer ({finish_reason}).")
+        if finish_reason == 'MAX_TOKENS':
+            # Reasoning tokens draw on the same output budget, so a small
+            # maxOutputTokens can be spent entirely on thinking and return no
+            # visible text at all. Naming it beats "empty answer", which reads
+            # like a model quirk rather than a setting to raise.
+            raise EmptyOutputBudgetError(
+                'Gemini produced no text — the output budget was used up '
+                'before any answer was written. Raise LLM_MAX_OUTPUT_TOKENS '
+                'or lower the reasoning tier.')
         raise GeminiError(f'Gemini returned an empty answer '
                           f'(finishReason={finish_reason}).')
 
@@ -194,7 +217,8 @@ async def generate_once(api_key, model, payload, session=None):
 
 async def complete(pool, prompt, images=None, system_instruction=None,
                    max_output_tokens=None, temperature=None, session=None,
-                   max_attempts=None, stats=None, models=None, tier=None):
+                   max_attempts=None, stats=None, models=None, tier=None,
+                   response_mime_type=None, response_schema=None):
     """Run one prompt against the pool, rotating buckets until one answers.
 
     Walks ``(key, model)`` buckets — cheapest model across every key first,
@@ -246,7 +270,9 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         payload = build_payload(
             parts, system_instruction=system_instruction,
             max_output_tokens=max_output_tokens, temperature=temperature,
-            thinking=llm_models.thinking_config(lease.model, tier))
+            thinking=llm_models.thinking_config(lease.model, tier),
+            response_mime_type=response_mime_type,
+            response_schema=response_schema)
 
         attempts += 1
         try:
