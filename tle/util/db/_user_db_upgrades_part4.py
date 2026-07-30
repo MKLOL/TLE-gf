@@ -111,3 +111,47 @@ def upgrade_1_44_0(db):
         )
     db.commit()
     logger.info('1.44.0: Upgrade complete')
+
+
+@registry.register('1.45.0', 'LLM API key pool, per-bucket quota, and usage')
+def upgrade_1_45_0(db):
+    """Tables backing ``;llm``.
+
+    Quota on Gemini's free tier is metered per project per model, so
+    ``llm_bucket`` is keyed on ``(key_id, model)`` rather than on the key
+    alone — one key can be spent for one model and healthy for another.
+    """
+    logger.info('1.45.0: Adding LLM key pool tables')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_api_key (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL UNIQUE,
+            label       TEXT,
+            guild_id    TEXT,
+            added_by    TEXT,
+            added_at    REAL NOT NULL,
+            active      INTEGER NOT NULL DEFAULT 1
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_bucket (
+            key_id          INTEGER NOT NULL,
+            model           TEXT NOT NULL,
+            exhausted_until REAL,
+            last_error      TEXT,
+            updated_at      REAL,
+            PRIMARY KEY (key_id, model)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            guild_id TEXT NOT NULL,
+            user_id  TEXT NOT NULL,
+            day      TEXT NOT NULL,
+            count    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id, day)
+        )
+    ''')
+    db.commit()
+    logger.info('1.45.0: Upgrade complete')

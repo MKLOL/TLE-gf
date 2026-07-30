@@ -83,8 +83,9 @@ def test_opening_version_141_db_runs_queens_optout_conversion(tmp_path):
     try:
         assert conn.is_minigame_opted_out('1', 'queens', '300') is False
         assert conn.is_minigame_opted_out('1', 'akari', '301') is True
-        assert registry.get_current_version(conn.conn) == '1.44.0'
-        assert registry.latest_version == '1.44.0'
+        # Opening the DB runs every pending upgrade, so it lands on whatever
+        # the newest registered version is — not a pinned number.
+        assert registry.get_current_version(conn.conn) == registry.latest_version
     finally:
         conn.conn.close()
 
@@ -160,6 +161,6 @@ def test_opening_version_142_db_runs_rated_flag_upgrade(tmp_path):
             '1', 'queens', 'alice')[0]
         assert row.is_rated == 1
         assert row.rating_override is None
-        assert registry.get_current_version(conn.conn) == '1.44.0'
+        assert registry.get_current_version(conn.conn) == registry.latest_version
     finally:
         conn.conn.close()

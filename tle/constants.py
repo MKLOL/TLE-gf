@@ -25,6 +25,26 @@ LOG_FILE_PATH = os.path.join(LOGS_DIR, 'tle.log')
 ALL_DIRS = (attrib_value for attrib_name, attrib_value in list(globals().items())
             if attrib_name.endswith('DIR'))
 
+
+def _int_env(name, default):
+    """Read an integer setting, tolerating an unset-but-exported variable.
+
+    ``environment.template`` teaches the ``export FOO=""`` idiom for settings
+    you have not filled in yet, and a bare ``int('')`` raises at import time —
+    before any logging or error handling exists, so the bot dies with a
+    traceback and no explanation. Empty or unparseable values fall back to the
+    default instead.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        # No logger yet at import time; the fallback keeps the bot bootable.
+        print(f'WARNING: {name}={raw!r} is not an integer, using {default}')
+        return default
+
 TLE_ADMIN = os.environ.get('TLE_ADMIN', 'Admin')
 TLE_MODERATOR = os.environ.get('TLE_MODERATOR', 'Moderator')
 
@@ -66,8 +86,8 @@ FOOTBALL_DATA_API_KEY = os.environ.get('FOOTBALL_DATA_API_KEY')
 # Wallet economy. Everyone starts at BET_START_BALANCE; `;bet daily` grants a
 # flat BET_DAILY_AMOUNT once per UTC day (unconditional). Stakes are uncapped —
 # you can wager up to your whole balance.
-BET_START_BALANCE = int(os.environ.get('BET_START_BALANCE', 1000))
-BET_DAILY_AMOUNT = int(os.environ.get('BET_DAILY_AMOUNT', 100))
+BET_START_BALANCE = _int_env('BET_START_BALANCE', 1000)
+BET_DAILY_AMOUNT = _int_env('BET_DAILY_AMOUNT', 100)
 BET_MIN_STAKE = 1
 # The bot auto-opens a betting market this long before kickoff, freezing the
 # odds it reads at that moment for the life of the market. 6h, to give members
@@ -77,3 +97,44 @@ BET_OPEN_LEAD_SECONDS = 6 * 3600
 # A World Cup match runs ~2h (group) and up to ~2h45 with extra time +
 # penalties (knockouts); 3h leaves margin for the final score to land.
 BET_SETTLE_BUFFER_SECONDS = 3 * 3600
+
+# ── ;llm (Google Gemini) ───────────────────────────────────────────────────
+# Model ladder, tried in order, cheapest/highest-quota first. Free-tier quota
+# is metered per project per model ("Rate limits are applied per project, not
+# per API key" — ai.google.dev/gemini-api/docs/rate-limits), so each entry here
+# is a genuinely separate allowance on the same key, not the same bucket
+# renamed. Three models x N projects is the real size of the pool.
+#
+# Verified against ai.google.dev/gemini-api/docs/models (July 2026): all three
+# are current and free-tier eligible. Note gemini-2.0-flash and
+# gemini-2.0-flash-lite are SHUT DOWN — do not fall back to them.
+LLM_MODELS = tuple(m.strip() for m in os.environ.get(
+    'LLM_MODELS',
+    'gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash'
+).split(',') if m.strip())
+# Optional bootstrap keys, comma-separated, for provisioning without typing
+# secrets into Discord. Keys added via `;llm keys` are stored in user.db and
+# are merged with these on startup.
+GEMINI_API_KEYS = os.environ.get('GEMINI_API_KEYS', '')
+# Per-user call counts are still recorded (see `;llm keystatus`) so moderators
+# can see who is consuming the shared allowance, but nothing is enforced —
+# there is deliberately no per-user cap or cooldown.
+LLM_MAX_PROMPT_CHARS = _int_env('LLM_MAX_PROMPT_CHARS', 4000)
+LLM_MAX_OUTPUT_TOKENS = _int_env('LLM_MAX_OUTPUT_TOKENS', 900)
+# Image attachments forwarded to the model (Gemini is multimodal, so a
+# screenshot of a problem statement or a WA verdict just works). The total cap
+# matters as much as the per-image one: inline data is base64-encoded, which
+# inflates by 4/3, and Gemini rejects a request whose inline payload exceeds
+# ~20 MB. 12 MB raw stays under that even at the limit.
+LLM_MAX_IMAGES = _int_env('LLM_MAX_IMAGES', 4)
+LLM_MAX_IMAGE_BYTES = _int_env('LLM_MAX_IMAGE_BYTES', 4 * 1024 * 1024)
+LLM_MAX_TOTAL_IMAGE_BYTES = _int_env('LLM_MAX_TOTAL_IMAGE_BYTES', 12 * 1024 * 1024)
+# Channel-history context. A cheap routing call first decides whether the
+# question needs the conversation at all; when it does, these bound how much
+# gets pulled in. Set LLM_CONTEXT_ENABLED=0 to skip routing entirely and halve
+# the request count per question.
+LLM_CONTEXT_ENABLED = os.environ.get('LLM_CONTEXT_ENABLED', '1').strip() != '0'
+LLM_CONTEXT_MESSAGES = _int_env('LLM_CONTEXT_MESSAGES', 50)
+LLM_CONTEXT_WINDOW_SECONDS = _int_env('LLM_CONTEXT_WINDOW_SECONDS', 600)
+LLM_REPLY_BEFORE = _int_env('LLM_REPLY_BEFORE', 25)
+LLM_REPLY_AFTER = _int_env('LLM_REPLY_AFTER', 24)

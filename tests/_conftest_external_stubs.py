@@ -30,6 +30,25 @@ for mod_name in _STUB_MODULES:
         stub.__all__ = []
         sys.modules[mod_name] = stub
 
+# aiohttp stubs for gemini_api (which binds ClientError at import time)
+_aiohttp = sys.modules['aiohttp']
+_aiohttp.ClientError = type('ClientError', (Exception,), {})
+_aiohttp.ClientTimeout = type('ClientTimeout', (), {
+    '__init__': lambda self, **kw: None})
+
+
+class _StubClientSession:
+    """Never performs I/O — tests inject responses at a higher layer."""
+
+    def __init__(self, *args, **kwargs):
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
+_aiohttp.ClientSession = _StubClientSession
+
 # numpy stubs for versus.py
 _np = sys.modules['numpy']
 _np.arange = lambda *a, **kw: []
@@ -78,6 +97,8 @@ _commands_mod.MemberConverter = type('MemberConverter', (), {
 _commands_mod.TextChannelConverter = type('TextChannelConverter', (), {'convert': lambda self, *a, **kw: None})
 _commands_mod.ThreadConverter = type('ThreadConverter', (), {'convert': lambda self, *a, **kw: None})
 _commands_mod.BadArgument = type('BadArgument', (_commands_mod.CommandError,), {})
+_commands_mod.CheckFailure = type('CheckFailure', (_commands_mod.CommandError,), {})
+_commands_mod.MissingAnyRole = type('MissingAnyRole', (_commands_mod.CheckFailure,), {})
 # commands.errors.CommandError is used by resolve_handles
 _commands_errors = types.ModuleType('discord.ext.commands.errors')
 _commands_errors.CommandError = _commands_mod.CommandError
@@ -190,6 +211,7 @@ _discord_mod.File = type('File', (), {
         setattr(self, 'filename', filename),
     ) and None,
 })
+_discord_mod.Message = type('Message', (), {})
 _discord_mod.MessageType = type('MessageType', (), {'default': 0, 'reply': 1})
 _discord_mod.MessageReferenceType = type(
     'MessageReferenceType', (), {'default': 0, 'reply': 0, 'forward': 1})

@@ -19,5 +19,34 @@ export FOOTBALL_DATA_API_KEY=""
 # guilds where the bot key lacks admin access. Degraded: rated contests only,
 # no per-problem results. Leave disabled (default) to use contest.standings.
 
+# ;llm — Google Gemini.
+# Comma-separated Gemini API keys. Google: "Rate limits are applied per
+# project, not per API key" — so extra keys minted inside one project buy no
+# extra capacity; one key per project is what widens the pool. Note that
+# free-tier prompts and responses ARE used by Google to improve its products.
+# Keys can also be
+# added at runtime with `;llm keys <key> ...` (moderators only, stored in
+# user.db); this variable is the safer route, since it never puts a secret in
+# channel history. Leave empty to disable the command.
+export GEMINI_API_KEYS=""
+# Model ladder, tried in order. Each entry is a separate quota bucket on the
+# same key, not the same allowance renamed — so this multiplies capacity.
+# Verified July 2026: all three are current and free-tier eligible. Roughly
+# 1500 / 1000 / 500 requests per day each, 15 RPM. Google no longer publishes
+# per-model free limits in the docs — check your actual quota in AI Studio.
+# gemini-2.0-flash and gemini-2.0-flash-lite are shut down; don't use them.
+export LLM_MODELS="gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
+# There is deliberately no per-user cap or cooldown — the shared free-tier
+# allowance is the only limit. Calls are still counted per user so moderators
+# can see consumption via `;llm keystatus`.
+#
+# Questions about the ongoing conversation pull in channel history. A cheap
+# routing call decides whether that is needed, which costs a second request
+# per question; set LLM_CONTEXT_ENABLED=0 to skip routing and halve the
+# request count (at the cost of answers that cannot see the conversation).
+export LLM_CONTEXT_ENABLED="1"
+export LLM_CONTEXT_MESSAGES="50"
+export LLM_CONTEXT_WINDOW_SECONDS="600"
+
 # Set to enable automatic venv usage.
 export VENV_DIR=""

@@ -34,6 +34,30 @@ A one-time background task runs on startup to populate `author_id` and `star_cou
 
 Key-value config per guild (`guild_config` table). Used for feature gating (e.g., `starboard_leaderboard`). Managed via `;meta config`.
 
+### `;llm` — Gemini with a rotating key pool
+
+`;llm <question>` answers in an embed; sent as a *reply*, it answers about the replied-to message and forwards any image attachments (Gemini is multimodal). Prefixing a model — `;llm 3.5f-h <question>` — pins it and its reasoning tier (`;llm models` lists them; aliases are `<version><f|l>` plus `pro`, tiers `-min/-l/-m/-h/-off`, with the long spellings kept as synonyms). Moderators manage the key pool with `;llm keys <key> ...` / `keylist` / `keyforget` / `keystatus`.
+
+**There is no per-user cap or cooldown**, by request. The shared free-tier allowance is the only limit; calls are counted per user purely so `;llm keystatus` can show where it went.
+
+**Two-stage pipeline** (`_llm_pipeline.py`), adapted from [MKLOL/TLE-gf#10](https://github.com/MKLOL/TLE-gf/pull/10): a cheap routing call classifies the question `direct` / `requires_context` / `requires_reply_chain`, and only then is channel history collected (`_llm_history.py`). Routing is charged to the *cheapest* model in the ladder with a 16-token cap, and any failure there falls back to `direct` — losing the optimisation must never block the answer. It does cost a second request per question; `LLM_CONTEXT_ENABLED=0` turns it off.
+
+Reasoning tiers go in `generationConfig.thinkingConfig`, and the encoding differs by family: 3.x uses `thinkingLevel`, while the 2.5 family expresses "off" as `thinkingBudget: 0`. Because a fallback can cross that boundary, the payload is rebuilt per attempt rather than once per call.
+
+The thing to understand before touching this: **Google's free tier meters quota per project per model, not per key** — *"Rate limits are applied per project, not per API key"* ([docs](https://ai.google.dev/gemini-api/docs/rate-limits)). Extra keys minted inside one project share one allowance. So the unit of quota is a *bucket* — the pair `(key, model)` — and `KeyPool` rotates over buckets, not keys. Each subsequent entry in `LLM_MODELS` is a genuinely separate allowance on the same key, so the ladder multiplies capacity rather than just providing a backup.
+
+Every quota failure is an HTTP 429, but they are not interchangeable and are classified out of the error's `QuotaFailure` details: per-minute cools the bucket ~60s **in memory**; per-day blocks it until Google's reset and is **persisted to `llm_bucket`**, so a restart doesn't rediscover dead buckets by burning a request on each. An unclassifiable 429 escalates to daily after 3 strikes.
+
+Three asymmetries drive the rest of the design, and all three are deliberate:
+
+- **Per-minute wins a classification tie.** Google's prose names both windows ("limit 15 per minute … learn about daily limits"), so structured details are read first and minute beats day within either source. Guessing minute wrongly self-corrects via the strike counter; guessing day wrongly parks a live bucket until midnight Pacific with nothing to undo it.
+- **A rejected key is benched, not retired, on the first 4xx.** `PERMISSION_DENIED` covers a revoked key *and* a transient billing blip. First rejection benches every bucket for that key 10 min; a second on a later call retires it and logs at `ERROR`, which the logging cog relays to moderators.
+- **Failed calls are billed if they reached Google.** `complete()` reports `stats['attempts']`; one invocation can walk several buckets, so a user cannot drain the shared allowance on calls that happen to fail. Nothing is charged when the pool had nothing to try.
+
+`;llm keys` has a `cog_command_error`: a failed role check fires *before* the command body, so without it a non-moderator's pasted key would never be deleted and `MissingAnyRole` would only be logged. Messages containing a key-shaped token get deleted and flagged; ones that don't (`;llm keys are overrated`) get an explanation.
+
+This uses the **native** Gemini endpoint, not Google's OpenAI-compatibility shim — the shim flattens away the error details the classifier depends on.
+
 ## Key files
 
 | File | What it does |
@@ -43,6 +67,13 @@ Key-value config per guild (`guild_config` table). Used for feature gating (e.g.
 | `tle/util/db/user_db_conn.py` | All DB methods (starboard, guild config, leaderboards) |
 | `tle/cogs/starboard.py` | Starboard cog (reactions, commands, backfill) |
 | `tle/cogs/meta.py` | Meta cog (guild config commands) |
+| `tle/cogs/llm.py` | `;llm` cog (ask, reply-context, mod-only key management) |
+| `tle/util/llm_keypool.py` | `KeyPool` — `(key, model)` bucket rotation and 429 classification |
+| `tle/util/gemini_api.py` | Native Gemini REST client + retry-across-buckets loop |
+| `tle/util/db/llm_db.py` | `LlmDbMixin` — key storage, bucket state, per-user usage |
+| `tle/util/llm_models.py` | Selectable model catalog + reasoning-tier encoding |
+| `tle/cogs/_llm_pipeline.py` | Route (classify) → gather history → build prompt |
+| `tle/cogs/_llm_history.py` | Channel-history collection and transcript rendering |
 | `tle/constants.py` | `_DEFAULT_STAR_COLOR`, `_DEFAULT_STAR`, `TLE_ADMIN` |
 | `tests/conftest.py` | Test setup — stubs discord.py, aiohttp, etc. via `sys.modules` |
 
