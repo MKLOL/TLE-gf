@@ -1,4 +1,4 @@
-"""Classifier prompts and Discord context collection for ``;gemini``."""
+"""Classifier prompts and Discord context collection for ``;ai``."""
 
 import json
 from dataclasses import dataclass

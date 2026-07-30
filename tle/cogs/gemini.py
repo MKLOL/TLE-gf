@@ -53,6 +53,7 @@ class Gemini(commands.Cog):
             await self.client.close()
 
     @commands.command(
+        name='ai',
         brief='Ask Gemini a question',
         usage='[model[-reasoning]] <query>',
     )
@@ -66,9 +67,9 @@ class Gemini(commands.Cog):
         when the request depends on it.
 
         Usage:
-          ;gemini <query>
-          ;gemini 3.1-flash-lite-low <query>
-          ;gemini gemini-2.5-flash-off <query>
+          ;ai <query>
+          ;ai 3.1-flash-lite-low <query>
+          ;ai gemini-2.5-flash-off <query>
 
         Models and reasoning tiers:
           2.5-flash, 2.5-flash-lite: off, low, medium, high
