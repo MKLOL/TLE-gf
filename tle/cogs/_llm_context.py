@@ -7,14 +7,34 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# The competitive-programming framing is context, not a topic filter. Stated
+# carelessly ("you answer questions for competitive programmers") the model
+# starts declining unrelated questions and appending "let's keep this focused
+# on algorithms!", which is worse than having no framing at all — so the
+# permission to answer anything is spelled out explicitly.
 SYSTEM_INSTRUCTION = (
-    'You are a helpful assistant answering questions in a Discord server for '
-    'competitive programmers. Be concise and direct — aim for a few short '
-    'paragraphs at most, since your reply is shown in a chat message. Use '
-    'Discord-flavored markdown. Put code in fenced blocks with a language tag. '
-    'Do not use headings larger than bold text. If you are unsure of '
-    'something, say so plainly rather than guessing. Never claim to have run '
-    'code or checked a website.'
+    'You are a helpful assistant in a Discord server whose members are mostly '
+    'competitive programmers.\n'
+    'Treat that purely as background about your audience. It helps you read '
+    'ambiguous shorthand — "problem" likely means a contest problem, "TLE" is '
+    'a time-limit verdict, "rating" is probably Codeforces — and it tells you '
+    'the room is technical. It is NOT a restriction on subject matter.\n'
+    'Answer whatever is actually asked, as helpfully as you would answer an '
+    'algorithms question: cooking, languages, music, hardware, homework, '
+    'idle nonsense. Never tell the user to keep the conversation on topic, '
+    'never steer an answer back toward competitive programming, and never '
+    'decline a question for being unrelated to it.\n'
+    'Some requests arrive with a transcript of recent Discord messages '
+    'attached; use it when it is supplied. If a question asks about the '
+    'conversation and no transcript is attached, the messages simply were not '
+    'given to you — say that plainly. Do not explain it as a limitation of '
+    'being an AI, do not talk about context windows or chat sessions, and do '
+    'not claim the conversation does not exist.\n'
+    'Be concise and direct — a few short paragraphs at most, since your reply '
+    'is shown in a chat message. Use Discord-flavored markdown. Put code in '
+    'fenced blocks with a language tag. Do not use headings larger than bold '
+    'text. If you are unsure of something, say so plainly rather than '
+    'guessing. Never claim to have run code or checked a website.'
 )
 
 _IMAGE_MIME_PREFIX = 'image/'
@@ -52,12 +72,44 @@ CLASSIFIER_INSTRUCTION = (
 )
 
 
-def build_classifier_prompt(question, is_reply):
-    """The single-word routing question put to the cheap model."""
+def _format_timestamp(sent_at):
+    """Render a message timestamp for the router, or None if unavailable."""
+    if sent_at is None:
+        return None
+    try:
+        return sent_at.strftime('%Y-%m-%d %H:%M UTC')
+    except AttributeError:
+        return str(sent_at)
+
+
+def build_classifier_prompt(question, is_reply, author_name=None,
+                            author_id=None, sent_at=None):
+    """The single-word routing question put to the cheap model.
+
+    Carries who asked and when, alongside the request. A router deciding
+    whether "what were the last few messages" needs history reasons better
+    with a timestamp to anchor "last" against. Metadata idea from
+    MKLOL/TLE-gf#10.
+
+    The request goes last and fenced: it is user-controlled text, and without
+    the fence a question containing ``is_reply: no`` would read as another
+    metadata line.
+    """
     asked = (question or '').strip() or _DEFAULT_REPLY_QUESTION
-    return (f'The user is replying to a message: {"yes" if is_reply else "no"}\n'
-            f'Their request: {asked}\n\n'
-            f'Which mode?')
+
+    lines = [f'is_reply: {"yes" if is_reply else "no"}']
+    if author_name:
+        who = f'{author_name}' + (f' (id {author_id})' if author_id else '')
+        lines.append(f'author: {who}')
+    stamp = _format_timestamp(sent_at)
+    if stamp:
+        lines.append(f'sent_at: {stamp}')
+
+    return ('\n'.join(lines) + '\n\n'
+            '--- BEGIN REQUEST ---\n'
+            f'{asked}\n'
+            '--- END REQUEST ---\n\n'
+            'Which mode?')
 
 
 def parse_mode(raw, is_reply):

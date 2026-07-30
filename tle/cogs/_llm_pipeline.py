@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 _CLASSIFIER_MAX_TOKENS = 16
 
 
-async def classify(pool, question, is_reply, session=None, stats=None):
+async def classify(pool, question, is_reply, session=None, stats=None,
+                   author_name=None, author_id=None, sent_at=None):
     """Decide whether this question needs channel history.
 
     Falls back to ``direct`` on any failure: routing is an optimisation, and
@@ -35,7 +36,9 @@ async def classify(pool, question, is_reply, session=None, stats=None):
     try:
         raw, _ = await gemini_api.complete(
             pool,
-            llm_context.build_classifier_prompt(question, is_reply),
+            llm_context.build_classifier_prompt(
+                question, is_reply, author_name=author_name,
+                author_id=author_id, sent_at=sent_at),
             system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
             max_output_tokens=_CLASSIFIER_MAX_TOKENS,
             temperature=0,

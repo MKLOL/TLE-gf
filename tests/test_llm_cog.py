@@ -4,6 +4,8 @@ Covers the gating (cooldown, per-user daily cap, moderator exemption), the
 reply-context path, and the key-management commands — in particular that
 adding keys deletes the invoking message and never echoes key material.
 """
+from datetime import datetime, timezone
+
 import pytest
 
 from tle import constants
@@ -100,10 +102,15 @@ def _invoke(command, *args, **kwargs):
 
 
 def _answers(monkeypatch, answer='the answer', model='model-a'):
-    """Make gemini_api.complete succeed, recording the prompt it was given."""
-    seen = {}
+    """Make gemini_api.complete succeed, recording every prompt it was given.
+
+    The cog makes two calls per question — routing then answering — so
+    ``prompts`` keeps both while ``prompt``/``kwargs`` track the last (answer).
+    """
+    seen = {'prompts': []}
 
     async def fake_complete(pool, prompt, **kwargs):
+        seen['prompts'].append(prompt)
         seen['prompt'] = prompt
         seen['kwargs'] = kwargs
         return answer, Lease(key_id=1, api_key='k', label='l', model=model)
@@ -142,6 +149,23 @@ class TestAsk:
         _invoke(llm_cog.Llm.llm, cog, ctx, question='what is a segment tree?')
         assert seen['prompt'] == 'what is a segment tree?'
         assert 'segment trees are...' in ctx.text
+
+    def test_the_router_is_told_who_asked_and_when(self, cog, monkeypatch):
+        seen = _answers(monkeypatch)
+        message = FakeMessage()
+        message.created_at = datetime(2026, 7, 30, 23, 4, tzinfo=timezone.utc)
+        _invoke(llm_cog.Llm.llm, cog, FakeCtx(message=message),
+                question='what were the last 3 messages?')
+        routing = seen['prompts'][0]
+        assert 'author: nife (id 1)' in routing
+        assert 'sent_at: 2026-07-30 23:04 UTC' in routing
+
+    def test_missing_message_metadata_does_not_break_routing(self, cog,
+                                                             monkeypatch):
+        seen = _answers(monkeypatch)
+        _invoke(llm_cog.Llm.llm, cog, FakeCtx(), question='hi?')
+        assert 'sent_at:' not in seen['prompts'][0]
+        assert 'the answer' in seen['prompt'] or seen['prompt'] == 'hi?'
 
     def test_answer_footer_shows_the_model(self, cog, monkeypatch):
         _answers(monkeypatch, 'hi', model='model-b')

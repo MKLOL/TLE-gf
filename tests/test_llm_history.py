@@ -260,6 +260,7 @@ def _classifier(monkeypatch, verdict):
     seen = {}
 
     async def fake_complete(pool_, prompt, **kwargs):
+        seen['prompt'] = prompt
         seen['models'] = kwargs.get('models')
         seen['max_output_tokens'] = kwargs.get('max_output_tokens')
         return verdict, Lease(1, 'k', 'l', 'model-b')
@@ -280,6 +281,15 @@ class TestClassify:
         run(llm_pipeline.classify(pool, 'hi', False))
         assert seen['models'] == ['model-b']
         assert seen['max_output_tokens'] <= 32
+
+    def test_metadata_reaches_the_router(self, pool, monkeypatch):
+        seen = _classifier(monkeypatch, 'direct')
+        run(llm_pipeline.classify(
+            pool, 'what were the last few messages?', False,
+            author_name='nife', author_id=4242,
+            sent_at=datetime(2026, 7, 30, 23, 4, tzinfo=timezone.utc)))
+        assert 'author: nife (id 4242)' in seen['prompt']
+        assert 'sent_at: 2026-07-30 23:04 UTC' in seen['prompt']
 
     def test_a_failed_classifier_falls_back_to_direct(self, pool, monkeypatch):
         async def boom(pool_, prompt, **kwargs):

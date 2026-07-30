@@ -200,7 +200,10 @@ class Llm(commands.Cog):
             async with ctx.typing():
                 mode = await llm_pipeline.classify(
                     pool, question, referenced is not None,
-                    session=self._get_session(), stats=stats)
+                    session=self._get_session(), stats=stats,
+                    author_name=getattr(ctx.author, 'display_name', None),
+                    author_id=getattr(ctx.author, 'id', None),
+                    sent_at=getattr(ctx.message, 'created_at', None))
                 window = await llm_pipeline.gather(
                     ctx, mode, referenced, bot_user_id=self._bot_user_id())
                 prompt = llm_pipeline.build_prompt(question, referenced, window)
