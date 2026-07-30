@@ -6,6 +6,9 @@ export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 export CF_API_KEY=""
 export CF_API_SECRET=""
 
+# Comma-separated Gemini API keys. Requests rotate across the configured keys.
+export GEMINI_API_KEYS=""
+
 # World Cup betting.
 # Required for odds, ;bet matches, manual opens, and auto-opening markets.
 export ODDS_API_KEY=""
