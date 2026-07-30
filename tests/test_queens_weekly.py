@@ -263,7 +263,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
             str(alice.id), str(bob.id),
         }
 
-    def test_weekly_and_improved_are_mutually_exclusive(
+    def test_weekly_and_beta_are_mutually_exclusive(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(_GUILD_ID, QUEENS_GAME.feature_flag, '1')
@@ -274,7 +274,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
 
         with pytest.raises(
                 MinigameCogError,
-                match=r'(?i)(weekly.*improved|improved.*weekly)'):
+                match=r'(?i)(weekly.*beta|beta.*weekly)'):
             asyncio.run(cog._cmd_queens_ratings(
                 ctx, weekly=True, improved=True))
 

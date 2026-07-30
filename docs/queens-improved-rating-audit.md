@@ -2,7 +2,7 @@
 
 ## Scope and decision
 
-This audit covers only the opt-in Queens `+improved` engine. Ordinary Queens,
+This audit covers only the opt-in Queens `+beta` engine. Ordinary Queens,
 Akari, persisted rating snapshots, registration policy, and command routing are
 outside the formula change.
 
@@ -313,7 +313,7 @@ outweigh loss of exact conservation, time-margin semantics, or simplicity.
 
 ## Release invariants
 
-Future changes to `+improved` must retain:
+Future changes to `+beta` must retain:
 
 - ordinary Queens isolation and no rating-table writes;
 - deterministic first-submission locking;

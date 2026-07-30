@@ -197,7 +197,7 @@ class QueensCmdsMixin:
 
     @queens_results.command(name='debug',
                             brief='(Mod) Date results with ratings for ALL players',
-                            usage='[date|number] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            usage='[date|number] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @queens_mod_only()
     async def queens_results_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -206,7 +206,7 @@ class QueensCmdsMixin:
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;queens results debug [date|number] '
-                '[+improved] [+exclude=…] [+include=…] '
+                '[+beta] [+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date]`.')
         date_arg = (
@@ -310,7 +310,7 @@ class QueensCmdsMixin:
         await self._cmd_reparse(ctx, QUEENS_GAME)
 
     @queens.group(name='ratings', brief='Show Queens rating leaderboard',
-                  usage='[+weekly] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_ratings(self, ctx, *args):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
@@ -321,7 +321,7 @@ class QueensCmdsMixin:
             await self._extract_queens_rating_filters(ctx, args))
         if remaining:
             raise MinigameCogError(
-                'Usage: `;queens ratings [+weekly] [+improved] '
+                'Usage: `;queens ratings [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(
@@ -331,7 +331,7 @@ class QueensCmdsMixin:
 
     @queens.group(name='rating',
                   brief='Show Queens rating graph',
-                  usage='[@user1 @user2 ...] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]',
+                  usage='[@user1 @user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]',
                   invoke_without_command=True)
     async def queens_rating(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -346,7 +346,7 @@ class QueensCmdsMixin:
 
     @queens_rating.command(name='debug',
                            brief='(Mod) Rating graph for any rated user',
-                           usage='@user1 [@user2 ...] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]')
+                           usage='@user1 [@user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]')
     @queens_mod_only()
     async def queens_rating_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -362,7 +362,7 @@ class QueensCmdsMixin:
 
     @queens.group(name='performance', aliases=['perf'],
                   brief='Show Queens performance graph',
-                  usage='[@user1 @user2 ...] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[@user1 @user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_performance(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -375,7 +375,7 @@ class QueensCmdsMixin:
 
     @queens_performance.command(name='debug',
                                 brief='(Mod) Performance graph for any rated user',
-                                usage='@user1 [@user2 ...] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                                usage='@user1 [@user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @queens_mod_only()
     async def queens_performance_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -389,7 +389,7 @@ class QueensCmdsMixin:
 
     @queens.group(name='history',
                   brief='Paginated Queens rating delta log',
-                  usage='[@user] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[@user] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_history(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -405,7 +405,7 @@ class QueensCmdsMixin:
 
     @queens_history.command(name='debug',
                             brief='(Mod) Rating delta log for any rated user',
-                            usage='@user [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            usage='@user [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @queens_mod_only()
     async def queens_history_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
@@ -428,7 +428,7 @@ class QueensCmdsMixin:
 
     @queens_ratings.command(name='debug', aliases=['all'],
                             brief='(Mod) Leaderboard including unregistered rated users',
-                            usage='[+weekly] [+improved] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @queens_mod_only()
     async def queens_ratings_debug(self, ctx, *args):
         weekly = '+weekly' in args
@@ -438,7 +438,7 @@ class QueensCmdsMixin:
             await self._extract_queens_rating_filters(ctx, args))
         if remaining:
             raise MinigameCogError(
-                'Usage: `;queens ratings debug [+weekly] [+improved] '
+                'Usage: `;queens ratings debug [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(

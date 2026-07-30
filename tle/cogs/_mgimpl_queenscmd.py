@@ -149,7 +149,7 @@ class ImplQueensCmdMixin:
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         if weekly and improved:
             raise MinigameCogError(
-                '`+weekly` and `+improved` are separate testing rating '
+                '`+weekly` and `+beta` are separate testing rating '
                 'systems and cannot be combined.')
         standings = []
         if weekly:

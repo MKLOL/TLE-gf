@@ -1,7 +1,7 @@
 """Experimental margin-aware multiplayer Elo replay for LinkedIn Queens.
 
 The canonical Queens ladder remains Codeforces-style.  This module powers only
-the opt-in ``+improved`` views and deliberately uses a calmer, time-sensitive
+the opt-in ``+beta`` views and deliberately uses a calmer, time-sensitive
 model:
 
 * every opponent contributes a bounded fraction of one daily result;
@@ -279,7 +279,7 @@ def compute_queens_improved_ratings(
     """Replay Queens results with the experimental soft-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
-    existing ``+improved`` table and graph can use this engine without storing
+    existing ``+beta`` table and graph can use this engine without storing
     a second rating snapshot.  Queens inactivity never changes visible skill;
     ``include_decay_in_history`` and ``rank_fn`` are accepted only for shared
     engine compatibility.
@@ -306,7 +306,7 @@ def compute_queens_improved_ratings(
                 _result_time_seconds(row.time_seconds)
             except ValueError:
                 # A malformed locked first result must not become a zero-second
-                # win, seed a ghost player, or break every +improved command.
+                # win, seed a ghost player, or break every +beta command.
                 # Do this after first-attempt deduplication so a later share
                 # cannot replace the quarantined first one.
                 continue

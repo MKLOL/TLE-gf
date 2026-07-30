@@ -1,6 +1,6 @@
 # Queens improved rating beta
 
-The `+improved` Queens mode is an on-demand, margin-aware multiplayer Elo
+The `+beta` Queens mode is an on-demand, margin-aware multiplayer Elo
 replay. It is separate from the persisted Codeforces-style Queens rating:
 testing it cannot alter the ordinary leaderboard or anything that consumes the
 ordinary rating.
@@ -91,7 +91,7 @@ Consequences:
   participation volume belongs to Queens XP rather than skill rating.
 - A malformed locked first time is quarantined from the beta replay after
   first-submission deduplication. It cannot become a zero-second win, promote a
-  later retry, or break every `+improved` command.
+  later retry, or break every `+beta` command.
 
 ## Performance
 
@@ -151,14 +151,14 @@ to model, the beta's log loss was `0.6214` versus `0.6555` for ordinary Queens.
 
 ## Commands
 
-Add `+improved` anywhere in the prefix-command arguments:
+Add `+beta` anywhere in the prefix-command arguments:
 
 ```text
-;queens ratings +improved
-;queens rating +improved
-;queens perf +improved
-;queens history +improved
-;queens results +improved
+;queens ratings +beta
+;queens rating +beta
+;queens perf +beta
+;queens history +beta
+;queens results +beta
 ```
 
 The same views expose an `improved` boolean in their slash-command forms.

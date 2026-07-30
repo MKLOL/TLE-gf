@@ -100,7 +100,7 @@ class TestQueensImprovedLeaderboard(_ImprovedQueensBase):
 
         assert calls and calls[-1]['improved'] is True
         assert captured['rows']
-        assert '(testing beta)' in captured['title']
+        assert '(beta testing)' in captured['title']
         assert _rating_snapshot(db) == canonical_before
         assert [row.rating for row in captured['rows']] != [
             row[1] for row in canonical_before
@@ -128,7 +128,7 @@ class TestQueensImprovedLeaderboard(_ImprovedQueensBase):
         asyncio.run(cog._cmd_queens_ratings(ctx))
 
         assert [tuple(row) for row in captured['rows']] == _rating_snapshot(db)
-        assert '(testing beta)' not in captured['title']
+        assert '(beta testing)' not in captured['title']
 
 
 class TestQueensImprovedViews(_ImprovedQueensBase):
@@ -192,21 +192,21 @@ class TestQueensImprovedViews(_ImprovedQueensBase):
             rating_ctx, [alice], improved=True))
         assert data_calls[-1]['improved'] is True
         assert plotted_rating['series'][0][0] == beta_history
-        assert '(testing beta)' in rating_ctx.sent['embed'].title
+        assert '(beta testing)' in rating_ctx.sent['embed'].title
 
         performance_ctx = self._make_ctx(guild, alice)
         asyncio.run(cog._cmd_queens_performance(
             performance_ctx, [alice], improved=True))
         assert data_calls[-1]['improved'] is True
         assert plotted_performance['series'][0][0] == beta_history
-        assert '(testing beta)' in performance_ctx.sent['embed'].title
+        assert '(beta testing)' in performance_ctx.sent['embed'].title
 
         history_ctx = self._make_ctx(guild, alice)
         asyncio.run(cog._cmd_queens_history(
             history_ctx, alice, improved=True))
         assert history_calls[-1]['improved'] is True
         assert pages
-        assert '(testing beta)' in pages[0][1].title
+        assert '(beta testing)' in pages[0][1].title
         assert str(round(beta_history[-1].rating)) in pages[0][1].description
 
     def test_improved_results_use_beta_change_info_and_title(
@@ -252,7 +252,7 @@ class TestQueensImprovedViews(_ImprovedQueensBase):
             info.performance is not None
             for info in captured['puzzle_info'].values()
         )
-        assert '(testing beta)' in captured['title']
+        assert '(beta testing)' in captured['title']
 
 
 class TestQueensImprovedPrefixRouting:
@@ -277,11 +277,11 @@ class TestQueensImprovedPrefixRouting:
 
         monkeypatch.setattr(cog, '_cmd_queens_ratings', ratings)
         asyncio.run(Minigames.queens_ratings.__wrapped__(
-            cog, ctx, '+improved'))
+            cog, ctx, '+beta'))
 
         monkeypatch.setattr(cog, '_cmd_queens_performance', performance)
         asyncio.run(Minigames.queens_performance.__wrapped__(
-            cog, ctx, '+improved'))
+            cog, ctx, '+beta'))
 
         assert captured['ratings']['improved'] is True
         members, kwargs = captured['performance']

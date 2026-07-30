@@ -5,7 +5,7 @@ from tle.cogs._minigame_queens_filters import (
 
 
 def test_improved_filter_can_appear_anywhere():
-    args = ('first', '+improved', 'second')
+    args = ('first', '+beta', 'second')
 
     remaining, improved = _split_queens_improved_filter(args)
 
@@ -15,14 +15,14 @@ def test_improved_filter_can_appear_anywhere():
 
 def test_improved_filter_is_case_insensitive():
     remaining, improved = _split_queens_improved_filter(
-        ('+ImPrOvEd', 'member'))
+        ('+BeTa', 'member'))
 
     assert remaining == ['member']
     assert improved is True
 
 
 def test_improved_filter_only_matches_exact_flag():
-    args = ('improved', '++improved', '+improved=yes', 'member')
+    args = ('beta', '++beta', '+beta=yes', '+improved', 'member')
 
     remaining, improved = _split_queens_improved_filter(args)
 
@@ -32,7 +32,7 @@ def test_improved_filter_only_matches_exact_flag():
 
 def test_improved_filter_removes_duplicate_flags_idempotently():
     remaining, improved = _split_queens_improved_filter(
-        ('+improved', 'member', '+IMPROVED', '+improved'))
+        ('+beta', 'member', '+BETA', '+beta'))
 
     assert remaining == ['member']
     assert improved is True

@@ -117,11 +117,11 @@ def _split_queens_recalculate_filter(args):
 
 
 def _split_queens_improved_filter(args):
-    """Remove every ``+improved`` flag and report whether one was present."""
+    """Remove every ``+beta`` flag and report whether one was present."""
     remaining = []
     improved = False
     for arg in args:
-        if str(arg).strip().casefold() == '+improved':
+        if str(arg).strip().casefold() == '+beta':
             improved = True
         else:
             remaining.append(arg)
@@ -129,7 +129,7 @@ def _split_queens_improved_filter(args):
 
 
 def _queens_improved_title_suffix(improved):
-    return ' (testing beta)' if improved else ''
+    return ' (beta testing)' if improved else ''
 
 
 def _filter_queens_rating_date_rows(rows, date_bounds):
