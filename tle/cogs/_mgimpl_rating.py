@@ -7,6 +7,7 @@ import time
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
+from tle.util.akari_beta_rating import compute_akari_beta_ratings
 from tle.util.minigame_rating import compute_ratings
 from tle.util.queens_improved_rating import compute_queens_improved_ratings
 
@@ -136,9 +137,11 @@ class ImplRatingMixin:
     def _minigame_rating_engine(game, improved):
         if not improved:
             return compute_ratings
-        if game.name != QUEENS_GAME.name:
-            raise ValueError('The improved rating beta is Queens-only.')
-        return compute_queens_improved_ratings
+        if game.name == QUEENS_GAME.name:
+            return compute_queens_improved_ratings
+        if game.name == AKARI_GAME.name:
+            return compute_akari_beta_ratings
+        raise ValueError(f'The beta rating is not supported for {game.name}.')
 
     def _minigame_rating_rows(self, guild_id, game, *, excluded_ids=None,
                               included_ids=None, weekdays=None,

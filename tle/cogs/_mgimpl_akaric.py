@@ -23,7 +23,7 @@ from tle.cogs._minigame_helpers import (
 )
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _split_queens_rating_date_filter,
-    _split_queens_recalculate_filter,
+    _split_queens_recalculate_filter, _split_queens_improved_filter,
 )
 from tle.cogs._minigame_tables import (
     _AKARI_HISTORY_PER_PAGE, _maybe_parse_puzzle_selector,
@@ -265,15 +265,18 @@ class ImplAkariCMixin:
         Thin front-end over ``_cmd_akari_stats_puzzle`` — the Akari analogue
         of ``;queens results``.
         """
+        args, beta = _split_queens_improved_filter(args)
         sort_by_time = '+time' in args
         args = [arg for arg in args if arg != '+time']
-        (remaining, _include_decay, excluded_ids, included_ids,
+        (remaining, include_decay, excluded_ids, included_ids,
          _include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
+        self._validate_akari_beta(
+            beta, include_decay=include_decay, test_decay=test_decay)
         if len(remaining) > 1:
             raise MinigameCogError(
-                'Usage: `;akari results [date|#number] [+test] [+exclude=…] '
-                '[+include=…] [+dow=mon,wed|weekday|weekend] '
+                'Usage: `;akari results [date|#number] [+beta] [+test] '
+                '[+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date] [+time]`.')
         # '#N', not a bare number: a 4-digit bare number parses as a year
         # (see _maybe_parse_puzzle_selector), which would break the no-arg
@@ -285,6 +288,7 @@ class ImplAkariCMixin:
             ctx, selector, show_all=show_all,
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
+            beta=beta,
             sort_key_fn=(
                 _akari_results_time_sort_key if sort_by_time else None),
             rank_key_fn=(

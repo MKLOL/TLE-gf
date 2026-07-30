@@ -24,7 +24,7 @@ from tle.cogs._minigame_helpers import (
 )
 from tle.cogs._minigame_queens_filters import (
     _filter_queens_weekday_rows, _filter_queens_rating_date_rows,
-    _queens_filter_suffix,
+    _queens_filter_suffix, _queens_improved_title_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ class ImplAkariAMixin:
     async def _cmd_akari_ratings(self, ctx, *, excluded_ids=None,
                                   included_ids=None, include_inactive=False,
                                   test_decay=False, weekly=False,
-                                  weekdays=None, date_bounds=None):
+                                  weekdays=None, date_bounds=None, beta=False):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -127,12 +127,14 @@ class ImplAkariAMixin:
         filtered out — they're never a real player, just a stale row.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
+        self._validate_akari_beta(
+            beta, test_decay=test_decay, weekly=weekly)
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         # Banned players stay rated (forward-only ban) but are hidden from
         # public boards at display time, like Queens'; debug shows them.
         banned_ids = self._akari_banned_user_ids(ctx.guild.id)
         visible = registrants - banned_ids
-        filtered = bool(excluded_ids or included_ids or test_decay
+        filtered = bool(excluded_ids or included_ids or test_decay or beta
                         or weekdays is not None or date_bounds is not None)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
@@ -149,7 +151,7 @@ class ImplAkariAMixin:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
                 included_ids=included_ids, test_decay=test_decay,
-                weekdays=weekdays, date_bounds=date_bounds)
+                weekdays=weekdays, date_bounds=date_bounds, beta=beta)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
         if not rows and not (weekly and standings):
@@ -178,6 +180,7 @@ class ImplAkariAMixin:
             title += ' [test decay]'
         if weekly:
             title += ' [weekly preview]'
+        title += _queens_improved_title_suffix(beta)
         title += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
         if shown:

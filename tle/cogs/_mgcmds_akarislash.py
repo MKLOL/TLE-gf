@@ -134,17 +134,20 @@ class AkariSlashMixin:
     @app_commands.describe(
         selector='Puzzle number, #number, or date (defaults to today)',
         weekdays='Days: mon,wed, weekday, or weekend',
-        date_filter='Date filter, e.g. d>=01062026 d<08062026')
+        date_filter='Date filter, e.g. d>=01062026 d<08062026',
+        beta='Use the beta testing rating system')
     async def slash_akari_results(
         self, interaction: discord.Interaction,
         selector: Optional[str] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         args = [selector] if selector else []
         args += self._slash_queens_weekday_args(weekdays)
         args += str(date_filter or '').split()
+        args += ['+beta'] if beta else []
         try:
             await self._cmd_akari_results(_SlashCtx(interaction), args)
         except Exception as _slash_exc:
@@ -154,15 +157,17 @@ class AkariSlashMixin:
     @app_commands.describe(
         weekly='Preview weekly-contest ratings and this week\'s scores',
         weekdays='Days: mon,wed, weekday, or weekend',
-        date_filter='Date filter, e.g. d>=01062026 d<08062026')
+        date_filter='Date filter, e.g. d>=01062026 d<08062026',
+        beta='Use the beta testing rating system')
     async def slash_akari_ratings(self, interaction: discord.Interaction,
                                   weekly: bool = False,
                                   weekdays: Optional[str] = None,
-                                  date_filter: Optional[str] = None):
+                                  date_filter: Optional[str] = None,
+                                  beta: bool = False):
         await interaction.response.defer()
         try:
             await self._cmd_akari_ratings(
-                _SlashCtx(interaction), weekly=weekly,
+                _SlashCtx(interaction), weekly=weekly, beta=beta,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:
@@ -174,7 +179,8 @@ class AkariSlashMixin:
         decay='Include every day (with decay slopes), not only days played',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
-        recalculate='Recalculate ratings from the filtered result set')
+        recalculate='Recalculate ratings from the filtered result set',
+        beta='Use the beta testing rating system')
     async def slash_akari_rating(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
@@ -182,6 +188,7 @@ class AkariSlashMixin:
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         recalculate: Optional[bool] = False,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -190,7 +197,7 @@ class AkariSlashMixin:
                 _SlashCtx(interaction), [target], include_decay=decay,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                recalculate=bool(recalculate))
+                recalculate=bool(recalculate), beta=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -198,12 +205,14 @@ class AkariSlashMixin:
     @app_commands.describe(
         member='Player (defaults to you)',
         weekdays='Days: mon,wed, weekday, or weekend',
-        date_filter='Date filter, e.g. d>=01062026 d<08062026')
+        date_filter='Date filter, e.g. d>=01062026 d<08062026',
+        beta='Use the beta testing rating system')
     async def slash_akari_performance(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -211,7 +220,8 @@ class AkariSlashMixin:
             await self._cmd_akari_performance(
                 _SlashCtx(interaction), [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
-                date_bounds=self._slash_queens_date_bounds(date_filter))
+                date_bounds=self._slash_queens_date_bounds(date_filter),
+                beta=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -219,12 +229,14 @@ class AkariSlashMixin:
     @app_commands.describe(
         member='Player (defaults to you)',
         weekdays='Days: mon,wed, weekday, or weekend',
-        date_filter='Date filter, e.g. d>=01062026 d<08062026')
+        date_filter='Date filter, e.g. d>=01062026 d<08062026',
+        beta='Use the beta testing rating system')
     async def slash_akari_history(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
+        beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -232,7 +244,8 @@ class AkariSlashMixin:
             await self._cmd_akari_history(
                 _SlashCtx(interaction), target,
                 weekdays=self._slash_queens_weekdays(weekdays),
-                date_bounds=self._slash_queens_date_bounds(date_filter))
+                date_bounds=self._slash_queens_date_bounds(date_filter),
+                beta=beta)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
