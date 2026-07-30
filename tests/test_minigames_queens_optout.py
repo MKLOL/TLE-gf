@@ -89,7 +89,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
         assert self._rated_ids(db) == {'300', '301'}
 
-    def test_optout_filters_ratings_even_with_stale_link(self, db, monkeypatch):
+    def test_optout_keeps_already_rated_history(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         cog = Minigames(bot=None)
         self._seed_two_players(db, cog)
@@ -97,11 +97,11 @@ class TestQueensOptOut(_QueensCommandsBase):
         # Opt out while a link still exists (simulates an import/forced re-link).
         db.optout_minigame_user(100, 'queens', 300, 1.0)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
-        assert self._rated_ids(db) == {'301'}
+        assert self._rated_ids(db) == {'300', '301'}
 
         rows = db.get_minigame_results_for_guild(100, 'queens')
         kept = cog._filter_minigame_banned_rows(100, QUEENS_GAME, rows)
-        assert all(row.user_id != '300' for row in kept)
+        assert {row.user_id for row in kept} == {'300', '301'}
 
     def test_moderator_set_preserves_rating_optout(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -118,7 +118,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         asyncio.run(cog._cmd_queens_optout(ctx_alice))
         assert db.get_minigame_player_link(
             100, 'queens', alice.id) is not None
-        assert self._rated_ids(db) == {'301'}
+        assert self._rated_ids(db) == {'300', '301'}
 
         ctx_mod = self._make_ctx(guild, mod)
         asyncio.run(cog._cmd_queens_set(
@@ -127,11 +127,35 @@ class TestQueensOptOut(_QueensCommandsBase):
         assert db.get_minigame_player_link(
             100, 'queens', alice.id).external_name == 'Alice LinkedIn'
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is True
-        assert self._rated_ids(db) == {'301'}
+        assert self._rated_ids(db) == {'300', '301'}
         rows = db.get_minigame_results_for_guild(100, 'queens')
-        assert all(row.user_id != '300' for row in rows)
+        assert {row.user_id for row in rows} == {'300', '301'}
 
-    def test_prefix_optout_and_optin_keep_link_and_restore_rating(
+    def test_moderator_can_opt_out_another_player(self, db, monkeypatch):
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        mod = _FakeDiscordMember(
+            999, 'mod', 'Mod',
+            roles=[SimpleNamespace(name=constants.TLE_MODERATOR)])
+        guild = _FakeGuild(100, members=[alice, bob, mod])
+        cog = Minigames(bot=None)
+        self._seed_two_players(db, cog)
+
+        ctx_bob = self._make_ctx(guild, bob)
+        with pytest.raises(MinigameCogError, match='Only'):
+            asyncio.run(cog._cmd_queens_optout(ctx_bob, alice))
+        assert db.is_minigame_opted_out(
+            100, 'queens', alice.id) is False
+
+        ctx_mod = self._make_ctx(guild, mod)
+        asyncio.run(Minigames.queens_optout.__wrapped__(
+            cog, ctx_mod, alice))
+        assert db.is_minigame_opted_out(
+            100, 'queens', alice.id) is True
+        assert self._rated_ids(db) == {'300', '301'}
+
+    def test_prefix_optout_and_optin_keep_link_and_existing_rating(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
@@ -145,7 +169,7 @@ class TestQueensOptOut(_QueensCommandsBase):
 
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is True
         assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
-        assert self._rated_ids(db) == {'301'}
+        assert self._rated_ids(db) == {'300', '301'}
         with pytest.raises(MinigameCogError, match='already opted out'):
             asyncio.run(Minigames.queens_optout.__wrapped__(cog, ctx))
 
@@ -188,7 +212,7 @@ class TestQueensOptOut(_QueensCommandsBase):
             100, 'queens', alice.id) is not None
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is True
-        assert self._rated_ids(db) == {'301'}
+        assert self._rated_ids(db) == {'300', '301'}
 
         asyncio.run(cog._cmd_queens_optin(ctx))
         assert self._rated_ids(db) == {'300', '301'}
@@ -218,9 +242,23 @@ class TestQueensOptOut(_QueensCommandsBase):
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
         assert db.get_minigame_unresolved_results_for_name(
-            100, 'queens', _NORM_ALICE)
+            100, 'queens', _NORM_ALICE)[0].is_rated == 0
         assert db.get_minigame_results_for_guild(100, 'queens') == []
         assert db.get_minigame_ratings(100, 'queens') == []
+
+        asyncio.run(cog._cmd_queens_optin(ctx))
+        cog._sync_queens_materialized_results(100)
+        assert db.get_minigame_results_for_guild(100, 'queens') == []
+
+        cog._save_queens_external_result(
+            100, 200, entry, '2026-06-09', 'next')
+        next_source = db.get_minigame_unresolved_results_for_name(
+            100, 'queens', _NORM_ALICE)[-1]
+        assert next_source.is_rated == 1
+        cog._sync_queens_materialized_results(100)
+        assert [row.puzzle_date for row in
+                db.get_minigame_results_for_guild(100, 'queens')] == [
+                    '2026-06-09']
 
     def test_slash_optout_and_optin(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -228,6 +266,9 @@ class TestQueensOptOut(_QueensCommandsBase):
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
         guild = _FakeGuild(100, members=[alice])
         cog = Minigames(bot=None)
+        db.set_minigame_player_link(
+            100, 'queens', alice.id, 'Alice LinkedIn', _NORM_ALICE,
+            None, 1.0, alice.id)
 
         def interaction():
             return SimpleNamespace(
@@ -254,7 +295,8 @@ class TestQueensOptOut(_QueensCommandsBase):
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is False
 
-    def test_sync_skips_opted_out_user(self, db, monkeypatch):
+    def test_sync_keeps_rated_source_during_active_optout(
+            self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
         num = _queens_number('2026-06-08')
@@ -268,6 +310,5 @@ class TestQueensOptOut(_QueensCommandsBase):
         cog = Minigames(bot=None)
         cog._sync_queens_materialized_results(100)
 
-        # No materialized result rows were produced for the opted-out user.
         rows = db.get_minigame_results_for_guild(100, 'queens')
-        assert all(row.user_id != '300' for row in rows)
+        assert {row.user_id for row in rows} == {'300'}

@@ -52,6 +52,15 @@ class ImplRatingMixin:
     def _recompute_game_ratings(self, guild_id, game):
         if game.rating is None:
             return
+        if game.name == QUEENS_GAME.name:
+            # Channel shares/history imports start in the generic result
+            # tables. Canonicalize them under the LinkedIn identity before
+            # replay so an active opt-out can become durable per-result state.
+            self._sync_queens_materialized_results(
+                guild_id, migrate_legacy=True)
+            self._recompute_minigame_ratings(
+                guild_id, game, sync_results=False)
+            return
         self._recompute_minigame_ratings(guild_id, game)
 
     # ``games`` deliberately stays the engine's count of *contested* days

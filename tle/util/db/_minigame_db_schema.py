@@ -111,6 +111,12 @@ class MinigameSchemaDbMixin:
                 time_seconds    INTEGER NOT NULL,
                 is_perfect      INTEGER NOT NULL DEFAULT 0,
                 raw_content     TEXT NOT NULL DEFAULT '',
+                is_rated        INTEGER NOT NULL DEFAULT 1
+                                CHECK (is_rated IN (0, 1)),
+                stored_at       REAL NOT NULL DEFAULT 0,
+                source_message_id TEXT,
+                rating_override INTEGER
+                                CHECK (rating_override IN (0, 1)),
                 PRIMARY KEY (guild_id, game, normalized_name, puzzle_number)
             )
         ''')
@@ -118,6 +124,17 @@ class MinigameSchemaDbMixin:
             CREATE INDEX IF NOT EXISTS idx_minigame_unresolved_result_puzzle
                 ON minigame_unresolved_result (guild_id, game, puzzle_number)
         ''')
+        source_columns = {
+            row[1] for row in self.conn.execute(
+                'PRAGMA table_info(minigame_unresolved_result)')
+        }
+        if 'source_message_id' in source_columns:
+            self.conn.execute('''
+                CREATE INDEX IF NOT EXISTS
+                    idx_minigame_unresolved_result_message
+                ON minigame_unresolved_result
+                   (guild_id, game, source_message_id)
+            ''')
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS minigame_ban (
                 guild_id   TEXT NOT NULL,
@@ -133,18 +150,28 @@ class MinigameSchemaDbMixin:
             CREATE INDEX IF NOT EXISTS idx_minigame_ban_guild
                 ON minigame_ban (guild_id, game, banned_at DESC)
         ''')
-        # Sticky rating opt-out: identity links and source results stay intact,
-        # while projections and ratings exclude the user until explicit opt-in.
-        # Imports, backfills, and moderator link updates do not clear it.
+        # Sticky future-result opt-out: identity links and existing per-result
+        # state stay intact. Imports/backfills use this as the default for new
+        # source rows until explicit opt-in.
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS minigame_optout (
                 guild_id     TEXT NOT NULL,
                 game         TEXT NOT NULL,
                 user_id      TEXT NOT NULL,
                 opted_out_at REAL NOT NULL,
+                normalized_name TEXT,
                 PRIMARY KEY (guild_id, game, user_id)
             )
         ''')
+        optout_columns = {
+            row[1] for row in self.conn.execute(
+                'PRAGMA table_info(minigame_optout)')
+        }
+        if 'normalized_name' in optout_columns:
+            self.conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_minigame_optout_name
+                    ON minigame_optout (guild_id, game, normalized_name)
+            ''')
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS minigame_rating (
                 guild_id    TEXT NOT NULL,

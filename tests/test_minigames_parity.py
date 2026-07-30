@@ -327,17 +327,25 @@ class TestSlashGroupChildLimit:
     def _direct_children(source, group_attr):
         # Count decorator uses plus nested groups declared with this parent.
         commands = source.count(f'@{group_attr}.command(')
+        commands += source.count(f'.{group_attr}.command(')
         subgroups = source.count(f'parent={group_attr})')
+        subgroups += source.count(
+            f'parent=QueensSlashMixin.{group_attr})')
         return commands + subgroups
 
-    @pytest.mark.parametrize('module_path,group_attr', [
-        ('tle/cogs/_mgcmds_queensslash.py', 'queens_slash'),
-        ('tle/cogs/_mgcmds_akarislash.py', 'akari_slash'),
+    @pytest.mark.parametrize('module_paths,group_attr', [
+        ((
+            'tle/cogs/_mgcmds_queensslash.py',
+            'tle/cogs/_mgcmds_queensslashprivacy.py',
+        ), 'queens_slash'),
+        (('tle/cogs/_mgcmds_akarislash.py',), 'akari_slash'),
     ])
-    def test_group_stays_under_discord_limit(self, module_path, group_attr):
+    def test_group_stays_under_discord_limit(self, module_paths, group_attr):
         import pathlib
         root = pathlib.Path(__file__).resolve().parent.parent
-        source = (root / module_path).read_text(encoding='utf-8')
+        source = '\n'.join(
+            (root / path).read_text(encoding='utf-8')
+            for path in module_paths)
         assert self._direct_children(source, group_attr) <= 25, (
             f'{group_attr} exceeds the 25-subcommand Discord limit; '
             'nest related commands in a child Group')

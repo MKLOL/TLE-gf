@@ -107,26 +107,6 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(
-        name='opt-out',
-        description='Keep stored results but leave Queens ratings')
-    async def slash_queens_optout(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        try:
-            await self._cmd_queens_optout(_SlashCtx(interaction))
-        except Exception as _slash_exc:
-            await self._slash_handle_error(interaction, _slash_exc)
-
-    @queens_slash.command(
-        name='opt-in',
-        description='Return to Queens ratings')
-    async def slash_queens_optin(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        try:
-            await self._cmd_queens_optin(_SlashCtx(interaction))
-        except Exception as _slash_exc:
-            await self._slash_handle_error(interaction, _slash_exc)
-
     @queens_slash.command(name='vs', description='Compare two to five players')
     @app_commands.describe(
         member1='First player', member2='Second player',
@@ -227,13 +207,15 @@ class QueensSlashMixin:
         date='Date or puzzle number (defaults to today)',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        unrated='Also show permanently unrated results')
     async def slash_queens_results(
         self, interaction: discord.Interaction,
         date: Optional[str] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        unrated: bool = False,
     ):
         await interaction.response.defer()
         try:
@@ -242,7 +224,7 @@ class QueensSlashMixin:
                 date or _queens_current_puzzle_date().isoformat(),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=beta)
+                improved=beta, show_unrated=unrated)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

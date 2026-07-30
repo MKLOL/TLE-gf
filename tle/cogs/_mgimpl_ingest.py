@@ -15,6 +15,7 @@ from tle.cogs._minigame_common import (
 from tle.cogs._minigame_akari import (
     AKARI_GAME, akari_date_number_mismatch, looks_like_non_pro_akari,
 )
+from tle.cogs._minigame_queens import QUEENS_GAME
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 class ImplIngestMixin:
     # ── Listeners ───────────────────────────────────────────────────────
 
-    async def _ingest_message(self, message, game):
+    async def _ingest_message(
+            self, message, game, *, allow_duplicate=False):
         results = game.parse(strip_codeblock(message.content))
         if not results:
             return 0
@@ -34,7 +36,11 @@ class ImplIngestMixin:
             existing = cf_common.user_db.get_minigame_result_for_user_puzzle(
                 message.guild.id, game.name, message.author.id, parsed.puzzle_number
             )
-            if existing is not None and str(existing.message_id) != str(message.id):
+            if (
+                    existing is not None
+                    and str(existing.message_id) != str(message.id)
+                    and not allow_duplicate
+            ):
                 logger.info(
                     '%s result ignored (duplicate): guild=%s msg=%s user=%s puzzle=%s first_msg=%s',
                     game.display_name, message.guild.id, message.id,
@@ -234,6 +240,12 @@ class ImplIngestMixin:
         game = self._game_for_channel(after)
         if game is None:
             return
+        queens_source = (
+            cf_common.user_db.get_minigame_unresolved_result_for_source_message(
+                after.guild.id, QUEENS_GAME.name, after.id)
+            if game.name == QUEENS_GAME.name
+            else None
+        )
         cleaned = strip_codeblock(after.content)
         invalid_message = self._invalid_minigame_submission_message(game, cleaned)
         is_non_pro = (game.name == AKARI_GAME.name
@@ -252,6 +264,12 @@ class ImplIngestMixin:
             if invalid_message is not None:
                 changed = cf_common.user_db.delete_minigame_result(after.id)
                 changed += cf_common.user_db.delete_imported_minigame_result(after.id)
+                if game.name == QUEENS_GAME.name:
+                    changed += (
+                        cf_common.user_db
+                        .delete_minigame_unresolved_results_for_source_message(
+                            after.guild.id, QUEENS_GAME.name, after.id)
+                    )
                 await self._notify_invalid_minigame_submission(after, game, cleaned)
                 if changed:
                     self._recompute_game_ratings(after.guild.id, game)
@@ -266,14 +284,26 @@ class ImplIngestMixin:
                 if changed:
                     self._recompute_game_ratings(after.guild.id, game)
                 return
-            # Delete all existing live results for this message, then re-ingest.
-            # Handles the case where an edit removes some results from a multi-result message.
+            # Replace every generic copy of this message, then re-ingest.
+            # A history-imported row must not beat the edited live row when
+            # Queens canonicalizes the two stores.
             changed = cf_common.user_db.delete_minigame_result(after.id)
+            changed += cf_common.user_db.delete_imported_minigame_result(
+                after.id)
             results = game.parse(cleaned)
+            if (
+                    queens_source is not None
+                    and not results
+            ):
+                changed += (
+                    cf_common.user_db
+                    .delete_minigame_unresolved_results_for_source_message(
+                        after.guild.id, QUEENS_GAME.name, after.id)
+                )
             if results:
-                changed += await self._ingest_message(after, game)
-            else:
-                changed += cf_common.user_db.delete_imported_minigame_result(after.id)
+                changed += await self._ingest_message(
+                    after, game,
+                    allow_duplicate=queens_source is not None)
             if changed:
                 self._recompute_game_ratings(after.guild.id, game)
         except Exception:
@@ -287,8 +317,18 @@ class ImplIngestMixin:
             old = cf_common.user_db.get_minigame_result(payload.message_id)
             deleted = cf_common.user_db.delete_minigame_result(payload.message_id)
             deleted += cf_common.user_db.delete_imported_minigame_result(payload.message_id)
+            queens_deleted = (
+                cf_common.user_db
+                .delete_minigame_unresolved_results_for_source_message(
+                    payload.guild_id, QUEENS_GAME.name, payload.message_id)
+            )
             cf_common.user_db.delete_raw_message(payload.message_id)
-            if deleted and old is not None and old.game in self.GAMES:
+            if queens_deleted:
+                self._sync_queens_materialized_results(
+                    payload.guild_id, migrate_legacy=False)
+                self._recompute_minigame_ratings(
+                    payload.guild_id, QUEENS_GAME, sync_results=False)
+            elif deleted and old is not None and old.game in self.GAMES:
                 self._recompute_game_ratings(
                     payload.guild_id, self.GAMES[old.game])
         except Exception:

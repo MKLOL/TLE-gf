@@ -88,8 +88,8 @@ class ImplQueensRegMixin:
         if cf_common.user_db.is_minigame_opted_out(
                 ctx.guild.id, QUEENS_GAME.name, member.id):
             message += (
-                ' Their rating opt-out remains active, so stored results '
-                'remain unrated.')
+                ' Their rating opt-out remains active, so new results are '
+                'stored unrated.')
         await ctx.send(embed=discord_common.embed_success(message))
 
     async def _cmd_queens_register(
@@ -127,7 +127,7 @@ class ImplQueensRegMixin:
         if rating_opted_out:
             lines.append(
                 'Your rating opt-out remains active. Run `;queens optin` '
-                'when you want stored results to affect ratings.')
+                'before your next result if you want it to affect ratings.')
         elif claimed:
             lines.append(
                 f'Claimed {claimed} stored Queens result(s) and recomputed '

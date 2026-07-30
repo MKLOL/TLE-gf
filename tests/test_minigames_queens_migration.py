@@ -111,7 +111,9 @@ class TestQueensImportMigration:
         assert set(materialized) == {'300', '301'}
         assert materialized['300'].time_seconds == 8
         assert materialized['301'].time_seconds == 5
-        assert saved == 2
+        # Alice's original live Discord row remains the projection; only the
+        # imported Bob source needs a newly materialized row.
+        assert saved == 1
         assert db.conn.execute(
             "SELECT COUNT(*) FROM minigame_import_result "
             "WHERE guild_id = '100' AND game = 'queens'"
@@ -362,7 +364,9 @@ class TestQueensImportMigration:
         assert cog._sync_queens_materialized_results(
             100, migrate_legacy=False) == 2
         assert batch_sizes == [2]
-        assert optout_reads == 1
+        # Per-result is_rated state is authoritative; sync no longer needs a
+        # whole-user opt-out lookup.
+        assert optout_reads == 0
 
     def test_generic_recompute_writes_queens_snapshot_only(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

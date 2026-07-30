@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+from types import SimpleNamespace
 
 import discord
 
@@ -11,7 +12,7 @@ from tle.util import paginator
 from tle.util.akari_rating import rank_for_rating
 
 from tle.cogs._minigame_common import (
-    format_duration, parse_date_args,
+    format_duration, normalize_puzzle_date, parse_date_args,
 )
 from tle.cogs._minigame_queens import (
     QUEENS_GAME,
@@ -27,10 +28,12 @@ from tle.cogs._minigame_queens_filters import (
 )
 from tle.cogs._minigame_queens_cog import (
     _queens_puzzle_number_for_date,
+    _queens_puzzle_numbers_for_date,
     _parse_queens_date_or_number,
     _format_queens_date,
     _queens_best_results_by_date, _queens_streak_info,
     _queens_current_puzzle_date,
+    _queens_result_message_id,
 )
 from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
 
@@ -273,10 +276,49 @@ class ImplQueensCmdBMixin:
             as_of_date=logical_today)
         await ctx.send(file=discord_file)
 
+    def _queens_unrated_rows_for_date(
+            self, guild_id, puzzle_date, links_by_name):
+        rows = []
+        seen = set()
+        for puzzle_number in _queens_puzzle_numbers_for_date(puzzle_date):
+            for source in (
+                    cf_common.user_db
+                    .get_minigame_unresolved_results_for_puzzle(
+                        guild_id, QUEENS_GAME.name, puzzle_number)):
+                if bool(source.is_rated):
+                    continue
+                source_date = normalize_puzzle_date(source.puzzle_date)
+                if source_date != puzzle_date:
+                    continue
+                link = links_by_name.get(source.normalized_name)
+                if link is None:
+                    continue
+                canonical_number = _queens_puzzle_number_for_date(source_date)
+                key = (str(link.user_id), canonical_number)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(SimpleNamespace(
+                    message_id=_queens_result_message_id(
+                        guild_id, puzzle_date, link.user_id),
+                    guild_id=str(guild_id),
+                    game=QUEENS_GAME.name,
+                    channel_id=source.channel_id,
+                    user_id=str(link.user_id),
+                    puzzle_number=canonical_number,
+                    puzzle_date=source_date.isoformat(),
+                    accuracy=int(source.accuracy),
+                    time_seconds=int(source.time_seconds),
+                    is_perfect=int(source.is_perfect),
+                    raw_content=source.raw_content,
+                ))
+        return rows
+
     async def _cmd_queens_stats_date(self, ctx, date_arg, *,
                                      show_all=False, excluded_ids=None,
                                      included_ids=None, weekdays=None,
-                                     date_bounds=None, improved=False):
+                                     date_bounds=None, improved=False,
+                                     show_unrated=False):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._sync_queens_materialized_results(
             ctx.guild.id, migrate_legacy=False)
@@ -287,11 +329,21 @@ class ImplQueensCmdBMixin:
             puzzle_date + dt.timedelta(days=1), dt.time.min).timestamp()
         rows = cf_common.user_db.get_minigame_results_for_guild(
             ctx.guild.id, QUEENS_GAME.name, dlo=day_start, dhi=day_end)
-        rows = self._filter_minigame_banned_rows(ctx.guild.id, QUEENS_GAME, rows)
+        rows = self._filter_minigame_banned_rows(
+            ctx.guild.id, QUEENS_GAME, rows)
+        links_by_user = self._queens_links_by_user(ctx.guild.id)
+        unrated_rows = []
+        if show_unrated:
+            links_by_name = {
+                link.normalized_name: link
+                for link in links_by_user.values()
+            }
+            unrated_rows = self._queens_unrated_rows_for_date(
+                ctx.guild.id, puzzle_date, links_by_name)
+            rows = [*rows, *unrated_rows]
         rows = _filter_queens_weekday_rows(rows, weekdays)
         rows = self._filter_akari_rows(
             rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        links_by_user = self._queens_links_by_user(ctx.guild.id)
         if not show_all:
             rows = self._filter_queens_registered_result_rows(
                 ctx.guild.id, rows, links_by_user=links_by_user)
@@ -322,6 +374,7 @@ class ImplQueensCmdBMixin:
             ctx.guild, rows,
             f'{QUEENS_GAME.display_name} #{puzzle_number} '
             f'{puzzle_date.isoformat()} Results'
+            f'{" + Unrated" if show_unrated else ""}'
             f'{_queens_improved_title_suffix(improved)}'
             f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}',
             puzzle_info=puzzle_info,
@@ -329,6 +382,10 @@ class ImplQueensCmdBMixin:
             identity_label='LinkedIn',
             identity_fn=self._queens_rating_identity_fn(links_by_user),
             name_fn=self._queens_name_fn(links_by_user),
+            unrated_keys={
+                (str(row.user_id), int(row.puzzle_number))
+                for row in unrated_rows
+            },
             sort_key_fn=lambda row: (
                 int(getattr(row, 'time_seconds', 0)),
                 int(getattr(row, 'message_id', 0)),

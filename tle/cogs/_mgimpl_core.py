@@ -186,13 +186,14 @@ class ImplCoreMixin:
             or str(getattr(member, 'id', None)) in self._akari_admin_ids(guild_id)
         )
 
-    def _resolve_queens_registrar_target(self, ctx, member):
+    def _resolve_queens_registrar_target(
+            self, ctx, member, *, action='register or unregister'):
         if member is None or member.id == ctx.author.id:
             return ctx.author
         if not self._has_queens_mod_access(ctx.guild.id, ctx.author):
             raise MinigameCogError(
                 f'Only `{constants.TLE_ADMIN}` / `{constants.TLE_MODERATOR}` '
-                'or Queens admins can register or unregister other users.')
+                f'or Queens admins can {action} other users.')
         return member
 
     @staticmethod
@@ -211,13 +212,14 @@ class ImplCoreMixin:
         }
 
     def _minigame_hidden_user_ids(self, guild_id, game):
-        """Users who must never appear in rankings: the self-opted-out.
+        """Users hidden wholesale by legacy game-level opt-out behavior.
 
-        Bans are deliberately NOT part of this set — like Akari's, they are
-        forward-only: they gate new ingestion/imports (with a notice) but a
-        banned player's existing results stay in the rating pool.  Only the
-        sticky self opt-out hides stored rows.
+        Queens now persists the choice on each source result, so its active
+        opt-out only controls whether *new* results are rated. Existing rated
+        days and moderator overrides remain visible.
         """
+        if game.name == QUEENS_GAME.name:
+            return set()
         return self._minigame_opted_out_user_ids(guild_id, game)
 
     def _filter_minigame_banned_rows(self, guild_id, game, rows):

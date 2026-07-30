@@ -94,6 +94,7 @@ from tle.cogs._mgimpl_core import ImplCoreMixin, _AKARI_ADMINS_KEY  # noqa: F401
 from tle.cogs._mgimpl_rating import ImplRatingMixin
 from tle.cogs._mgimpl_queensreg import ImplQueensRegMixin
 from tle.cogs._mgimpl_queensregb import ImplQueensRegBMixin
+from tle.cogs._mgimpl_queenssources import ImplQueensSourcesMixin
 from tle.cogs._mgimpl_queensprivacy import ImplQueensPrivacyMixin
 from tle.cogs._mgimpl_queensimport import ImplQueensImportMixin
 from tle.cogs._mgimpl_queenscmd import ImplQueensCmdMixin
@@ -115,10 +116,12 @@ from tle.cogs._mgimpl_export import ImplExportMixin
 # Command / slash mixins (carry the discord.py command groups)
 from tle.cogs._mgcmds_akari import AkariCmdsMixin
 from tle.cogs._mgcmds_queens import QueensCmdsMixin
+from tle.cogs._mgcmds_queensprivacy import QueensPrivacyCmdsMixin
 from tle.cogs._mgcmds_guessgame import GuessGameCmdsMixin
 from tle.cogs._mgcmds_slashhelpers import SlashHelpersMixin
 from tle.cogs._mgcmds_akarislash import AkariSlashMixin
 from tle.cogs._mgcmds_queensslash import QueensSlashMixin
+from tle.cogs._mgcmds_queensslashprivacy import QueensPrivacySlashMixin
 
 logger = logging.getLogger(__name__)
 
@@ -128,14 +131,17 @@ class Minigames(
     # matters; impl mixins supply the ``_cmd_*`` / helper methods they call.
     AkariCmdsMixin,
     QueensCmdsMixin,
+    QueensPrivacyCmdsMixin,
     GuessGameCmdsMixin,
     SlashHelpersMixin,
     AkariSlashMixin,
     QueensSlashMixin,
+    QueensPrivacySlashMixin,
     ImplCoreMixin,
     ImplRatingMixin,
     ImplQueensRegMixin,
     ImplQueensRegBMixin,
+    ImplQueensSourcesMixin,
     ImplQueensPrivacyMixin,
     ImplQueensImportMixin,
     ImplQueensCmdMixin,

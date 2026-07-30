@@ -138,7 +138,7 @@ def _format_akari_puzzle_table(guild, rows):
 def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
                                registrants=None, identity_fn=None,
                                name_fn=None, sort_key_fn=None,
-                               rank_key_fn=None):
+                               rank_key_fn=None, unrated_keys=None):
     if identity_fn is None:
         identity_fn = lambda _g, row: getattr(row, 'user_id', '-')
     if name_fn is None:
@@ -147,14 +147,36 @@ def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
         sort_key_fn = _queens_result_sort_key
     if rank_key_fn is None:
         rank_key_fn = _queens_result_rank_key
+    unrated_keys = {
+        (str(user_id), int(puzzle_number))
+        for user_id, puzzle_number in (unrated_keys or ())
+    }
     annotated = puzzle_info is not None and registrants is not None
+    ordered = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
+    rated_ranks = {
+        (str(row.user_id), int(row.puzzle_number)): rank
+        for rank, row in _ranked_result_rows(
+            [
+                row for row in ordered
+                if (str(row.user_id), int(row.puzzle_number))
+                not in unrated_keys
+            ],
+            sort_key_fn=sort_key_fn,
+            rank_key_fn=rank_key_fn,
+        )
+    }
     result = []
-    for rank, row in _ranked_result_rows(
-            rows, sort_key_fn=sort_key_fn, rank_key_fn=rank_key_fn):
+    for row in ordered:
+        row_key = (str(row.user_id), int(row.puzzle_number))
+        is_unrated = row_key in unrated_keys
+        rank = '\N{EM DASH}' if is_unrated else rated_ranks[row_key]
         name = name_fn(guild, row)
+        if is_unrated:
+            name = _PreserveSuffixText(name, ' (Unrated)')
         performance_cell = ''
         delta_cell = ''
         if (annotated
+                and not is_unrated
                 and row.user_id in registrants
                 and row.user_id in puzzle_info):
             info = puzzle_info[row.user_id]

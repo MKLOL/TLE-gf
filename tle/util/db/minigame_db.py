@@ -139,12 +139,15 @@ class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin,
 
     # ── Generic minigame self opt-out ─────────────────────────────────
     #
-    # Sticky rating choice: ``optout`` writes a row here while identity links
-    # and source results stay intact. Imports/backfills and moderator ``set``
-    # must not clear it; only explicit self ``optin`` does.
+    # Sticky default for future results: ``optout`` writes a row here while
+    # identity links and existing per-result state stay intact. Imports,
+    # backfills, and moderator ``set`` must not clear it; only explicit self
+    # ``optin`` does.
 
-    def optout_minigame_user(self, guild_id, game, user_id, opted_out_at):
-        """Opt a user out of all rankings for ``game``.
+    def optout_minigame_user(
+            self, guild_id, game, user_id, opted_out_at,
+            normalized_name=None):
+        """Store this user's future results as unrated for ``game``.
 
         Returns 1 if a new opt-out row was added, 0 if they were already
         opted out (the original ``opted_out_at`` is preserved).
@@ -152,10 +155,13 @@ class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin,
         rc = self.conn.execute(
             '''
             INSERT OR IGNORE INTO minigame_optout
-                (guild_id, game, user_id, opted_out_at)
-            VALUES (?, ?, ?, ?)
+                (guild_id, game, user_id, opted_out_at, normalized_name)
+            VALUES (?, ?, ?, ?, ?)
             ''',
-            (str(guild_id), game, str(user_id), float(opted_out_at))
+            (
+                str(guild_id), game, str(user_id), float(opted_out_at),
+                None if normalized_name is None else str(normalized_name),
+            )
         ).rowcount
         self.conn.commit()
         return rc
@@ -179,14 +185,51 @@ class MinigameDbMixin(MinigameResultsDbMixin, MinigameLinksDbMixin,
             FROM minigame_optout
             WHERE guild_id = ? AND game = ? AND user_id = ?
             ''',
-            (str(guild_id), game, str(user_id))
+            (str(guild_id), game, str(user_id)),
         ).fetchone()
         return row is not None
+
+    def get_minigame_optout(self, guild_id, game, user_id):
+        return self.conn.execute(
+            '''
+            SELECT user_id, opted_out_at, normalized_name
+            FROM minigame_optout
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (str(guild_id), game, str(user_id))
+        ).fetchone()
+
+    def get_minigame_optout_by_name(
+            self, guild_id, game, normalized_name):
+        return self.conn.execute(
+            '''
+            SELECT user_id, opted_out_at, normalized_name
+            FROM minigame_optout
+            WHERE guild_id = ? AND game = ? AND normalized_name = ?
+            ''',
+            (str(guild_id), game, str(normalized_name)),
+        ).fetchone()
+
+    def set_minigame_optout_identity(
+            self, guild_id, game, user_id, normalized_name):
+        rc = self.conn.execute(
+            '''
+            UPDATE minigame_optout
+            SET normalized_name = ?
+            WHERE guild_id = ? AND game = ? AND user_id = ?
+            ''',
+            (
+                None if normalized_name is None else str(normalized_name),
+                str(guild_id), game, str(user_id),
+            ),
+        ).rowcount
+        self.conn.commit()
+        return rc
 
     def get_minigame_optouts(self, guild_id, game):
         return self.conn.execute(
             '''
-            SELECT user_id, opted_out_at
+            SELECT user_id, opted_out_at, normalized_name
             FROM minigame_optout
             WHERE guild_id = ? AND game = ?
             ORDER BY opted_out_at DESC, user_id ASC

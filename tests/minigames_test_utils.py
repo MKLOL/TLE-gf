@@ -159,6 +159,11 @@ class FakeMinigameDb(MinigameDbMixin):
                 time_seconds    INTEGER NOT NULL,
                 is_perfect      INTEGER NOT NULL DEFAULT 0,
                 raw_content     TEXT NOT NULL DEFAULT '',
+                is_rated        INTEGER NOT NULL DEFAULT 1
+                                CHECK (is_rated IN (0, 1)),
+                stored_at       REAL NOT NULL DEFAULT 0,
+                source_message_id TEXT,
+                rating_override INTEGER CHECK (rating_override IN (0, 1)),
                 PRIMARY KEY (guild_id, game, normalized_name, puzzle_number)
             )
         ''')
@@ -194,6 +199,7 @@ class FakeMinigameDb(MinigameDbMixin):
                 game         TEXT NOT NULL,
                 user_id      TEXT NOT NULL,
                 opted_out_at REAL NOT NULL,
+                normalized_name TEXT,
                 PRIMARY KEY (guild_id, game, user_id)
             )
         ''')

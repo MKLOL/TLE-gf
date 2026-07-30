@@ -23,6 +23,7 @@ from tle.cogs._minigame_common import (
 from tle.cogs._minigame_helpers import (
     MinigameCogError,
 )
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_queens_cog import (
     _AKARI_DIFF_MAX_BYTES,
 )
@@ -202,6 +203,20 @@ class ImplExportMixin:
 
         deleted = cf_common.user_db.clear_imported_minigame_results(
             ctx.guild.id, game.name)
+        queens_source_ids = (
+            {
+                str(row.source_message_id)
+                for row in (
+                    cf_common.user_db
+                    .get_minigame_unresolved_results_for_guild(
+                        ctx.guild.id, QUEENS_GAME.name)
+                )
+                if row.source_message_id is not None
+            }
+            if game.name == QUEENS_GAME.name
+            else set()
+        )
+        reparsed_source_ids = set()
         parsed_count = 0
         skipped = []
 
@@ -228,6 +243,8 @@ class ImplExportMixin:
                 if game.detect and game.detect.search(cleaned):
                     skipped.append(row.message_id)
                 continue
+            if game.name == QUEENS_GAME.name:
+                reparsed_source_ids.add(str(row.message_id))
             puzzle_date_fallback = dt.date.fromisoformat(row.created_at[:10])
             for parsed in results:
                 puzzle_date = parsed.puzzle_date or puzzle_date_fallback
@@ -240,6 +257,10 @@ class ImplExportMixin:
                 )
                 parsed_count += 1
         cf_common.user_db.conn.commit()
+        if game.name == QUEENS_GAME.name:
+            cf_common.user_db.delete_minigame_source_results_for_messages(
+                ctx.guild.id, QUEENS_GAME.name,
+                queens_source_ids - reparsed_source_ids)
 
         self._recompute_game_ratings(ctx.guild.id, game)
 

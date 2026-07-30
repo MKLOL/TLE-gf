@@ -94,18 +94,6 @@ class QueensCmdsMixin:
             target = await self._resolve_member(ctx, member)
         await self._cmd_queens_unregister(ctx, target)
 
-    @queens.command(
-        name='optout', aliases=['opt-out'],
-        brief='Keep stored results but leave Queens ratings')
-    async def queens_optout(self, ctx):
-        await self._cmd_queens_optout(ctx)
-
-    @queens.command(
-        name='optin', aliases=['opt-in'],
-        brief='Return to Queens ratings')
-    async def queens_optin(self, ctx):
-        await self._cmd_queens_optin(ctx)
-
     @queens.command(name='links', brief='List registered LinkedIn Queens names')
     async def queens_links(self, ctx):
         await self._cmd_queens_links(ctx)
@@ -174,16 +162,21 @@ class QueensCmdsMixin:
         await self._cmd_queens_stats(ctx, *args)
 
     @queens.group(name='results', brief='Show Queens date leaderboard',
-                  usage='[date|number] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[date|number] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_results(self, ctx, *args):
+        show_unrated = any(
+            str(arg).strip().casefold() == '+unrated' for arg in args)
+        args = tuple(
+            arg for arg in args
+            if str(arg).strip().casefold() != '+unrated')
         args, improved = _split_queens_improved_filter(args)
         remaining, excluded_ids, included_ids, weekdays, date_bounds = (
             await self._extract_queens_rating_filters(ctx, args))
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;queens results [date|number] '
-                '[+beta] [+exclude=…] [+include=…] '
+                '[+unrated] [+beta] [+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date]`.')
         date_arg = (
@@ -193,7 +186,8 @@ class QueensCmdsMixin:
         await self._cmd_queens_stats_date(
             ctx, date_arg,
             excluded_ids=excluded_ids, included_ids=included_ids,
-            weekdays=weekdays, date_bounds=date_bounds, improved=improved)
+            weekdays=weekdays, date_bounds=date_bounds, improved=improved,
+            show_unrated=show_unrated)
 
     @queens_results.command(name='debug',
                             brief='(Mod) Date results with ratings for ALL players',

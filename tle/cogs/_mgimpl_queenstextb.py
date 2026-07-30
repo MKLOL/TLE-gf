@@ -34,7 +34,8 @@ class ImplQueensTextBMixin:
             skipped = result['skipped']
             malformed = result['malformed']
             if saved:
-                self._sync_queens_materialized_results(ctx.guild.id)
+                self._sync_queens_materialized_results(
+                    ctx.guild.id, migrate_legacy=False)
                 self._recompute_minigame_ratings(
                     ctx.guild.id, QUEENS_GAME, sync_results=False)
             lines = [
@@ -74,7 +75,8 @@ class ImplQueensTextBMixin:
         skipped = result.skipped
         malformed = result.malformed
         if saved:
-            self._sync_queens_materialized_results(ctx.guild.id)
+            self._sync_queens_materialized_results(
+                ctx.guild.id, migrate_legacy=False)
             self._recompute_minigame_ratings(
                 ctx.guild.id, QUEENS_GAME, sync_results=False)
 

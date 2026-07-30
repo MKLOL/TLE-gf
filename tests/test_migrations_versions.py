@@ -393,11 +393,13 @@ class TestFreshDbSchema:
             conn.conn.execute('SELECT guild_id, game, normalized_name, '
                               'external_name, channel_id, puzzle_number, '
                               'puzzle_date, accuracy, time_seconds, '
-                              'is_perfect, raw_content '
+                              'is_perfect, raw_content, is_rated, stored_at, '
+                              'source_message_id, rating_override '
                               'FROM minigame_unresolved_result').fetchall()
             conn.conn.execute('SELECT guild_id, game, user_id, banned_at, '
                               'banned_by, reason FROM minigame_ban').fetchall()
-            conn.conn.execute('SELECT guild_id, game, user_id, opted_out_at '
+            conn.conn.execute('SELECT guild_id, game, user_id, opted_out_at, '
+                              'normalized_name '
                               'FROM minigame_optout').fetchall()
             conn.conn.execute('SELECT puzzle_number, difficulty, fetched_at '
                               'FROM akari_puzzle_difficulty').fetchall()

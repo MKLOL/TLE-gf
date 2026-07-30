@@ -237,7 +237,8 @@ def _get_queens_results_table_image_file(guild, rows, title,
                                          identity_fn=None,
                                          name_fn=None,
                                          sort_key_fn=None,
-                                         rank_key_fn=None):
+                                         rank_key_fn=None,
+                                         unrated_keys=None):
     if sort_key_fn is None:
         sort_key_fn = _queens_result_sort_key
     rows = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
@@ -245,7 +246,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
     displayed_rows = _queens_results_table_rows(
         guild, displayed, puzzle_info=puzzle_info, registrants=registrants,
         identity_fn=identity_fn, name_fn=name_fn, sort_key_fn=sort_key_fn,
-        rank_key_fn=rank_key_fn)
+        rank_key_fn=rank_key_fn, unrated_keys=unrated_keys)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
     cell_colors = None

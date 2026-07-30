@@ -9,6 +9,7 @@ from tle.util import discord_common
 
 from tle.cogs._minigame_common import (
     format_duration,
+    normalize_puzzle_date,
 )
 from tle.cogs._minigame_queens import (
     QUEENS_GAME, normalize_queens_name, parse_queens_leaderboard,
@@ -175,15 +176,36 @@ class ImplQueensImportMixin:
             ctx.guild.id, preview)
         preview = preview._replace(
             resolved=new_resolved, unresolved=new_unresolved)
-        for entry in preview.resolved:
-            self._save_queens_external_result(
-                ctx.guild.id, ctx.channel.id, entry, preview.puzzle_date,
-                preview.raw_content)
-        for entry in preview.unresolved:
-            self._save_queens_external_result(
-                ctx.guild.id, ctx.channel.id, entry, preview.puzzle_date,
-                preview.raw_content)
-        self._sync_queens_materialized_results(ctx.guild.id)
+        links_by_name = {
+            row.normalized_name: row
+            for row in cf_common.user_db.get_minigame_player_links(
+                ctx.guild.id, QUEENS_GAME.name)
+        }
+        optouts = cf_common.user_db.get_minigame_optouts(
+            ctx.guild.id, QUEENS_GAME.name)
+        opted_out_ids = {str(row.user_id) for row in optouts}
+        opted_out_names = {
+            row.normalized_name
+            for row in optouts
+            if row.normalized_name is not None
+        }
+        source_rows = []
+        for entry in (*preview.resolved, *preview.unresolved):
+            normalized_name = normalize_queens_name(entry.linkedin_name)
+            link = links_by_name.get(normalized_name)
+            is_rated = (
+                str(link.user_id) not in opted_out_ids
+                if link is not None
+                else normalized_name not in opted_out_names
+            )
+            source_rows.append(self._queens_external_result_values(
+                ctx.guild.id, ctx.channel.id, entry,
+                preview.puzzle_date, preview.raw_content,
+                is_rated=is_rated))
+        cf_common.user_db.apply_minigame_source_migration(
+            ctx.guild.id, QUEENS_GAME.name, source_rows, [])
+        self._sync_queens_materialized_results(
+            ctx.guild.id, migrate_legacy=False)
         self._recompute_minigame_ratings(
             ctx.guild.id, QUEENS_GAME, sync_results=False)
         return _QueensImportSaveResult(
@@ -307,16 +329,18 @@ class ImplQueensImportMixin:
             'Usage: `;queens add <@user|LinkedIn Name> DATE/# time [status...]`.')
 
     @staticmethod
-    def _parse_queens_remove_args(args):
+    def _parse_queens_remove_args(args, *, command='remove'):
         tokens = str(args or '').split()
         if len(tokens) < 2:
             raise MinigameCogError(
-                'Usage: `;queens remove <@user|LinkedIn Name> DATE/#`.')
+                f'Usage: `;queens {command} '
+                '<@user|LinkedIn Name> DATE/#`.')
         try:
             parsed_date = _parse_queens_date_or_number(tokens[-1])
         except MinigameCogError as exc:
             raise MinigameCogError(
-                'Usage: `;queens remove <@user|LinkedIn Name> DATE/#`.') from exc
+                f'Usage: `;queens {command} '
+                '<@user|LinkedIn Name> DATE/#`.') from exc
         player_text = ' '.join(tokens[:-1]).strip()
         return player_text, parsed_date
 
@@ -331,7 +355,26 @@ class ImplQueensImportMixin:
         parsed_number = _queens_puzzle_number_for_date(parsed_date)
         no_hints, no_mistakes, _status_text = queens_status_flags(status)
         time_seconds = parse_queens_time(time_text)
-        for puzzle_number in _queens_puzzle_numbers_for_date(parsed_date):
+        puzzle_numbers = set(_queens_puzzle_numbers_for_date(parsed_date))
+        existing_sources = [
+            row
+            for row in cf_common.user_db.get_minigame_unresolved_results_for_name(
+                ctx.guild.id, QUEENS_GAME.name, linked.normalized_name)
+            if (
+                int(row.puzzle_number) in puzzle_numbers
+                or normalize_puzzle_date(row.puzzle_date) == parsed_date
+            )
+        ]
+        preserved_source = max(
+            existing_sources,
+            key=lambda row: (
+                int(not bool(row.is_rated)),
+                int(int(row.puzzle_number) == parsed_number),
+                float(row.stored_at),
+            ),
+            default=None,
+        )
+        for puzzle_number in puzzle_numbers:
             cf_common.user_db.delete_minigame_unresolved_result_for_name_puzzle(
                 ctx.guild.id, QUEENS_GAME.name, linked.normalized_name,
                 puzzle_number)
@@ -346,7 +389,19 @@ class ImplQueensImportMixin:
         )
         self._save_queens_external_result(
             ctx.guild.id, ctx.channel.id, entry, parsed_date,
-            f'{linked.external_name}\n{status}\n{time_text}')
+            f'{linked.external_name}\n{status}\n{time_text}',
+            is_rated=(
+                None if preserved_source is None
+                else preserved_source.is_rated),
+            stored_at=(
+                None if preserved_source is None
+                else preserved_source.stored_at),
+            source_message_id=(
+                None if preserved_source is None
+                else preserved_source.source_message_id),
+            rating_override=(
+                None if preserved_source is None
+                else preserved_source.rating_override))
         self._sync_queens_materialized_results(ctx.guild.id)
         self._recompute_minigame_ratings(
             ctx.guild.id, QUEENS_GAME, sync_results=False)
