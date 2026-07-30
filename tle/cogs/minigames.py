@@ -108,6 +108,7 @@ from tle.cogs._mgimpl_vs import ImplVsMixin
 from tle.cogs._mgimpl_akaria import ImplAkariAMixin
 from tle.cogs._mgimpl_akarib import ImplAkariBMixin
 from tle.cogs._mgimpl_akaric import ImplAkariCMixin
+from tle.cogs._mgimpl_akarid import ImplAkariDMixin
 from tle.cogs._mgimpl_stats import ImplStatsMixin
 from tle.cogs._mgimpl_export import ImplExportMixin
 
@@ -149,6 +150,7 @@ class Minigames(
     ImplAkariAMixin,
     ImplAkariBMixin,
     ImplAkariCMixin,
+    ImplAkariDMixin,
     ImplStatsMixin,
     ImplExportMixin,
     commands.Cog,

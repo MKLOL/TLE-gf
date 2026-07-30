@@ -1,6 +1,5 @@
 """Akari rating/performance/history/stats commands. (Minigames cog impl mixin; see minigames.py)."""
 
-import datetime as dt
 import logging
 
 import discord
@@ -14,20 +13,13 @@ from tle.util.akari_rating import rank_for_rating
 from tle.cogs._minigame_akari import (
     AKARI_GAME,
 )
-from tle.cogs._minigame_stats import (
-    plot_akari_stats, plot_guessgame_stats,
-)
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg, _safe_member_name,
     _legend_name_for, _format_akari_history_line,
     _display_rating, _display_peak, _display_games,
 )
 from tle.cogs._minigame_queens_filters import (
-    _filter_queens_weekday_rows, _filter_queens_rating_date_rows,
     _filter_queens_rating_date_history, _queens_filter_suffix,
-)
-from tle.cogs._minigame_tables import (
-    _maybe_parse_puzzle_selector,
 )
 from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
 
@@ -397,78 +389,3 @@ class ImplAkariBMixin:
         paginator.paginate(
             self.bot, ctx.channel, pages, wait_time=300,
             set_pagenum_footers=True, author_id=ctx.author.id)
-
-    _STATS_PLOTTERS = {
-        'akari': plot_akari_stats,
-        'guessgame': plot_guessgame_stats,
-    }
-
-    async def _cmd_akari_stats_puzzle(self, ctx, selector_arg, *,
-                                       show_all=False, excluded_ids=None,
-                                       included_ids=None, test_decay=False,
-                                       weekdays=None, date_bounds=None,
-                                       sort_key_fn=None, rank_key_fn=None):
-        """Render a per-puzzle results image annotated with pre-puzzle ratings.
-
-        ``show_all=False`` (public path): only opted-in users get the rating
-        + tier colour; everyone else stays plain.  ``show_all=True`` (the
-        ``stats debug`` subcommand, mod-only) annotates every player including
-        shadow-rated ones, mirroring how ``ratings debug`` reveals opt-outs.
-        ``excluded_ids`` hides those users from the displayed table *and*
-        runs the rating annotation without them, so deltas reflect the
-        smaller field.
-        """
-        self._require_enabled(ctx.guild.id, AKARI_GAME)
-        selector = _maybe_parse_puzzle_selector(selector_arg)
-        if selector is None:
-            raise MinigameCogError(
-                f'Expected a puzzle number or date, got `{selector_arg}`.')
-        selector_type, selector_value = selector
-        if selector_type == 'puzzle':
-            rows = cf_common.user_db.get_minigame_results_for_guild(
-                ctx.guild.id, AKARI_GAME.name,
-                plo=selector_value, phi=selector_value + 1)
-            title = f'{AKARI_GAME.display_name} #{selector_value} Results'
-        else:
-            day_start = dt.datetime.combine(selector_value, dt.time.min).timestamp()
-            day_end = day_start + 24 * 60 * 60
-            rows = cf_common.user_db.get_minigame_results_for_guild(
-                ctx.guild.id, AKARI_GAME.name, dlo=day_start, dhi=day_end)
-            title = f'{AKARI_GAME.display_name} {selector_value.isoformat()} Results'
-
-        rows = self._filter_akari_rows(
-            rows, excluded_ids=excluded_ids, included_ids=included_ids)
-        rows = _filter_queens_weekday_rows(rows, weekdays)
-        rows = _filter_queens_rating_date_rows(rows, date_bounds)
-
-        if not rows:
-            raise MinigameCogError(
-                f'No {AKARI_GAME.display_name} results found for `{selector_arg}`.')
-
-        # Annotation requires a single puzzle worth of rows (1 puzzle/day).
-        # For a multi-puzzle slice (theoretical), fall back to plain rendering.
-        puzzle_numbers = {int(row.puzzle_number) for row in rows}
-        puzzle_info = None
-        registrants = None
-        if len(puzzle_numbers) == 1:
-            puzzle_info = self._akari_puzzle_change_info(
-                ctx.guild.id, next(iter(puzzle_numbers)),
-                excluded_ids=excluded_ids, included_ids=included_ids,
-                test_decay=test_decay, weekdays=weekdays,
-                date_bounds=date_bounds)
-            if show_all:
-                # Debug: pretend every rated player is registered for display.
-                registrants = set(puzzle_info.keys())
-            else:
-                registrants = cf_common.user_db.get_akari_registrants(
-                    ctx.guild.id)
-
-        if test_decay:
-            title += ' [test decay]'
-        title += _queens_filter_suffix(
-            weekdays=weekdays, date_bounds=date_bounds)
-        discord_file = _mg()._get_akari_puzzle_table_image_file(
-            ctx.guild, rows, title,
-            puzzle_info=puzzle_info, registrants=registrants,
-            sort_key_fn=sort_key_fn, rank_key_fn=rank_key_fn)
-        await ctx.send(file=discord_file)
