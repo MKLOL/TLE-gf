@@ -207,9 +207,12 @@ class ImplRatingMixin:
             included_ids=included_ids, weekdays=weekdays,
             date_bounds=date_bounds)
         histories = {}
+        compute_kwargs = self._minigame_compute_kwargs(
+            game, extra_compute_kwargs)
+        if improved:
+            compute_kwargs['performance_puzzles'] = {int(puzzle_number)}
         self._minigame_rating_engine(game, improved)(
-            rows, histories=histories,
-            **self._minigame_compute_kwargs(game, extra_compute_kwargs))
+            rows, histories=histories, **compute_kwargs)
         info = {}
         for user_id, points in histories.items():
             for point in points:

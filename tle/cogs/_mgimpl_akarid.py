@@ -16,7 +16,37 @@ from tle.cogs._minigame_stats import (
     plot_akari_stats,
     plot_guessgame_stats,
 )
+from tle.cogs._minigame_result_rows import _akari_result_rank_key
 from tle.cogs._minigame_tables import _maybe_parse_puzzle_selector
+
+
+def _akari_beta_performance_keys(puzzle_info):
+    """Return table sort/rank keys for visible integer beta performance."""
+    def performance(row):
+        info = puzzle_info.get(str(row.user_id))
+        if info is None or info.performance is None:
+            return None
+        return float(info.performance)
+
+    def sort_key(row):
+        value = performance(row)
+        fallback = (
+            -int(bool(getattr(row, 'is_perfect', False))),
+            -int(getattr(row, 'accuracy', 0)),
+            int(getattr(row, 'time_seconds', 0)),
+            int(getattr(row, 'message_id', 0)),
+        )
+        return (value is None, 0.0 if value is None else -value, fallback)
+
+    def rank_key(row):
+        value = performance(row)
+        if value is None:
+            return ('result', _akari_result_rank_key(row))
+        # The table displays whole-number performance. Values that look tied
+        # to users must therefore receive the same competition rank.
+        return ('performance', round(value))
+
+    return sort_key, rank_key
 
 
 class ImplAkariDMixin:
@@ -194,6 +224,9 @@ class ImplAkariDMixin:
                 if show_all
                 else cf_common.user_db.get_akari_registrants(ctx.guild.id)
             )
+        if beta and puzzle_info and sort_key_fn is None:
+            sort_key_fn, rank_key_fn = _akari_beta_performance_keys(
+                puzzle_info)
 
         if test_decay:
             title += ' [test decay]'

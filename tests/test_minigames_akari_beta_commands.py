@@ -13,6 +13,8 @@ from tle.cogs._minigame_akari import (
     expected_puzzle_number,
     puzzle_date_for,
 )
+from tle.cogs._mgimpl_akarid import _akari_beta_performance_keys
+from tle.cogs._minigame_result_rows import _ranked_result_rows
 from tle.cogs.minigames import MinigameCogError, Minigames
 from tle.util import codeforces_common as cf_common
 
@@ -144,7 +146,10 @@ class TestAkariBetaViews(_AkariBetaBase):
 
         def render_results(_guild, _rows, title, **kwargs):
             captured['title'] = title
+            captured['rows'] = list(_rows)
             captured['puzzle_info'] = kwargs['puzzle_info']
+            captured['sort_key_fn'] = kwargs['sort_key_fn']
+            captured['rank_key_fn'] = kwargs['rank_key_fn']
             return object()
 
         monkeypatch.setattr(
@@ -158,6 +163,39 @@ class TestAkariBetaViews(_AkariBetaBase):
             info.performance is not None
             for info in captured['puzzle_info'].values()
         )
+        ordered = sorted(
+            captured['rows'], key=captured['sort_key_fn'])
+        shown_performances = [
+            captured['puzzle_info'][str(row.user_id)].performance
+            for row in ordered
+        ]
+        assert shown_performances == sorted(
+            shown_performances, reverse=True)
+        # Bob's fast 99% result beats both slower perfect results after the
+        # accuracy multiplier, proving this is performance rather than the
+        # ordinary accuracy-first ordering.
+        assert str(ordered[0].user_id) == str(members[1].id)
+
+    def test_beta_performance_sort_uses_displayed_ties(self):
+        rows = [
+            SimpleNamespace(
+                user_id=str(user_id), is_perfect=True, accuracy=100,
+                time_seconds=time_seconds, message_id=user_id,
+            )
+            for user_id, time_seconds in ((1, 30), (2, 20), (3, 10))
+        ]
+        puzzle_info = {
+            '1': SimpleNamespace(performance=1500.40),
+            '2': SimpleNamespace(performance=1500.49),
+            '3': SimpleNamespace(performance=1400.0),
+        }
+        sort_key, rank_key = _akari_beta_performance_keys(puzzle_info)
+
+        ranked = _ranked_result_rows(
+            rows, sort_key_fn=sort_key, rank_key_fn=rank_key)
+
+        assert [str(row.user_id) for _rank, row in ranked] == ['2', '1', '3']
+        assert [rank for rank, _row in ranked] == [1, 1, 3]
 
 
 class TestAkariBetaRouting:

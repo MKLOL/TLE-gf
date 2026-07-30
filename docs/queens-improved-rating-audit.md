@@ -2,8 +2,8 @@
 
 ## Scope and decision
 
-This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses its
-same-quality time comparison, so the time transform also applies there.
+This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses the
+same engine after multiplying time by `sqrt(101 - accuracy)`.
 Ordinary Queens, ordinary Akari, persisted rating snapshots, registration
 policy, and command routing are outside the formula change.
 
@@ -14,6 +14,7 @@ The current player-facing parameters are:
 - soft-margin width `0.35`;
 - expectation scale `800 / ln(10)`;
 - K-factor `144`;
+- proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
 - no field-size multiplier or post-hoc delta cap.
 
 The original research and robustness tournament used a four-second offset.
@@ -51,7 +52,8 @@ locked.
 | Days containing a tied pair | 48 of 58 |
 
 The effective independent sample is much closer to 58 days than to the
-thousands of pair comparisons derived from them. Evaluation therefore used:
+thousands of pair comparisons derived from them. The original offset-four
+research therefore used:
 
 1. chronological predictions made before each daily update;
 2. warm-up requirements for established-player comparisons;
@@ -61,8 +63,11 @@ thousands of pair comparisons derived from them. Evaluation therefore used:
 6. injected corruptions, leave-one-day/player replay, null permutations, and
    long stationary simulations.
 
-Log loss and Brier score were used because they are proper probabilistic
-scoring rules, following
+That protocol was not rerun after the raw-time and 90/10-gradient retunes.
+Current figures below are replay and invariant checks; the predictive and
+corruption figures remain explicitly historical. In the original study, log
+loss and Brier score were used because they are proper probabilistic scoring
+rules, following
 [Gneiting and Raftery (2007)](https://sites.stat.washington.edu/people/raftery/Research/PDF/Gneiting2007jasa.pdf).
 Accuracy alone cannot distinguish calibrated confidence from overconfidence.
 
@@ -74,23 +79,40 @@ For a field of `n` players, transform player `i`'s time:
 x_i = ln(time_i)
 ```
 
+Akari uses the same equations after replacing this with:
+
+```text
+x_i = ln(raw_time_i) + 0.5 * ln(101 - accuracy_i)
+effective_time_i = raw_time_i * sqrt(101 - accuracy_i)
+```
+
+Accuracy must be an integer from 0 through 100. The perfect flag adds no
+second tier: 100% is `1x`, 99% is `sqrt(2)x`, and a sufficiently fast
+imperfect result can outrank a slower perfect result.
+
 For each pair:
 
 ```text
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
 S_ij = sigmoid(z_ij)
 E_ij = sigmoid((rating_i - rating_j) / (800 / ln(10)))
+W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 ```
 
 Lower time is better. The update is:
 
 ```text
-delta_i = (144 / n) * sum(j != i, S_ij - E_ij)
+delta_i = (144 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 ```
 
-The implementation includes the player's neutral self-comparison in both
-field averages. Both self terms are `0.5`, so they cancel and only explain the
-denominator `n`.
+The weight is the rating-logit gradient of a 10% cross-entropy / 90% Brier
+blend of two strictly proper scoring losses. It equals `1` at an even matchup
+and approaches `0.10` at a very confident expectation. A surprising result is
+therefore attenuated smoothly but never ignored.
+
+The implementation includes a neutral self-comparison. Its score and
+expectation are both `0.5` at the incoming rating, so it contributes zero to
+the update and explains the denominator `n`.
 
 The `±8` limit activates only when the raw-time ratio exceeds:
 
@@ -112,6 +134,7 @@ For every pair:
 ```text
 S_ij + S_ji = 1
 E_ij + E_ji = 1
+W_ij = W_ji
 ```
 
 The evidence clip is symmetric, so it preserves this identity. Pair residuals
@@ -128,8 +151,8 @@ in the replay, induction gives:
 total rating = 1200 * observed player count
 ```
 
-The snapshot total is exactly `34,800 = 29 × 1200`, up to floating arithmetic
-below `1.1e-13` per day.
+The snapshot total is exactly `34,800 = 29 × 1200`. Its largest per-day
+floating error was `3.38e-14`.
 
 This is **point conservation**, not a claim that every visible or active
 leaderboard is inflation-proof.
@@ -164,55 +187,79 @@ than it protects the owner of a corrupt record.
 These are immediate-day guarantees. A wrong rating can affect later
 expectations, so full-history corruption can propagate.
 
-### Stable performance and updates
+### Monotone event performance
 
-Displayed performance is the unique rating `P_i` whose expected field score
-equals the actual soft score. The field-expectation function is strictly
-increasing, so:
+Displayed performance uses the player's mean soft field score:
 
 ```text
-performance_i > pre_rating_i  exactly when  delta_i > 0
+A_i = mean(j in field, S_ij)
+F(P) = mean(j in field, E(P, rating_j))
+F(P_i) = A_i
 ```
 
-The derivative of a logistic expectation is at most
-`1 / (4 * (800 / ln(10)))`. Therefore an update cannot overshoot its
-performance:
-
-```text
-abs(delta_i)
-    <= 144 / (4 * (800 / ln(10)))
-       * abs(performance_i - pre_rating_i)
-    < 0.104 * abs(performance_i - pre_rating_i)
-```
+`F` is strictly increasing, so the inverse is unique. Better effective results
+always have higher performance, and identical score vectors share exactly one
+performance regardless of incoming rating. The neutral self-score keeps the
+target inside `(0, 1)` and the displayed result finite.
 
 Adding the same constant to every pre-rating leaves all deltas unchanged and
 adds that constant to every performance. Equal times share the same
-performance; equal-time players with different ratings can receive different
-deltas because their expectations differed.
+performance; equal-time players with different ratings can still receive
+different deltas because their expectations differed.
+
+The display does not minimize the blended update loss over `P`: that composite
+can have multiple local minima and independently chosen branches can invert
+result order. The unique field inversion avoids that ambiguity. On the Queens
+snapshot it preserved every strict result comparison, and every exact result
+tie shared one performance.
+
+The delta applies opponent-specific `W_ij` values while performance uses the
+unweighted mean soft result. In unusually spread fields, delta and
+`performance - pre_rating` can therefore have opposite signs without changing
+the day's performance order. In the documented merged live/import replay this
+occurred in 13 of 994 contested Queens performances (1.31%); the largest
+opposite-direction offset was 19.06 rating points.
 
 ## Snapshot results
 
 | Measure | Current beta |
 |---|---:|
 | Final mean | 1200.00 |
-| Final range | 803.71–1703.72 |
-| Final standard deviation | 202.07 |
-| Mean absolute daily change | 21.13 |
-| 95th percentile absolute change | 49.63 |
-| Observed daily range | −77.49 to +72.80 |
+| Final range | 814.37–1681.00 |
+| Final standard deviation | 198.27 |
+| Mean absolute daily change | 19.25 |
+| 95th percentile absolute change | 45.10 |
+| Observed daily range | −64.69 to +63.69 |
 
-Chronological established-player evaluation produced 6,716 strict pair
-comparisons:
+The previously reported chronological accuracy, log-loss, and Brier figures
+predated the current 90/10 proper-score blend. They were not rerun and are not
+valid measurements of the current implementation. The model's probabilities
+also represent margin-weighted results rather than literal faster/slower win
+odds.
 
-| Measure | Raw-time result |
+### Akari snapshot cross-check
+
+The supplied Akari snapshot was replayed with the square-root accuracy
+multiplier and the same blended update:
+
+| Measure | Current Akari beta |
 |---|---:|
-| Strict accuracy | 74.18% |
-| Strict log loss | 0.54001 |
-| Strict Brier score | 0.17978 |
+| Final mean | 1200.00 |
+| Final range | 830.59–1878.89 |
+| Final standard deviation | 202.43 |
+| Loss magnitude, 95th / 99th / worst | 53.75 / 61.91 / 70.49 |
+| Gain, 95th / 99th / best | 46.93 / 58.28 / 71.14 |
 
-The model's probabilities represent margin-weighted results, not literal win
-odds. Whole-day confidence intervals and fixed-target margin calibration have
-not been rerun for the raw-time retune.
+The largest per-day zero-sum error was `6.39e-14`. Performance had no
+strict-order inversions, and every exact result tie shared one performance.
+For the merged Akari replay, delta/performance direction differed in 45 of
+4,149 contested performances (1.08%); the largest opposite-direction offset
+was 54.56 points.
+
+`+beta` Akari result tables sort by descending beta performance. Since the
+table displays whole-number performance, values that round to the same number
+receive the same competition rank; ordinary Akari result ordering is
+unchanged outside `+beta`.
 
 ## Historical alternative-model tournament (four-second offset)
 
@@ -241,6 +288,9 @@ The 95/5 blend's strict-log-loss gain was real but tiny. Accuracy changed by
 less than 0.1 percentage point, margin calibration worsened slightly, ordinary
 movement increased, and corruption tails did not improve. It also adds a
 discontinuous rank step to near-tied times.
+
+That historical 95% soft-result / 5% strict-result experiment is unrelated to
+the current 90% Brier / 10% log-loss gradient blend.
 
 The aggressive models gain binary confidence by changing the product goal.
 They do not provide a better version of the requested close-times-as-near-ties
@@ -326,7 +376,9 @@ Future changes to `+beta` must retain:
 - the `144(n - 1)/n` daily bound;
 - the `144/n` one-opponent contamination bound;
 - rating-translation invariance;
-- delta/performance sign agreement and no overshoot;
+- unique, result-monotone event performance;
+- Akari accuracy validation and square-root effective time;
+- Akari `+beta` result ordering and ranks based on displayed performance;
 - deterministic replay under arbitrary input ordering.
 
 Any future retuning needs substantially more rated days, a preregistered

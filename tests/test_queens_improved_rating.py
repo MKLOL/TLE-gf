@@ -3,6 +3,7 @@
 import math
 import random
 from collections import namedtuple
+from decimal import Decimal
 
 import pytest
 
@@ -199,9 +200,9 @@ def test_round_is_field_normalized_zero_sum_and_naturally_bounded():
     upset_times = {'favorite': 1000, 'a': 10, 'b': 20, 'c': 30}
     upset = _compute_round(upset_ratings, upset_times)
     deltas = [update.delta for update in upset.values()]
-    # There is no post-hoc ±32 clip. Since actual and expected are both
-    # probabilities, the formula itself keeps every move below K in magnitude.
-    assert max(map(abs, deltas)) > 32
+    # The proper-score gradient naturally attenuates a wildly surprising
+    # result; this is formula-driven rather than a post-hoc ±32 clamp.
+    assert 10 < max(map(abs, deltas)) < 32
     assert max(map(abs, deltas)) < _RATING_K
     assert abs(sum(deltas)) < 1e-12
 
@@ -243,14 +244,12 @@ def test_random_rounds_preserve_points_and_natural_delta_bound():
         for user, update in updates.items():
             assert abs(update.delta) <= natural_bound + 1e-10
             assert math.isfinite(update.performance)
-            assert (update.delta > 0) == (
-                update.performance > ratings[user])
-            assert (update.delta < 0) == (
-                update.performance < ratings[user])
-            assert abs(update.delta) <= (
-                _RATING_K / (4 * _ELO_SCALE)
-                * abs(update.performance - ratings[user])
-                + 1e-10
+
+        ordered = sorted(users, key=lambda user: times[user])
+        for faster, slower in zip(ordered, ordered[1:]):
+            assert (
+                updates[faster].performance
+                >= updates[slower].performance
             )
 
         shifted_ratings = {
@@ -329,6 +328,7 @@ def test_malformed_times_are_quarantined_from_improved_replay():
         _row('u7', 2, math.inf, message_id=7),
         _row('u8', 2, None, message_id=8),
         _row('u9', 2, 'not-a-time', message_id=9),
+        _row('u12', 2, Decimal('1.5'), message_id=12),
         # Quarantining u11 leaves a valid solo day, which must remain unrated.
         _row('u10', 3, 15, message_id=10),
         _row('u11', 3, -1, message_id=11),

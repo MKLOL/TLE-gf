@@ -7,20 +7,33 @@ model:
 * every opponent contributes a bounded fraction of one daily result;
 * close times behave almost like ties instead of full wins/losses;
 * the field is averaged, so a 20-player day is not 19 independent games;
-* the averaged residual is naturally bounded by the K-factor and preserves a
-  zero-sum round without post-hoc clipping;
+* a proper log-loss/Brier blend smoothly reduces one surprising day's
+  leverage without a post-hoc delta cap;
+* complementary pair updates preserve an exactly zero-sum round;
 * player-facing rating points use a wider scale so sustained skill differences
   span the existing minigame rank tiers.
 
-Displayed performance uses the same soft time bracket as rating changes.  A
-neutral self-comparison keeps the best and worst performance finite, while a
-single extreme time can affect every other player by only ``1 / field_size``.
+Displayed performance uniquely inverts the common field expectation from the
+mean soft result. This keeps result order monotone even though the robust
+update loss itself can be non-convex. A neutral self-comparison keeps the best
+and worst performance finite, while a single extreme time can affect every
+other player by only ``1 / field_size``.
 """
 
 import math
 from dataclasses import dataclass
 
 from tle.util.akari_rating import HistoryPoint, RatingState
+from tle.util._beta_rating_performance import (
+    _BRIER_BLEND,
+    _ELO_SCALE,
+    _RATING_POINT_SCALE,
+    _elo_expected,
+    _field_expected,
+    _performance_rating,
+    _proper_residual,
+    _sigmoid,
+)
 
 
 _START_RATING = 1200.0
@@ -28,17 +41,12 @@ _START_RATING = 1200.0
 # occupied only half of the rank bands used by Queens/Akari, so expose two
 # player-facing points per original beta point.  Scaling the expectation curve,
 # K, and performance search together preserves every probability and ordering.
-_RATING_POINT_SCALE = 2.0
-# Traditional Elo's base-10 scale, widened into player-facing rating points.
-_ELO_SCALE = _RATING_POINT_SCALE * 400.0 / math.log(10.0)
 _TIME_MARGIN_WIDTH = 0.35
 # This is a bound on one pair's *evidence*, not on a player's rating change.
 # It activates only beyond a 16.4x raw-time ratio and prevents malformed
 # or repeated extreme margins from producing numerical 0/1 separation.
 _TIME_MARGIN_LOGIT_LIMIT = 8.0
 _RATING_K = _RATING_POINT_SCALE * 72.0
-_PERFORMANCE_SEARCH_MARGIN = _RATING_POINT_SCALE * 800.0
-_PERFORMANCE_SEARCH_ITERS = 60
 
 
 @dataclass(frozen=True)
@@ -55,15 +63,6 @@ class _Player:
 class _RoundUpdate:
     delta: float
     performance: float
-
-
-def _sigmoid(value):
-    """Numerically stable logistic function."""
-    if value >= 0:
-        exp_neg = math.exp(-value)
-        return 1.0 / (1.0 + exp_neg)
-    exp_pos = math.exp(value)
-    return exp_pos / (1.0 + exp_pos)
 
 
 def _time_log(time_seconds):
@@ -100,7 +99,7 @@ def _result_time_seconds(time_seconds):
             f'Queens result time must be positive, got {time_seconds!r}.')
     # Reject fractional floats rather than silently truncating them.  SQLite
     # rows use integers, but this also protects imported/test row-like objects.
-    if isinstance(time_seconds, float) and time_seconds != seconds:
+    if not isinstance(time_seconds, str) and time_seconds != seconds:
         raise ValueError(
             f'Queens result time must be an integer, got {time_seconds!r}.')
     _time_log(seconds)
@@ -127,42 +126,7 @@ def _soft_time_score_from_logs(log_self, log_other):
     return _sigmoid(logit)
 
 
-def _elo_expected(rating, opponent_rating):
-    return _sigmoid((float(rating) - float(opponent_rating)) / _ELO_SCALE)
-
-
-def _field_expected(performance, field_ratings):
-    return sum(
-        _elo_expected(performance, rating) for rating in field_ratings
-    ) / len(field_ratings)
-
-
-def _performance_rating(field_ratings, target_score):
-    """Invert the common field expectation for a finite performance rating."""
-    lo = min(field_ratings) - _PERFORMANCE_SEARCH_MARGIN
-    hi = max(field_ratings) + _PERFORMANCE_SEARCH_MARGIN
-    span = _PERFORMANCE_SEARCH_MARGIN
-
-    # The neutral self-result keeps target_score strictly inside (0, 1), but
-    # expand defensively for unusually large fields or rating spreads.
-    while _field_expected(lo, field_ratings) > target_score:
-        span *= 2.0
-        lo -= span
-    span = _PERFORMANCE_SEARCH_MARGIN
-    while _field_expected(hi, field_ratings) < target_score:
-        span *= 2.0
-        hi += span
-
-    for _ in range(_PERFORMANCE_SEARCH_ITERS):
-        mid = (lo + hi) / 2.0
-        if _field_expected(mid, field_ratings) < target_score:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2.0
-
-
-def _compute_round(ratings, times):
+def _compute_round(ratings, times, *, compute_performance=True):
     """Return naturally bounded, zero-sum updates for one multiplayer day."""
     users = sorted(ratings)
     if set(users) != set(times):
@@ -174,23 +138,18 @@ def _compute_round(ratings, times):
         }
 
     time_logs = {user: _time_log(times[user]) for user in users}
-    actual = {
-        user: sum(
-            _soft_time_score_from_logs(
-                time_logs[user], time_logs[opponent])
-            for opponent in users
-        ) / len(users)
-        for user in users
-    }
-    return _compute_round_from_actual(ratings, actual)
+    return _compute_round_from_pair_score(
+        ratings,
+        lambda user, opponent: _soft_time_score_from_logs(
+            time_logs[user], time_logs[opponent]),
+        compute_performance=compute_performance,
+    )
 
 
-def _compute_round_from_actual(ratings, actual):
-    """Convert complementary field scores into beta deltas/performance."""
+def _compute_round_from_pair_score(
+        ratings, pair_score_fn, *, compute_performance=True):
+    """Convert complementary pair scores into proper-score beta updates."""
     users = sorted(ratings)
-    if set(users) != set(actual):
-        raise ValueError(
-            'Beta round ratings and actual scores must have the same users.')
     if len(users) < 2:
         return {
             user: _RoundUpdate(delta=0.0, performance=float(ratings[user]))
@@ -198,40 +157,51 @@ def _compute_round_from_actual(ratings, actual):
         }
 
     field_ratings = [float(ratings[user]) for user in users]
-    expected = {}
+    scores_by_user = {}
+    residuals_by_user = {}
     for user in users:
-        # The pair-score average includes a neutral self-comparison. It
-        # cancels out of the residual and keeps extreme performances finite.
-        expected[user] = _field_expected(ratings[user], field_ratings)
-
-    raw_deltas = {
-        user: _RATING_K * (actual[user] - expected[user])
-        for user in users
-    }
+        scores = []
+        residuals = []
+        for opponent in users:
+            score = (
+                0.5 if opponent == user
+                else float(pair_score_fn(user, opponent))
+            )
+            if not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError(f'Beta pair score must be in [0, 1], got {score}.')
+            expected = _elo_expected(ratings[user], ratings[opponent])
+            scores.append(score)
+            residuals.append(_proper_residual(score, expected))
+        scores_by_user[user] = scores
+        residuals_by_user[user] = residuals
 
     return {
         user: _RoundUpdate(
-            delta=raw_deltas[user],
-            performance=_performance_rating(field_ratings, actual[user]),
+            delta=_RATING_K * sum(residuals_by_user[user]) / len(users),
+            performance=(
+                _performance_rating(
+                    field_ratings,
+                    sum(scores_by_user[user]) / len(users),
+                )
+                if compute_performance else None
+            ),
         )
         for user in users
     }
 
 
-def _compute_pair_round(ratings, rows, pair_score_fn):
+def _compute_pair_round(
+        ratings, rows, pair_score_fn, *, compute_performance=True):
     """Run a beta round using a game-specific complementary pair score."""
     users = sorted(ratings)
     if set(users) != set(rows):
         raise ValueError('Beta round ratings and rows must have the same users.')
-    actual = {
-        user: sum(
-            0.5 if opponent == user
-            else pair_score_fn(rows[user], rows[opponent])
-            for opponent in users
-        ) / len(users)
-        for user in users
-    }
-    return _compute_round_from_actual(ratings, actual)
+    return _compute_round_from_pair_score(
+        ratings,
+        lambda user, opponent: pair_score_fn(
+            rows[user], rows[opponent]),
+        compute_performance=compute_performance,
+    )
 
 
 def _row_order_key(row):
@@ -246,12 +216,17 @@ def _row_order_key(row):
         time_key = (0, int(time_seconds))
     except (TypeError, ValueError, OverflowError):
         time_key = (1, repr(time_seconds))
+    raw_accuracy = getattr(row, 'accuracy', 0)
+    try:
+        accuracy_key = (0, -int(raw_accuracy))
+    except (TypeError, ValueError, OverflowError):
+        accuracy_key = (1, repr(raw_accuracy))
     return (
         message_key,
         str(getattr(row, 'puzzle_date', '')),
         time_key,
         -int(bool(getattr(row, 'is_perfect', False))),
-        -int(getattr(row, 'accuracy', 0)),
+        accuracy_key,
         str(getattr(row, 'raw_content', '')),
     )
 
@@ -272,7 +247,8 @@ def _history_point(puzzle_number, row, rating, delta, performance):
 def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
-        rank_fn=None, pair_score_fn=None, **_ignored):
+        rank_fn=None, pair_score_fn=None, row_validator_fn=None,
+        performance_puzzles=None, **_ignored):
     """Replay Queens results with the experimental soft-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
@@ -282,6 +258,10 @@ def compute_queens_improved_ratings(
     engine compatibility.
     """
     del include_decay_in_history, rank_fn
+    if performance_puzzles is not None:
+        performance_puzzles = {
+            int(puzzle_number) for puzzle_number in performance_puzzles
+        }
 
     by_puzzle = {}
     for row in rows:
@@ -301,6 +281,8 @@ def compute_queens_improved_ratings(
         for user_id, row in day_rows.items():
             try:
                 _result_time_seconds(row.time_seconds)
+                if row_validator_fn is not None:
+                    row_validator_fn(row)
             except ValueError:
                 # A malformed locked first result must not become a zero-second
                 # win, seed a ghost player, or break every +beta command.
@@ -338,10 +320,21 @@ def compute_queens_improved_ratings(
             user_id: _result_time_seconds(day_rows[user_id].time_seconds)
             for user_id in active_ids
         }
+        compute_performance = (
+            histories is not None
+            and (
+                performance_puzzles is None
+                or puzzle_number in performance_puzzles
+            )
+        )
         updates = (
-            _compute_round(before, times)
+            _compute_round(
+                before, times,
+                compute_performance=compute_performance)
             if pair_score_fn is None
-            else _compute_pair_round(before, day_rows, pair_score_fn)
+            else _compute_pair_round(
+                before, day_rows, pair_score_fn,
+                compute_performance=compute_performance)
         )
 
         for user_id in active_ids:
