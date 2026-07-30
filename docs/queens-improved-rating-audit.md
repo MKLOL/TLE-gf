@@ -2,22 +2,25 @@
 
 ## Scope and decision
 
-This audit covers only the opt-in Queens `+beta` engine. Ordinary Queens,
-Akari, persisted rating snapshots, registration policy, and command routing are
-outside the formula change.
+This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses its
+same-quality time comparison, so the time transform also applies there.
+Ordinary Queens, ordinary Akari, persisted rating snapshots, registration
+policy, and command routing are outside the formula change.
 
-The decision is to retain the current model and its player-facing parameters:
+The current player-facing parameters are:
 
 - start rating `1200`;
-- time offset `4` seconds;
+- time offset `0` seconds;
 - soft-margin width `0.35`;
 - expectation scale `800 / ln(10)`;
 - K-factor `144`;
 - no field-size multiplier or post-hoc delta cap.
 
-Hundreds of alternatives improved literal win/loss confidence only by making
-close times harsher and the ladder wider. None materially improved both
-prediction and robustness. The production hardening is deliberately narrow:
+The original research and robustness tournament used a four-second offset.
+The offset was removed by a later user-directed retune, making fast-puzzle
+gaps deliberately stronger. Structural proofs in this document still hold,
+but empirical sections explicitly marked historical were not rerun and are not
+evidence for choosing the raw-time transform. Production hardening remains:
 
 - invalid locked-first times are quarantined from the beta replay instead of
   becoming zero-second wins or breaking the command;
@@ -25,9 +28,10 @@ prediction and robustness. The production hardening is deliberately narrow:
   separation at absurd time ratios;
 - deterministic property tests enforce the mathematical guarantees below.
 
-On the supplied snapshot the evidence limit changes no rank, changes the
-largest final rating by less than `0.05`, and has no meaningful predictive
-effect. It is a numerical and long-run safety rail, not a prediction tweak.
+In the original offset-four audit, the evidence limit changed no rank, changed
+the largest final rating by less than `0.05`, and had no meaningful predictive
+effect. It remains a numerical and long-run safety rail, not a rating-change
+cap.
 
 ## Data and evaluation protocol
 
@@ -53,7 +57,7 @@ thousands of pair comparisons derived from them. Evaluation therefore used:
 2. warm-up requirements for established-player comparisons;
 3. chronological development blocks and an untouched final holdout;
 4. paired bootstraps that resample whole puzzle days;
-5. both strict faster/slower and continuous adjusted-log-time metrics;
+5. both strict faster/slower and continuous log-time metrics;
 6. injected corruptions, leave-one-day/player replay, null permutations, and
    long stationary simulations.
 
@@ -67,7 +71,7 @@ Accuracy alone cannot distinguish calibrated confidence from overconfidence.
 For a field of `n` players, transform player `i`'s time:
 
 ```text
-x_i = ln(time_i + 4)
+x_i = ln(time_i)
 ```
 
 For each pair:
@@ -88,7 +92,7 @@ The implementation includes the player's neutral self-comparison in both
 field averages. Both self terms are `0.5`, so they cancel and only explain the
 denominator `n`.
 
-The `±8` limit activates only when the adjusted-time ratio exceeds:
+The `±8` limit activates only when the raw-time ratio exceeds:
 
 ```text
 exp(0.35 * 8) = 16.445
@@ -191,28 +195,26 @@ deltas because their expectations differed.
 | Measure | Current beta |
 |---|---:|
 | Final mean | 1200.00 |
-| Final range | 851.55–1643.42 |
-| Final standard deviation | 176.80 |
-| Mean absolute daily change | 19.65 |
-| 95th percentile absolute change | 47.42 |
-| Observed daily range | −74.60 to +70.90 |
+| Final range | 803.71–1703.72 |
+| Final standard deviation | 202.07 |
+| Mean absolute daily change | 21.13 |
+| 95th percentile absolute change | 49.63 |
+| Observed daily range | −77.49 to +72.80 |
 
 Chronological established-player evaluation produced 6,716 strict pair
 comparisons:
 
-| Measure | Result | Whole-day bootstrap 95% interval |
-|---|---:|---:|
-| Strict accuracy | 73.96% | 72.10–75.53% |
-| Strict log loss | 0.54795 | 0.5356–0.5621 |
-| Strict Brier score | 0.18275 | — |
-| Fixed soft-margin log loss | 0.62143 | 0.6080–0.6344 |
-| Fixed soft-margin Brier score | 0.05952 | — |
+| Measure | Raw-time result |
+|---|---:|
+| Strict accuracy | 74.18% |
+| Strict log loss | 0.54001 |
+| Strict Brier score | 0.17978 |
 
 The model's probabilities represent margin-weighted results, not literal win
-odds. They are intentionally underconfident against binary wins while being
-well calibrated to the soft-margin target.
+odds. Whole-day confidence intervals and fixed-target margin calibration have
+not been rerun for the raw-time retune.
 
-## Alternative-model tournament
+## Historical alternative-model tournament (four-second offset)
 
 The search covered:
 
@@ -227,7 +229,7 @@ and an untouched 12-day holdout.
 
 | Model | Holdout strict LL | Holdout soft LL | Final SD | Corruption p95 |
 |---|---:|---:|---:|---:|
-| Current pure soft | 0.55085 | 0.62712 | 176.80 | 60.66 |
+| Previous offset-four pure soft | 0.55085 | 0.62712 | 176.80 | 60.66 |
 | 95% soft + 5% strict | 0.54911 | 0.62730 | 181.71 | 61.10 |
 | Strict rank-only | 0.53051 | 0.64996 | 289.35 | 71.87 |
 | Partial Plackett–Luce | 0.54352 | 0.63407 | 230.60 | — |
@@ -254,7 +256,7 @@ stable, unbiased simulation behavior
 [G-Elo](https://arxiv.org/abs/2010.11187) likewise derives observed-minus-
 expected margin updates from an explicit probability model.
 
-## Robustness trials
+## Historical robustness trials (four-second offset)
 
 - Removing one rated day gave median final-rating RMS movement `3.37`, 95th
   percentile `14.78`, and worst final rank correlation `0.9926`.
@@ -267,8 +269,8 @@ expected margin updates from an explicit probability model.
 - In 30 equal-skill, 10,000-day simulations, the mean stayed 1200 within
   `5e-12` and rating SD stabilized around 52–54 rather than wandering upward.
 - Across 1,000 within-day time-permutation null replays, final SD averaged
-  `57.4`; its 97.5th percentile was `72.4`. The observed `176.8` separation is
-  persistent signal, not a null random walk.
+  `57.4`; its 97.5th percentile was `72.4`. The then-observed `176.8`
+  separation was persistent signal rather than a null random walk.
 - In 100 synthetic seasons, corrupting 1%, 5%, and 10% of times produced final
   RMS errors of `17.1`, `41.0`, and `59.7`, with rank correlations `0.988`,
   `0.951`, and `0.913`. Total points remained conserved.

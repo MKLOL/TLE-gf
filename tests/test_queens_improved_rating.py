@@ -63,8 +63,8 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     }
 
     assert by_time[12] - by_time[13] < by_time[13] - by_time[16]
-    assert abs((by_time[12] - by_time[13]) - 50.70) < 0.1
-    assert abs((by_time[13] - by_time[16]) - 135.52) < 0.1
+    assert abs((by_time[12] - by_time[13]) - 60.49) < 0.1
+    assert abs((by_time[13] - by_time[16]) - 156.91) < 0.1
     # The wider player-facing point scale should make the existing rank bands
     # meaningful while the underlying closeness response stays unchanged.
     assert updates['0'].delta > 34
@@ -76,12 +76,21 @@ def test_extreme_pair_evidence_is_symmetric_and_never_separates():
     extreme = _soft_time_score(1, 10 ** 10_000)
     reverse = _soft_time_score(10 ** 10_000, 1)
     cap_ratio = math.exp(_TIME_MARGIN_WIDTH * _TIME_MARGIN_LOGIT_LIMIT)
-    beyond_cap = _soft_time_score(1, (1 + 4) * cap_ratio * 10 - 4)
+    beyond_cap = _soft_time_score(1, cap_ratio * 10)
 
     assert 0 < reverse < ordinary < extreme < 1
     assert extreme == beyond_cap
     assert abs(extreme + reverse - 1) < 1e-15
     assert _soft_time_score(30, 30) == 0.5
+
+
+def test_time_transform_uses_raw_positive_seconds_without_an_offset():
+    assert _time_log(1) == 0
+    assert _time_log(4) == math.log(4)
+    expected = 1 / (1 + math.exp(-math.log(2) / _TIME_MARGIN_WIDTH))
+    assert abs(_soft_time_score(1, 2) - expected) < 1e-15
+    with pytest.raises(ValueError):
+        _time_log(0)
 
 
 def test_replay_is_deterministic_and_dedupes_by_first_message():

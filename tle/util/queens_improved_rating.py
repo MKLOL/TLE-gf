@@ -31,12 +31,9 @@ _START_RATING = 1200.0
 _RATING_POINT_SCALE = 2.0
 # Traditional Elo's base-10 scale, widened into player-facing rating points.
 _ELO_SCALE = _RATING_POINT_SCALE * 400.0 / math.log(10.0)
-# Adding a few seconds before taking logs stops a one-second gap on a very fast
-# Monday from looking like an enormous percentage difference.
-_TIME_OFFSET_SECONDS = 4
 _TIME_MARGIN_WIDTH = 0.35
 # This is a bound on one pair's *evidence*, not on a player's rating change.
-# It activates only beyond a 16.4x adjusted-time ratio and prevents malformed
+# It activates only beyond a 16.4x raw-time ratio and prevents malformed
 # or repeated extreme margins from producing numerical 0/1 separation.
 _TIME_MARGIN_LOGIT_LIMIT = 8.0
 _RATING_K = _RATING_POINT_SCALE * 72.0
@@ -70,7 +67,7 @@ def _sigmoid(value):
 
 
 def _time_log(time_seconds):
-    """Return the softened log-time used by the daily performance bracket."""
+    """Return the raw log-time used by the daily performance bracket."""
     try:
         if isinstance(time_seconds, int):
             seconds = time_seconds
@@ -81,13 +78,13 @@ def _time_log(time_seconds):
             f'Queens time must be numeric, got {time_seconds!r}.') from exc
     if (
             isinstance(seconds, float) and not math.isfinite(seconds)
-            or seconds < 0):
+            or seconds <= 0):
         raise ValueError(
-            f'Queens time must be finite and non-negative, '
+            f'Queens time must be finite and positive, '
             f'got {time_seconds!r}.')
     # Keep integer inputs as integers so even an unexpectedly huge legacy value
     # can be logged without overflowing an intermediate float conversion.
-    return math.log(seconds + _TIME_OFFSET_SECONDS)
+    return math.log(seconds)
 
 
 def _result_time_seconds(time_seconds):

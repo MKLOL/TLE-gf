@@ -30,11 +30,11 @@ explainable for a 12–20-player community.
 For player `i`, transform the time in seconds:
 
 ```text
-x_i = ln(time_i + 4)
+x_i = ln(time_i)
 ```
 
-The four-second offset is a low-time noise floor. It prevents a one-second gap
-on a very fast puzzle from looking like an enormous percentage difference.
+There is no additive time offset. The bracket therefore measures the raw time
+ratio: the same absolute gap carries more evidence on a faster puzzle.
 
 Each other time contributes a soft result, and a neutral self-result anchors
 the bracket:
@@ -49,7 +49,7 @@ smoothly toward `1` or `0`. Every person contributes at most `1/n`, so one
 extreme fastest or slowest time cannot stretch the middle of the field the way
 literal min/max normalization would.
 
-The symmetric `±8` evidence limit activates only beyond a 16.4x adjusted-time
+The symmetric `±8` evidence limit activates only beyond a 16.4x raw-time
 ratio. It prevents numerical certainty and extreme long-run pair separation;
 it is not a cap on a player's rating change.
 
@@ -113,17 +113,17 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1568 | +34.90 |
-| 8 | 1492 | +28.57 |
-| 10 | 1360 | +16.25 |
-| 12 | 1247 | +4.87 |
-| 13 | 1196 | -0.38 |
-| 16 | 1061 | -14.23 |
-| 20 | 908 | -28.61 |
-| 25 | 746 | -41.35 |
+| 7 | 1668 | +42.26 |
+| 8 | 1558 | +34.11 |
+| 10 | 1381 | +18.38 |
+| 12 | 1242 | +4.35 |
+| 13 | 1182 | -1.91 |
+| 16 | 1025 | -17.79 |
+| 20 | 853 | -33.28 |
+| 25 | 673 | -46.11 |
 
-The performance drop from 12 to 13 seconds is about 51 points; the drop from
-13 to 16 is about 136 points. The larger time gap therefore matters about 2.7
+The performance drop from 12 to 13 seconds is about 60 points; the drop from
+13 to 16 is about 157 points. The larger time gap therefore matters about 2.6
 times as much without making either result catastrophic.
 
 ## Snapshot replay
@@ -135,19 +135,19 @@ rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| New improved beta | 19.65 | 47.42 | -74.60 to +70.90 |
+| New improved beta | 21.13 | 49.63 | -77.49 to +72.80 |
 | Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
 | Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 
 The beta preserved exactly `29 × 1200 = 34,800` total points. Final observed
-ratings ranged from about `852` to `1643`, and the ordering remained close to
-the ordinary ladder (Spearman correlation `0.973`).
+ratings ranged from about `804` to `1704`, and the ordering remained close to
+the ordinary ladder (Spearman correlation `0.972`).
 
-On chronological comparisons where both players already had five rated days,
-the beta predicted the strict faster/slower order 73.90% of the time versus
-74.27% for ordinary Queens. That small loss is the intentional cost of treating
-close finishes as weaker evidence. Against the soft margin outcome it is built
-to model, the beta's log loss was `0.6214` versus `0.6555` for ordinary Queens.
+On 6,716 chronological comparisons where both players already had five rated
+days, the raw-time beta predicted the strict faster/slower order `74.18%` of
+the time, with strict log loss `0.54001`. The older offset-four robustness
+audit is retained as historical evidence; its empirical tables should not be
+read as measurements of this raw-time retune.
 
 ## Commands
 
@@ -161,4 +161,4 @@ Add `+beta` anywhere in the prefix-command arguments:
 ;queens results +beta
 ```
 
-The same views expose an `improved` boolean in their slash-command forms.
+The same views expose a `beta` boolean in their slash-command forms.
