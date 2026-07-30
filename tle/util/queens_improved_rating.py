@@ -46,7 +46,7 @@ _TIME_MARGIN_WIDTH = 0.35
 # It activates only beyond a 16.4x raw-time ratio and prevents malformed
 # or repeated extreme margins from producing numerical 0/1 separation.
 _TIME_MARGIN_LOGIT_LIMIT = 8.0
-_RATING_K = _RATING_POINT_SCALE * 72.0
+_RATING_K = _RATING_POINT_SCALE * 54.0
 
 
 @dataclass(frozen=True)

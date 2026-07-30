@@ -65,7 +65,7 @@ Each pair then receives a blended proper-score weight:
 
 ```text
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
-delta_i = (144 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+delta_i = (108 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 ```
 
 This is the rating-logit gradient of a 10% cross-entropy / 90% Brier
@@ -74,15 +74,13 @@ old update. Near a very confident `0` or `1` expectation, one contradictory
 day has less leverage, while the 10% cross-entropy floor prevents it from
 being ignored. It is a smooth formula, not a post-processing delta cap.
 
-The wider `800` expectation scale and `144` K-factor are an exact two-times
-re-expression of the original beta's rating points around the unchanged 1200
-start. Rating scales have arbitrary units—Microsoft's
+The wider `800` expectation scale keeps sustained skill differences visible
+across the existing rank bands, while the `108` K-factor reduces the weight
+of one noisy daily puzzle. Rating scales have arbitrary units—Microsoft's
 [TrueSkill explanation](https://www.microsoft.com/en-us/research/project/trueskill-ranking-system/)
 likewise calculates on one scale and multiplies into a useful display range.
-Applying the same factor to the expectation curve, update, and performance
-preserves every prediction, ordering, tie, and convergence property. It simply
-lets sustained skill differences use the rank bands already displayed by
-Queens.
+Changing K affects convergence speed and day-to-day volatility, not the
+expectation curve or its long-run equilibrium.
 
 Consequences:
 
@@ -93,7 +91,7 @@ Consequences:
   selective submission, hidden accounts, or sybils.
 - There is no post-processing cap. Every pair score and expectation is a
   probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  `|delta_i| < 144(n - 1)/n`, which is below the K-factor.
+  `|delta_i| < 108(n - 1)/n`, which is below the K-factor.
 - Inactivity never changes skill.
 - New players receive the same bounded update rule as established players.
 - Playing more days supplies more evidence but does not award rating by itself;
@@ -138,14 +136,14 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1668 | +42.26 |
-| 8 | 1558 | +34.11 |
-| 10 | 1381 | +18.38 |
-| 12 | 1242 | +4.35 |
-| 13 | 1182 | -1.91 |
-| 16 | 1025 | -17.79 |
-| 20 | 853 | -33.28 |
-| 25 | 673 | -46.11 |
+| 7 | 1668 | +31.69 |
+| 8 | 1558 | +25.58 |
+| 10 | 1381 | +13.79 |
+| 12 | 1242 | +3.26 |
+| 13 | 1182 | -1.43 |
+| 16 | 1025 | -13.34 |
+| 20 | 853 | -24.96 |
+| 25 | 673 | -34.59 |
 
 The performance drop from 12 to 13 seconds is about 60 points; the drop from
 13 to 16 is about 157 points. The larger time gap therefore matters about 2.6
@@ -178,11 +176,12 @@ rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
 |---|---:|---:|---:|
-| New improved beta | 19.25 | 45.10 | -64.69 to +63.69 |
+| Previous K=144 beta | 19.25 | 45.10 | -64.69 to +63.69 |
 | Ordinary Queens | 14.19 | 32.94 | -38.87 to +57.01 |
 | Retired Glicko beta | 27.73 | 70.85 | -286.23 to +188.84 |
 
-The beta preserved exactly `29 × 1200 = 34,800` total points. Final observed
+The previous K=144 replay preserved exactly `29 × 1200 = 34,800` total points.
+Final observed
 ratings had mean `1200.00`, standard deviation `198.27`, and range
 `814.37–1681.00`. The largest per-day zero-sum rounding error was
 `3.38e-14`.

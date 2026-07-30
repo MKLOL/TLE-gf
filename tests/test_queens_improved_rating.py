@@ -68,8 +68,8 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     assert abs((by_time[13] - by_time[16]) - 156.91) < 0.1
     # The wider player-facing point scale should make the existing rank bands
     # meaningful while the underlying closeness response stays unchanged.
-    assert updates['0'].delta > 34
-    assert updates['7'].delta < -41
+    assert updates['0'].delta > 30
+    assert updates['7'].delta < -30
 
 
 def test_extreme_pair_evidence_is_symmetric_and_never_separates():

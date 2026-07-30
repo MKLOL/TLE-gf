@@ -13,7 +13,7 @@ The current player-facing parameters are:
 - time offset `0` seconds;
 - soft-margin width `0.35`;
 - expectation scale `800 / ln(10)`;
-- K-factor `144`;
+- K-factor `108`;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
 - no field-size multiplier or post-hoc delta cap.
 
@@ -102,7 +102,7 @@ W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 Lower time is better. The update is:
 
 ```text
-delta_i = (144 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+delta_i = (108 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 ```
 
 The weight is the rating-logit gradient of a 10% cross-entropy / 90% Brier
@@ -163,10 +163,10 @@ Each pair residual lies strictly between `-1` and `1`, and there are `n - 1`
 non-self terms:
 
 ```text
-abs(delta_i) < 144 * (n - 1) / n
+abs(delta_i) < 108 * (n - 1) / n
 ```
 
-That is below 132 points in a 12-player field and below 136.8 in a 20-player
+That is below 99 points in a 12-player field and below 102.6 in a 20-player
 field. There is no post-processing delta clamp.
 
 ### One-time contamination bound
@@ -176,10 +176,10 @@ fixed, every comparison not involving `k` is bit-for-bit unchanged. For any
 other player `i`, only one term can move:
 
 ```text
-abs(delta_i_after - delta_i_before) <= 144 / n
+abs(delta_i_after - delta_i_before) <= 108 / n
 ```
 
-The limit is 12 points at `n = 12` and 7.2 at `n = 20`. The changed player's
+The limit is 9 points at `n = 12` and 5.4 at `n = 20`. The changed player's
 own time affects `n - 1` terms, so their own update can move by almost the full
 natural daily bound. The formula protects the rest of the field more strongly
 than it protects the owner of a corrupt record.
@@ -222,7 +222,7 @@ opposite-direction offset was 19.06 rating points.
 
 ## Snapshot results
 
-| Measure | Current beta |
+| Measure | Previous K=144 beta |
 |---|---:|
 | Final mean | 1200.00 |
 | Final range | 814.37–1681.00 |
@@ -239,10 +239,10 @@ odds.
 
 ### Akari snapshot cross-check
 
-The supplied Akari snapshot was replayed with the square-root accuracy
-multiplier and the same blended update:
+The supplied Akari snapshot figures below are the previous K=144 baseline
+with the square-root accuracy multiplier:
 
-| Measure | Current Akari beta |
+| Measure | Previous K=144 Akari beta |
 |---|---:|
 | Final mean | 1200.00 |
 | Final range | 830.59–1878.89 |
@@ -373,8 +373,8 @@ Future changes to `+beta` must retain:
 - solo days producing no rating signal;
 - exact ties and tied performance;
 - pair complement and round point conservation;
-- the `144(n - 1)/n` daily bound;
-- the `144/n` one-opponent contamination bound;
+- the `108(n - 1)/n` daily bound;
+- the `108/n` one-opponent contamination bound;
 - rating-translation invariance;
 - unique, result-monotone event performance;
 - Akari accuracy validation and square-root effective time;
