@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # permission to answer anything is spelled out explicitly.
 SYSTEM_INSTRUCTION = (
     'You are a helpful assistant in a Discord server whose members are mostly '
-    'competitive programmers.\nYour Name is Nanakura Rin'
+    'competitive programmers. Your name is Nanakura Rin.\n'
     'Treat that purely as background about your audience. It helps you read '
     'ambiguous shorthand — "problem" likely means a contest problem, "TLE" is '
     'a time-limit verdict, "rating" is probably Codeforces — and it tells you '
@@ -30,17 +30,20 @@ SYSTEM_INSTRUCTION = (
     'given to you — say that plainly. Do not explain it as a limitation of '
     'being an AI, do not talk about context windows or chat sessions, and do '
     'not claim the conversation does not exist.\n'
-    'You may use Google Search when a current, changing, or obscure fact '
-    'would benefit from verification (or asked). When the user asks about a public URL '
-    'such as a GitHub repository or technical documentation, use URL Context '
-    'to read that URL. Do not invent sources or claim to have read a URL that '
-    'the tool could not retrieve.\n'
+    # Only the URL Context tool is wired up in llm.py. Do not advertise web
+    # search here: told it can search, the model narrates searches it never
+    # ran, which is exactly the fabrication the last paragraph forbids.
+    'You can read a public URL that appears in the question or in the quoted '
+    'material — a GitHub repository, technical documentation, an article. Do '
+    'that when the answer depends on what the page actually says. You cannot '
+    'search the web, so do not offer to look something up, and never claim to '
+    'have read a page that could not be retrieved.\n'
     'Be concise and direct — a few short paragraphs at most, since your reply '
     'is shown in a chat message. Use Discord-flavored markdown. Put code in '
     'fenced blocks with a language tag. Do not use headings larger than bold '
     'text. If you are unsure of something, say so plainly rather than '
-    'guessing. Never claim to have run code or checked a website unless the '
-    'answer actually used the available search tool.'
+    'guessing. Never claim to have run code, and never claim to have read a '
+    'web page unless a URL was actually fetched for this answer.'
 )
 
 _IMAGE_MIME_PREFIX = 'image/'
@@ -161,13 +164,33 @@ def build_context_prompt(question, transcript, is_reply=False,
         f'{transcript}\n'
         '--- END TRANSCRIPT ---\n'
         f'{focus}\n'
-        f'The user asks, about the marked replied-to message: {asked}'
+        # Only a reply has a marked message. Saying otherwise on a plain
+        # context question points the model at something the transcript does
+        # not contain, and that is the common path now that the router
+        # prefers context.
+        + (f'The user asks, about the marked replied-to message: {asked}'
+           if focus else f'The user asks: {asked}')
     )
 
 
-def build_question_prompt(question):
-    """A plain ``;llm <question>`` with no referenced message."""
-    return question.strip()
+def build_question_prompt(question, context_requested=False):
+    """A plain ``;llm <question>`` with no referenced message.
+
+    ``context_requested`` means the router wanted channel history but none was
+    gathered — an empty channel, a lost permission, a window that aged out.
+    Saying so beats silence: the model would otherwise answer a question it
+    has been told may depend on messages it cannot see, and the system
+    instruction tells it to say plainly when a transcript is missing.
+    """
+    asked = question.strip()
+    if not context_requested:
+        return asked
+    return (
+        'No transcript of recent messages could be retrieved for this '
+        'question. Answer it as it stands; if it turns out to depend on '
+        'messages you were not given, say that plainly.\n\n'
+        f'The user asks: {asked}'
+    )
 
 
 def build_reply_prompt(question, ref_author=None, ref_content=None,

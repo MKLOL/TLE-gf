@@ -190,6 +190,22 @@ def is_invalid_key_error(status, payload):
             or 'CONSUMER_SUSPENDED' in blob)
 
 
+def is_tool_unsupported_error(status, payload):
+    """True when a 400 means "this model does not take that tool".
+
+    The ladder crosses model families, and tool support is per-model — a
+    request that a 3.x model accepts can be rejected outright by an older
+    fallback. Without this, one unsupported tool turns every ``;llm`` into a
+    hard failure, because a plain 400 is treated as a malformed request and
+    stops the retry loop.
+    """
+    if status != 400:
+        return False
+    error = (payload or {}).get('error') or {}
+    blob = f"{error.get('status', '')} {error.get('message', '')}".lower()
+    return 'tool' in blob or 'url_context' in blob or 'google_search' in blob
+
+
 # ── Network ─────────────────────────────────────────────────────────────
 
 async def generate_once(api_key, model, payload, session=None):
@@ -285,18 +301,29 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     parts = build_parts(prompt, images)
 
     last_error = None
-    last_non_capacity_error = None
     attempts = 0
     pool_drained = False
     attempted_buckets = set()
+    # Tools are dropped for the rest of the call if a model rejects them; the
+    # ladder spans model families and a tool one family supports is a 400 on
+    # another. An answer without URL reading beats no answer at all.
+    active_tools = tools
+    # Models that answered 404 during this call. A bad model id is a config
+    # error, but only for that rung of the ladder — which is the whole reason
+    # a ladder exists. Retiring just that model beats failing the command.
+    missing_models = {}
 
     def _record():
         if stats is not None:
             stats['attempts'] = attempts
 
     for _ in range(max_attempts):
+        usable = [model for model in ladder if model not in missing_models]
+        if not usable:
+            pool_drained = True
+            break
         lease = await pool.acquire(
-            models=models, exclude=attempted_buckets)
+            models=usable, exclude=attempted_buckets)
         if lease is None:
             pool_drained = True
             break
@@ -309,7 +336,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             max_output_tokens=max_output_tokens, temperature=temperature,
             thinking=llm_models.thinking_config(lease.model, tier),
             response_mime_type=response_mime_type,
-            response_schema=response_schema, tools=tools)
+            response_schema=response_schema, tools=active_tools)
 
         attempts += 1
         try:
@@ -320,7 +347,6 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                            lease.key_id, lease.model, err)
             pool.report_transient(lease)
             last_error = f'network error: {err}'
-            last_non_capacity_error = last_error
             continue
 
         if status == 200:
@@ -334,7 +360,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                     'Gemini HTTP 200 without usable text on key=%s model=%s '
                     'tools=%s body=%s',
                     lease.key_id, lease.model,
-                    [next(iter(tool), '?') for tool in (tools or [])],
+                    [next(iter(tool), '?') for tool in (active_tools or [])],
                     truncate_error(
                         json.dumps(body, ensure_ascii=False, sort_keys=True),
                         limit=4000))
@@ -342,7 +368,6 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                 # bucket globally healthy, but do not retry it in this command.
                 pool.report_success(lease)
                 last_error = str(err)
-                last_non_capacity_error = last_error
                 continue
             pool.report_success(lease)
             _record()
@@ -362,22 +387,38 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         if is_invalid_key_error(status, body):
             pool.report_invalid(lease, message=message)
             last_error = message
-            last_non_capacity_error = last_error
+            continue
+
+        if active_tools and is_tool_unsupported_error(status, body):
+            # Not a config error the user can act on and not the bucket's
+            # fault: this model just does not take this tool. Retry the same
+            # bucket once without tools rather than failing the command.
+            logger.warning('Model %s rejected tools %s (%s) — retrying '
+                           'without them', lease.model,
+                           [next(iter(tool), '?') for tool in active_tools],
+                           message)
+            active_tools = None
+            pool.report_success(lease)
+            attempted_buckets.discard((lease.key_id, lease.model))
+            last_error = message
             continue
 
         if status == 404:
-            # A bad model id is a config error — every key will fail the same
-            # way, so fail loudly instead of burning the pool discovering it.
-            _record()
-            raise ModelUnavailableError(
-                f'Model `{lease.model}` is not available: {message}')
+            # Every key will fail this model the same way, so drop the model
+            # rather than walking the pool discovering that. The next rung of
+            # the ladder still gets its turn; if the whole ladder is missing,
+            # this is reported below as the config error it is.
+            logger.warning('Gemini 404 on key=%s model=%s: %s',
+                           lease.key_id, lease.model, message)
+            missing_models[lease.model] = message
+            last_error = message
+            continue
 
         if status >= 500:
             logger.warning('Gemini %d on key=%s model=%s: %s',
                            status, lease.key_id, lease.model, message)
             pool.report_transient(lease)
             last_error = message
-            last_non_capacity_error = last_error
             continue
 
         # Anything else (a genuinely malformed request) will fail identically
@@ -386,15 +427,18 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         raise GeminiError(message)
 
     _record()
-
-    if last_non_capacity_error is not None:
-        raise GeminiError(last_non_capacity_error)
-
+    if len(missing_models) == len(ladder):
+        # Not one rung of the ladder exists. That is LLM_MODELS being wrong,
+        # not the pool being spent, and only a moderator can fix it.
+        model, message = next(iter(missing_models.items()))
+        raise ModelUnavailableError(
+            f'Model `{model}` is not available: {message}')
     if pool_drained:
         raise NoCapacityError(
             last_error or 'All Gemini model buckets are quota-limited.',
             retry_after=pool.retry_after_hint(models=models))
-
+    # The ceiling stopped us, not the quota — buckets may still be healthy, so
+    # do not quote a wait derived only from the blocked ones.
     raise NoCapacityError(
-        last_error or f'Gave up after {attempts} quota-limited attempts.',
+        last_error or f'Gave up after {attempts} failed attempts.',
         attempts_exhausted=True)

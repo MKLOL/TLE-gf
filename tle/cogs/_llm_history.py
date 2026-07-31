@@ -189,9 +189,10 @@ def format_transcript(messages, focus=None):
         if not body:
             continue
 
-        marker = ' \N{LEFTWARDS ARROW}\N{VARIATION SELECTOR-16} (the message '\
-                 'being replied to, the message being asked about)' if focus is not None and message is focus \
-                 else ''
+        is_focus = focus is not None and message is focus
+        marker = (' \N{LEFTWARDS ARROW}\N{VARIATION SELECTOR-16} (the message '
+                  'being replied to — the one being asked about)'
+                  if is_focus else '')
         line = f'{author}: {body}{marker}'
         if used + len(line) > _MAX_TRANSCRIPT_CHARS:
             lines.append('… (earlier messages omitted)')

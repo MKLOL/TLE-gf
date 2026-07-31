@@ -242,11 +242,16 @@ class Llm(commands.Cog):
                     ctx, mode, referenced, bot_user_id=self._bot_user_id())
                 prompt = llm_pipeline.build_prompt(
                     question, referenced, window, mode=mode)
-                image_messages = [referenced]
+                # Order is priority: the caps bite at LLM_MAX_IMAGES (4), and
+                # a 50-message window can hold far more than that. The message
+                # being asked about comes first, the asker's own attachment
+                # second, and history only fills whatever is left over — a
+                # screenshot someone just attached must never lose its slot to
+                # an unrelated image from half an hour ago.
+                image_messages = [referenced, ctx.message]
                 image_messages += [message for message in window
                                    if message is not referenced and
                                    message is not ctx.message]
-                image_messages.append(ctx.message)
                 attachments = llm_context.select_image_attachments(
                     image_messages,
                     constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
@@ -299,9 +304,11 @@ class Llm(commands.Cog):
                 return ('Gemini failed on every key I tried. Give it a moment '
                         'and ask again.')
             if err.retry_after:
-                return (f'Gemini has temporarily rate-limited the configured project/model. Try again '
-                        f'in {llm_format.format_duration(err.retry_after)}.')
-            return 'Gemini has temporarily rate-limited the configured project/model. Try again later.'
+                return ('Gemini has rate-limited every key and model I can '
+                        'use. Try again in '
+                        f'{llm_format.format_duration(err.retry_after)}.')
+            return ('Gemini has rate-limited every key and model I can use. '
+                    'Try again later.')
         if isinstance(err, gemini_api.BlockedError):
             return str(err)
         if isinstance(err, gemini_api.ModelUnavailableError):
