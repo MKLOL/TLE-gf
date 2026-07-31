@@ -11,6 +11,7 @@ are pure functions so they can be tested without a key or a socket. The
 retry-across-buckets loop is ``complete``.
 """
 import base64
+import json
 import logging
 
 import aiohttp
@@ -93,7 +94,7 @@ def build_parts(prompt, images=None):
 
 def build_payload(parts, system_instruction=None, max_output_tokens=None,
                   temperature=None, thinking=None, response_mime_type=None,
-                  response_schema=None):
+                  response_schema=None, tools=None):
     """Assemble a ``generateContent`` request body.
 
     ``thinking`` is the encoded reasoning config from ``llm_models`` — either
@@ -101,6 +102,8 @@ def build_payload(parts, system_instruction=None, max_output_tokens=None,
     under ``generationConfig.thinkingConfig``.
     """
     payload = {'contents': [{'role': 'user', 'parts': parts}]}
+    if tools:
+        payload['tools'] = [dict(tool) for tool in tools]
     if system_instruction:
         payload['systemInstruction'] = {'parts': [{'text': system_instruction}]}
     generation_config = {}
@@ -187,6 +190,22 @@ def is_invalid_key_error(status, payload):
             or 'CONSUMER_SUSPENDED' in blob)
 
 
+def is_tool_unsupported_error(status, payload):
+    """True when a 400 means "this model does not take that tool".
+
+    The ladder crosses model families, and tool support is per-model — a
+    request that a 3.x model accepts can be rejected outright by an older
+    fallback. Without this, one unsupported tool turns every ``;llm`` into a
+    hard failure, because a plain 400 is treated as a malformed request and
+    stops the retry loop.
+    """
+    if status != 400:
+        return False
+    error = (payload or {}).get('error') or {}
+    blob = f"{error.get('status', '')} {error.get('message', '')}".lower()
+    return 'tool' in blob or 'url_context' in blob or 'google_search' in blob
+
+
 # ── Network ─────────────────────────────────────────────────────────────
 
 async def generate_once(api_key, model, payload, session=None):
@@ -209,6 +228,36 @@ async def generate_once(api_key, model, payload, session=None):
                 body = await resp.json(content_type=None)
             except Exception:  # noqa: BLE001 — non-JSON error pages happen
                 body = {'error': {'message': truncate_error(await resp.text())}}
+            if resp.status != 200:
+                debug_headers = {
+                    name: resp.headers.get(name)
+                    for name in (
+                        'Retry-After',
+                        'X-Request-Id',
+                        'X-GUploader-UploadID',
+                        'Date',
+                    )
+                    if resp.headers.get(name)
+                }
+                logger.warning(
+                    'Gemini HTTP error model=%s status=%s headers=%s body=%s',
+                    model, resp.status, debug_headers,
+                    truncate_error(
+                        json.dumps(body, ensure_ascii=False, sort_keys=True),
+                        limit=4000))
+            elif payload.get('tools'):
+                usage = (body or {}).get('usageMetadata') or {}
+                tool_names = ','.join(
+                    next(iter(tool), '?')
+                    for tool in payload.get('tools') or [])
+                logger.info(
+                    'Gemini tool usage model=%s tools=%s prompt_tokens=%s '
+                    'tool_tokens=%s output_tokens=%s total_tokens=%s',
+                    model, tool_names,
+                    usage.get('promptTokenCount'),
+                    usage.get('toolUsePromptTokenCount'),
+                    usage.get('candidatesTokenCount'),
+                    usage.get('totalTokenCount'))
             return resp.status, body
     finally:
         if close_session:
@@ -218,7 +267,7 @@ async def generate_once(api_key, model, payload, session=None):
 async def complete(pool, prompt, images=None, system_instruction=None,
                    max_output_tokens=None, temperature=None, session=None,
                    max_attempts=None, stats=None, models=None, tier=None,
-                   response_mime_type=None, response_schema=None):
+                   response_mime_type=None, response_schema=None, tools=None):
     """Run one prompt against the pool, rotating buckets until one answers.
 
     Walks ``(key, model)`` buckets — cheapest model across every key first,
@@ -254,16 +303,31 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     last_error = None
     attempts = 0
     pool_drained = False
+    attempted_buckets = set()
+    # Tools are dropped for the rest of the call if a model rejects them; the
+    # ladder spans model families and a tool one family supports is a 400 on
+    # another. An answer without URL reading beats no answer at all.
+    active_tools = tools
+    # Models that answered 404 during this call. A bad model id is a config
+    # error, but only for that rung of the ladder — which is the whole reason
+    # a ladder exists. Retiring just that model beats failing the command.
+    missing_models = {}
 
     def _record():
         if stats is not None:
             stats['attempts'] = attempts
 
     for _ in range(max_attempts):
-        lease = await pool.acquire(models=models)
+        usable = [model for model in ladder if model not in missing_models]
+        if not usable:
+            pool_drained = True
+            break
+        lease = await pool.acquire(
+            models=usable, exclude=attempted_buckets)
         if lease is None:
             pool_drained = True
             break
+        attempted_buckets.add((lease.key_id, lease.model))
 
         # Built per attempt: a fallback can cross model families, and "off"
         # means thinkingBudget on 2.5 but has no thinkingLevel equivalent.
@@ -272,7 +336,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             max_output_tokens=max_output_tokens, temperature=temperature,
             thinking=llm_models.thinking_config(lease.model, tier),
             response_mime_type=response_mime_type,
-            response_schema=response_schema)
+            response_schema=response_schema, tools=active_tools)
 
         attempts += 1
         try:
@@ -286,9 +350,28 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             continue
 
         if status == 200:
+            try:
+                answer = extract_text(body)
+            except (BlockedError, EmptyOutputBudgetError):
+                _record()
+                raise
+            except GeminiError as err:
+                logger.warning(
+                    'Gemini HTTP 200 without usable text on key=%s model=%s '
+                    'tools=%s body=%s',
+                    lease.key_id, lease.model,
+                    [next(iter(tool), '?') for tool in (active_tools or [])],
+                    truncate_error(
+                        json.dumps(body, ensure_ascii=False, sort_keys=True),
+                        limit=4000))
+                # The endpoint and bucket responded successfully. Keep the
+                # bucket globally healthy, but do not retry it in this command.
+                pool.report_success(lease)
+                last_error = str(err)
+                continue
             pool.report_success(lease)
             _record()
-            return extract_text(body), lease
+            return answer, lease
 
         message = truncate_error(
             ((body or {}).get('error') or {}).get('message')) or f'HTTP {status}'
@@ -306,12 +389,30 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             last_error = message
             continue
 
+        if active_tools and is_tool_unsupported_error(status, body):
+            # Not a config error the user can act on and not the bucket's
+            # fault: this model just does not take this tool. Retry the same
+            # bucket once without tools rather than failing the command.
+            logger.warning('Model %s rejected tools %s (%s) — retrying '
+                           'without them', lease.model,
+                           [next(iter(tool), '?') for tool in active_tools],
+                           message)
+            active_tools = None
+            pool.report_success(lease)
+            attempted_buckets.discard((lease.key_id, lease.model))
+            last_error = message
+            continue
+
         if status == 404:
-            # A bad model id is a config error — every key will fail the same
-            # way, so fail loudly instead of burning the pool discovering it.
-            _record()
-            raise ModelUnavailableError(
-                f'Model `{lease.model}` is not available: {message}')
+            # Every key will fail this model the same way, so drop the model
+            # rather than walking the pool discovering that. The next rung of
+            # the ladder still gets its turn; if the whole ladder is missing,
+            # this is reported below as the config error it is.
+            logger.warning('Gemini 404 on key=%s model=%s: %s',
+                           lease.key_id, lease.model, message)
+            missing_models[lease.model] = message
+            last_error = message
+            continue
 
         if status >= 500:
             logger.warning('Gemini %d on key=%s model=%s: %s',
@@ -326,9 +427,15 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         raise GeminiError(message)
 
     _record()
+    if len(missing_models) == len(ladder):
+        # Not one rung of the ladder exists. That is LLM_MODELS being wrong,
+        # not the pool being spent, and only a moderator can fix it.
+        model, message = next(iter(missing_models.items()))
+        raise ModelUnavailableError(
+            f'Model `{model}` is not available: {message}')
     if pool_drained:
         raise NoCapacityError(
-            last_error or 'All Gemini keys are rate-limited or out of quota.',
+            last_error or 'All Gemini model buckets are quota-limited.',
             retry_after=pool.retry_after_hint(models=models))
     # The ceiling stopped us, not the quota — buckets may still be healthy, so
     # do not quote a wait derived only from the blocked ones.

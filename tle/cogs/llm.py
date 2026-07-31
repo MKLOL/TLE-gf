@@ -228,10 +228,6 @@ class Llm(commands.Cog):
             return
 
         models = [spec.model_id] if spec is not None else None
-        attachments = llm_context.select_image_attachments(
-            [referenced, ctx.message],
-            constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
-            max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
 
         stats, failure, mode, window = {}, None, llm_context.MODE_DIRECT, []
         try:
@@ -244,14 +240,30 @@ class Llm(commands.Cog):
                     sent_at=getattr(ctx.message, 'created_at', None))
                 window = await llm_pipeline.gather(
                     ctx, mode, referenced, bot_user_id=self._bot_user_id())
-                prompt = llm_pipeline.build_prompt(question, referenced, window)
+                prompt = llm_pipeline.build_prompt(
+                    question, referenced, window, mode=mode)
+                # Order is priority: the caps bite at LLM_MAX_IMAGES (4), and
+                # a 50-message window can hold far more than that. The message
+                # being asked about comes first, the asker's own attachment
+                # second, and history only fills whatever is left over — a
+                # screenshot someone just attached must never lose its slot to
+                # an unrelated image from half an hour ago.
+                image_messages = [referenced, ctx.message]
+                image_messages += [message for message in window
+                                   if message is not referenced and
+                                   message is not ctx.message]
+                attachments = llm_context.select_image_attachments(
+                    image_messages,
+                    constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
+                    max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
                 images = await llm_context.read_images(attachments)
                 answer, lease = await gemini_api.complete(
                     pool, prompt, images=images,
                     system_instruction=llm_context.SYSTEM_INSTRUCTION,
                     max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
                     session=self._get_session(), stats=stats,
-                    models=models, tier=tier)
+                    models=models, tier=tier,
+                    tools=[{'url_context': {}}])
         except gemini_api.GeminiError as err:
             failure = err
 
@@ -292,9 +304,11 @@ class Llm(commands.Cog):
                 return ('Gemini failed on every key I tried. Give it a moment '
                         'and ask again.')
             if err.retry_after:
-                return (f'All Gemini keys are out of quota right now. Try again '
-                        f'in {llm_format.format_duration(err.retry_after)}.')
-            return 'All Gemini keys are out of quota right now. Try again later.'
+                return ('Gemini has rate-limited every key and model I can '
+                        'use. Try again in '
+                        f'{llm_format.format_duration(err.retry_after)}.')
+            return ('Gemini has rate-limited every key and model I can use. '
+                    'Try again later.')
         if isinstance(err, gemini_api.BlockedError):
             return str(err)
         if isinstance(err, gemini_api.ModelUnavailableError):
