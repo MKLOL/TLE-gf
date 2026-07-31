@@ -128,6 +128,15 @@ class TestGrokAskFlow:
     def test_prompt_has_requested_voice_without_losing_base_rules(self):
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()
         assert 'profanity' in prompt and 'roast' in prompt
+        assert 'aggressive roast-comedy persona' in prompt
+        assert 'every ordinary low-stakes reply' in prompt
+        assert 'one or two sharp, specific' in prompt
+        assert 'direct second-person banter' in prompt
+        assert 'actually use it' in prompt
+        assert 'no slurs' in prompt and 'threats' in prompt
+        assert 'sensitive or high-stakes subjects' in prompt
+        assert 'one or two sharp, specific' not in \
+            llm_context.SYSTEM_INSTRUCTION.lower()
         assert 'competitive programmers' in prompt
         assert 'codeforces' in prompt and 'time and memory' in prompt
         assert 'proof and complexity' in prompt
