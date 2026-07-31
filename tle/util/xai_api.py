@@ -1,4 +1,4 @@
-"""Small async client and key rotator for xAI Chat Completions."""
+"""Small async client and key rotator for xAI's Responses API."""
 import asyncio
 import base64
 import logging
@@ -13,7 +13,7 @@ _AIOHTTP_CLIENT_ERROR = getattr(aiohttp, 'ClientError', OSError)
 _TRANSPORT_ERRORS = (_AIOHTTP_CLIENT_ERROR, TimeoutError)
 
 BASE_URL = 'https://api.x.ai/v1'
-_REQUEST_TIMEOUT = 60
+_REQUEST_TIMEOUT = 85
 _MAX_ERROR_CHARS = 400
 _MAX_ATTEMPTS = 8
 _IMAGE_MIMES = frozenset(('image/jpeg', 'image/png'))
@@ -74,7 +74,7 @@ def _normalize_image_mime(content_type):
 
 
 def build_user_content(prompt, images=None):
-    """Build a text turn or OpenAI-style multimodal content array."""
+    """Build a text turn or Responses-style multimodal content array."""
     supported = []
     for mime_type, raw in images or []:
         mime = _normalize_image_mime(mime_type)
@@ -83,61 +83,69 @@ def build_user_content(prompt, images=None):
             continue
         encoded = base64.b64encode(raw).decode('ascii')
         supported.append({
-            'type': 'image_url',
-            'image_url': {
-                'url': f'data:{mime};base64,{encoded}',
-                'detail': 'high',
-            },
+            'type': 'input_image',
+            'image_url': f'data:{mime};base64,{encoded}',
+            'detail': 'high',
         })
     if not supported:
         return prompt or ''
     if prompt:
-        supported.append({'type': 'text', 'text': prompt})
+        supported.append({'type': 'input_text', 'text': prompt})
     return supported
 
 
 def build_payload(model, prompt, images=None, system_instruction=None,
                   max_output_tokens=None, temperature=None,
                   reasoning_effort=None):
-    """Assemble one stateless Chat Completions request."""
-    messages = []
+    """Assemble one stateless, non-retained Responses API request."""
+    turns = []
     if system_instruction:
-        messages.append({'role': 'system', 'content': system_instruction})
-    messages.append({'role': 'user',
-                     'content': build_user_content(prompt, images)})
-    payload = {'model': model, 'messages': messages, 'stream': False}
+        turns.append({'role': 'system', 'content': system_instruction})
+    turns.append({'role': 'user',
+                  'content': build_user_content(prompt, images)})
+    payload = {
+        'model': model, 'input': turns, 'stream': False, 'store': False}
     if max_output_tokens is not None:
-        payload['max_tokens'] = max_output_tokens
+        payload['max_output_tokens'] = max_output_tokens
     if temperature is not None:
         payload['temperature'] = temperature
     if reasoning_effort is not None:
-        payload['reasoning_effort'] = reasoning_effort
+        payload['reasoning'] = {'effort': reasoning_effort}
     return payload
 
 
 def extract_text(payload):
     """Return visible answer text and the response's actual model id."""
     payload = payload or {}
-    choices = payload.get('choices') or []
-    if not choices:
-        raise XaiError('xAI returned no choices.')
-    choice = choices[0] or {}
-    message = choice.get('message') or {}
-    content = message.get('content')
-    if isinstance(content, list):
-        content = ''.join(
-            part.get('text', '') for part in content
-            if isinstance(part, dict) and part.get('type') in (None, 'text'))
-    text = content if isinstance(content, str) else ''
+    output = payload.get('output') or []
+    text_parts, refusals = [], []
+    for item in output:
+        if not isinstance(item, dict) or item.get('type') != 'message':
+            continue
+        for part in item.get('content') or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get('type') == 'output_text' and isinstance(
+                    part.get('text'), str):
+                text_parts.append(part['text'])
+            elif part.get('type') == 'refusal':
+                refusals.append(part.get('refusal') or part.get('text') or '')
+    text = ''.join(text_parts)
     if not text.strip():
-        refusal = message.get('refusal')
-        if refusal:
-            raise BlockedError(f'xAI refused the request: {truncate_error(refusal)}')
-        if choice.get('finish_reason') in ('content_filter', 'safety'):
+        if any(refusals):
+            refusal = truncate_error(' '.join(value for value in refusals if value))
+            raise BlockedError(f'xAI refused the request: {refusal}')
+        details = payload.get('incomplete_details') or {}
+        reason = details.get('reason') if isinstance(details, dict) else details
+        if reason in ('content_filter', 'safety'):
             raise BlockedError('xAI withheld the answer for safety reasons.')
-        raise XaiError(
-            f'xAI returned an empty answer (finish_reason={choice.get("finish_reason")}).')
-    if choice.get('finish_reason') == 'length':
+        upstream = error_message(payload)
+        if upstream:
+            raise XaiError(upstream)
+        raise XaiError(f'xAI returned an empty answer (status={payload.get("status")}).')
+    details = payload.get('incomplete_details') or {}
+    reason = details.get('reason') if isinstance(details, dict) else details
+    if payload.get('status') == 'incomplete' and reason == 'max_output_tokens':
         text += '\n\n*(truncated — hit the output length limit)*'
     return text, payload.get('model')
 
@@ -196,18 +204,36 @@ def is_model_access_error(status, message):
     return 'model' in normalized and any(word in normalized for word in access)
 
 
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _record_stats(stats, attempts, payload=None):
     if stats is None:
         return
     stats['attempts'] = stats.get('attempts', 0) + attempts
     usage = (payload or {}).get('usage') or {}
-    fields = {
-        'input_tokens': 'prompt_tokens',
-        'output_tokens': 'completion_tokens',
-        'total_tokens': 'total_tokens',
-    }
-    for target, source in fields.items():
+    fields = (
+        ('input_tokens', 'input_tokens', 'prompt_tokens'),
+        ('output_tokens', 'output_tokens', None),
+        ('total_tokens', 'total_tokens', None),
+    )
+    input_value = usage.get('input_tokens', usage.get('prompt_tokens'))
+    for target, source, legacy_source in fields:
         value = usage.get(source)
+        if value is None and legacy_source:
+            value = usage.get(legacy_source)
+        if target == 'output_tokens' and value is None:
+            total = usage.get('total_tokens')
+            if _is_number(total) and _is_number(input_value):
+                value = max(0, total - input_value)
+            else:
+                value = usage.get('completion_tokens')
+                details = usage.get('completion_tokens_details') or {}
+                reasoning = (details.get('reasoning_tokens')
+                             if isinstance(details, dict) else None)
+                if _is_number(reasoning):
+                    value = (value if _is_number(value) else 0) + reasoning
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             stats[target] = stats.get(target, 0) + value
     raw_cost = usage.get('cost_in_usd_ticks')
@@ -241,7 +267,7 @@ async def generate_once(api_key, payload, session=None):
         session = aiohttp.ClientSession()
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
-        async with session.post(f'{BASE_URL}/chat/completions', json=payload,
+        async with session.post(f'{BASE_URL}/responses', json=payload,
                                 headers=headers, timeout=timeout) as resp:
             try:
                 body = await resp.json(content_type=None)

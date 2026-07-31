@@ -1,6 +1,7 @@
 """High-signal routing and transcript-relevance regression tests."""
 import pytest
 
+from tle import constants
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_pipeline as llm_pipeline
@@ -132,8 +133,9 @@ class TestProviderRouting:
         mode = run(llm_pipeline.classify_grok(
             None, 'does their reasoning hold?', False))
         assert mode == llm_context.MODE_CONTEXT
-        assert seen['reasoning_effort'] == 'none'
-        assert seen['max_output_tokens'] == 32
+        assert seen['reasoning_effort'] == 'low'
+        assert seen['max_output_tokens'] == \
+            constants.XAI_ROUTER_MAX_OUTPUT_TOKENS == 256
 
     def test_context_switch_still_disables_nonreply_history(
             self, monkeypatch):

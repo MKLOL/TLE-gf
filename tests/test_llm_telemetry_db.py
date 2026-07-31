@@ -1,6 +1,7 @@
 """Security, telemetry, and budget DB behavior for LLM requests."""
 import sqlite3
 
+from tle import constants
 from tle.util.db.llm_db import key_fingerprint
 from tle.util.db.user_db_conn import namedtuple_factory
 from tle.util.db.user_db_upgrades import (
@@ -91,11 +92,26 @@ def test_xai_cost_prefers_exact_stage_cost_and_estimates_missing_stage():
     exact = {'cost_microusd': 7, 'input_tokens': 9999,
              'output_tokens': 9999}
     estimated = {'input_tokens': 4, 'output_tokens': 2}
-    expected_estimate = 4 * 1.25 + 2 * 2.50
+    expected_estimate = (
+        4 * constants.XAI_INPUT_USD_PER_MILLION
+        + 2 * constants.XAI_OUTPUT_USD_PER_MILLION)
     assert accounting.xai_cost_microusd(exact, estimated) == \
         7 + int(expected_estimate)
     assert accounting.has_xai_cost_observation({'cost_microusd': 0})
     assert not accounting.has_xai_cost_observation({'attempts': 1})
+
+
+def test_xai_default_reservation_stays_inside_private_daily_budget():
+    expected = (
+        constants.XAI_REQUEST_RESERVE_INPUT_TOKENS
+        * constants.XAI_INPUT_USD_PER_MILLION
+        + (constants.XAI_MAX_OUTPUT_TOKENS
+           + constants.XAI_ROUTER_MAX_OUTPUT_TOKENS)
+        * constants.XAI_OUTPUT_USD_PER_MILLION)
+    assert accounting.xai_reservation_microusd() == int(expected)
+    assert accounting.daily_budget_microusd() == 300_000
+    assert accounting.xai_reservation_microusd() < \
+        accounting.daily_budget_microusd()
 
 
 def test_1_48_migration_is_idempotent_and_preserves_old_ledger_rows():

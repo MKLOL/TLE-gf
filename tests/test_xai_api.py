@@ -1,4 +1,4 @@
-"""Tests for the native xAI Chat Completions client."""
+"""Tests for the native xAI Responses API client."""
 import base64
 
 import pytest
@@ -7,14 +7,21 @@ from tle.util import xai_api
 from tests.llm_test_utils import FakeLlmDb, run
 
 
-def _response(text='ok', model='grok-test', finish_reason='stop'):
-    return {
+def _response(text='ok', model='grok-test', status='completed',
+              incomplete_reason=None):
+    body = {
         'model': model,
-        'choices': [{
-            'message': {'role': 'assistant', 'content': text},
-            'finish_reason': finish_reason,
+        'status': status,
+        'output': [{
+            'type': 'message',
+            'role': 'assistant',
+            'content': ([{'type': 'output_text', 'text': text}]
+                        if text is not None else []),
         }],
     }
+    if incomplete_reason is not None:
+        body['incomplete_details'] = {'reason': incomplete_reason}
+    return body
 
 
 @pytest.fixture
@@ -59,17 +66,17 @@ class TestBuildUserContent:
         ])
 
         assert [part['type'] for part in content] == [
-            'image_url', 'image_url', 'image_url', 'text']
-        first_url = content[0]['image_url']['url']
-        second_url = content[1]['image_url']['url']
+            'input_image', 'input_image', 'input_image', 'input_text']
+        first_url = content[0]['image_url']
+        second_url = content[1]['image_url']
         assert first_url.startswith('data:image/png;base64,')
         assert second_url.startswith('data:image/jpeg;base64,')
         assert base64.b64decode(first_url.partition(',')[2]) == b'PNG'
         assert base64.b64decode(second_url.partition(',')[2]) == b'JPEG'
-        assert content[2]['image_url']['url'].startswith(
-            'data:image/jpeg;base64,')
-        assert content[0]['image_url']['detail'] == 'high'
-        assert content[-1] == {'type': 'text', 'text': 'inspect these'}
+        assert content[2]['image_url'].startswith('data:image/jpeg;base64,')
+        assert content[0]['detail'] == 'high'
+        assert content[-1] == {
+            'type': 'input_text', 'text': 'inspect these'}
 
     @pytest.mark.parametrize('mime', [
         'image/webp', 'image/heic', 'image/gif', None, 'text/plain',
@@ -82,16 +89,16 @@ class TestBuildUserContent:
         content = xai_api.build_user_content('question', [
             ('image/webp', b'no'), ('IMAGE/PNG', b'yes')])
         assert len(content) == 2
-        assert content[0]['image_url']['url'].startswith(
-            'data:image/png;base64,')
+        assert content[0]['image_url'].startswith('data:image/png;base64,')
 
 
 class TestBuildPayload:
     def test_minimal_payload(self):
         assert xai_api.build_payload('grok-a', 'hello') == {
             'model': 'grok-a',
-            'messages': [{'role': 'user', 'content': 'hello'}],
+            'input': [{'role': 'user', 'content': 'hello'}],
             'stream': False,
+            'store': False,
         }
 
     def test_system_and_generation_options(self):
@@ -99,13 +106,13 @@ class TestBuildPayload:
             'grok-a', 'hello', system_instruction='be sharp',
             max_output_tokens=321, temperature=0.25,
             reasoning_effort='low')
-        assert payload['messages'][0] == {
+        assert payload['input'][0] == {
             'role': 'system', 'content': 'be sharp'}
-        assert payload['messages'][1] == {
+        assert payload['input'][1] == {
             'role': 'user', 'content': 'hello'}
-        assert payload['max_tokens'] == 321
+        assert payload['max_output_tokens'] == 321
         assert payload['temperature'] == 0.25
-        assert payload['reasoning_effort'] == 'low'
+        assert payload['reasoning'] == {'effort': 'low'}
 
 
 class TestExtractText:
@@ -116,22 +123,23 @@ class TestExtractText:
 
     def test_joins_typed_text_parts(self):
         body = _response()
-        body['choices'][0]['message']['content'] = [
-            {'type': 'text', 'text': 'part one'},
-            {'type': 'image_url', 'text': 'ignored'},
-            {'text': ' and two'},
+        body['output'][0]['content'] = [
+            {'type': 'output_text', 'text': 'part one'},
+            {'type': 'input_image', 'text': 'ignored'},
+            {'type': 'output_text', 'text': ' and two'},
         ]
         assert xai_api.extract_text(body)[0] == 'part one and two'
 
     def test_length_finish_marks_the_answer_truncated(self):
         answer, _ = xai_api.extract_text(
-            _response('partial', finish_reason='length'))
+            _response('partial', status='incomplete',
+                      incomplete_reason='max_output_tokens'))
         assert answer.startswith('partial')
         assert 'truncated' in answer
 
-    def test_missing_choices_raises(self):
-        with pytest.raises(xai_api.XaiError, match='no choices'):
-            xai_api.extract_text({'choices': []})
+    def test_missing_output_raises(self):
+        with pytest.raises(xai_api.XaiError, match='empty answer'):
+            xai_api.extract_text({'output': [], 'status': 'completed'})
 
     def test_empty_content_raises(self):
         with pytest.raises(xai_api.XaiError, match='empty answer'):
@@ -139,14 +147,23 @@ class TestExtractText:
 
     def test_refusal_raises_blocked_with_bounded_text(self):
         body = _response(None)
-        body['choices'][0]['message']['refusal'] = 'no ' * 1000
+        body['output'][0]['content'] = [{
+            'type': 'refusal', 'refusal': 'no ' * 1000}]
         with pytest.raises(xai_api.BlockedError) as excinfo:
             xai_api.extract_text(body)
         assert len(str(excinfo.value)) < 500
 
     def test_content_filter_finish_raises_blocked(self):
         with pytest.raises(xai_api.BlockedError, match='safety'):
-            xai_api.extract_text(_response('', finish_reason='content_filter'))
+            xai_api.extract_text(_response(
+                '', status='incomplete', incomplete_reason='content_filter'))
+
+    def test_failed_response_surfaces_bounded_provider_error(self):
+        with pytest.raises(xai_api.XaiError, match='overloaded'):
+            xai_api.extract_text({
+                'status': 'failed', 'output': [],
+                'error': {'message': 'overloaded'},
+            })
 
 
 class TestErrorText:
@@ -200,8 +217,8 @@ class TestComplete:
         assert lease.model == 'grok-test'
         payload = calls[0]['payload']
         assert payload['model'] == 'grok-configured'
-        assert payload['messages'][0]['content'] == 'system'
-        assert payload['max_tokens'] == 99
+        assert payload['input'][0]['content'] == 'system'
+        assert payload['max_output_tokens'] == 99
 
     def test_response_model_replaces_configured_model_in_lease(
             self, pool, monkeypatch):
@@ -345,7 +362,7 @@ class TestAttemptAccounting:
 
 
 class TestGenerateOnce:
-    def test_posts_to_chat_completions_with_bearer_auth(self):
+    def test_posts_to_responses_with_bearer_auth(self):
         class Response:
             status = 200
             headers = {'x-test': 'yes'}
@@ -372,7 +389,7 @@ class TestGenerateOnce:
         status, body, headers = run(xai_api.generate_once(
             'secret-value', payload, session=session))
         url, kwargs = session.call
-        assert url == 'https://api.x.ai/v1/chat/completions'
+        assert url == 'https://api.x.ai/v1/responses'
         assert kwargs['headers']['Authorization'] == 'Bearer secret-value'
         assert kwargs['headers']['Content-Type'] == 'application/json'
         assert kwargs['json'] is payload

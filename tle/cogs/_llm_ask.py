@@ -251,7 +251,7 @@ async def ask_grok(cog, ctx, question):
             pool, prompt, images=images,
             system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
             max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
-            reasoning_effort='none', session=cog._get_session(),
+            reasoning_effort='medium', session=cog._get_session(),
             stats=answer_stats, models=constants.XAI_MODELS)
         return answer, explicit
 

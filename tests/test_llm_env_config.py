@@ -111,12 +111,12 @@ class TestXaiEnvironment:
     def test_default_model_is_current_grok(self, monkeypatch):
         monkeypatch.delenv('XAI_MODEL', raising=False)
         module = _load_constants('_constants_xai_default')
-        assert module.XAI_MODEL == 'grok-4.3'
+        assert module.XAI_MODEL == 'grok-4.5'
 
     def test_empty_model_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv('XAI_MODEL', '   ')
         module = _load_constants('_constants_xai_empty_model')
-        assert module.XAI_MODEL == 'grok-4.3'
+        assert module.XAI_MODEL == 'grok-4.5'
 
     def test_singular_and_plural_key_settings_are_merged(self, monkeypatch):
         monkeypatch.setenv('XAI_API_KEY', 'xai-single')
@@ -126,11 +126,15 @@ class TestXaiEnvironment:
 
     def test_credit_guard_defaults_are_conservative(self, monkeypatch):
         for name in ('XAI_MAX_OUTPUT_TOKENS', 'XAI_USER_RATE_LIMIT',
-                     'XAI_USER_RATE_WINDOW_SECONDS',
-                     'XAI_DAILY_REQUEST_LIMIT'):
+                     'XAI_USER_RATE_WINDOW_SECONDS', 'XAI_DAILY_REQUEST_LIMIT',
+                     'XAI_INPUT_USD_PER_MILLION',
+                     'XAI_OUTPUT_USD_PER_MILLION', 'XAI_DAILY_BUDGET_USD'):
             monkeypatch.delenv(name, raising=False)
         module = _load_constants('_constants_xai_limits')
-        assert module.XAI_MAX_OUTPUT_TOKENS == 512
-        assert module.XAI_USER_RATE_LIMIT == 10
+        assert module.XAI_MAX_OUTPUT_TOKENS == 1536
+        assert module.XAI_USER_RATE_LIMIT == 30
         assert module.XAI_USER_RATE_WINDOW_SECONDS == 30 * 60
-        assert module.XAI_DAILY_REQUEST_LIMIT == 100
+        assert module.XAI_DAILY_REQUEST_LIMIT == 300
+        assert module.XAI_INPUT_USD_PER_MILLION == 2.00
+        assert module.XAI_OUTPUT_USD_PER_MILLION == 6.00
+        assert module.XAI_DAILY_BUDGET_USD == 0.30

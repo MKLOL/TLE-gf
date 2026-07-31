@@ -50,11 +50,11 @@ class TestGrokLimitGate:
 
         assert ctx.text == (
             'ALERT: Grok is taking a breather right now. Try again later.')
-        hidden = ('10', '30', '100', 'minute', 'daily', 'quota', 'limit')
+        hidden = ('30', '300', '0.3', 'minute', 'daily', 'quota', 'limit')
         assert not any(word in ctx.text.casefold() for word in hidden)
         assert db.llm_get_usage(100, 1, llm_cog._today()) == 0
 
-    def test_cross_guild_tenth_allowed_and_eleventh_blocked_for_moderator(
+    def test_cross_guild_user_limit_is_enforced_for_moderator(
             self, cog, db, monkeypatch):
         _add_xai_key(db)
         seen = _xai_answers(monkeypatch)

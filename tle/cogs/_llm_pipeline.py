@@ -6,7 +6,7 @@ chosen conversation window and builds the final prompt. Keeping this out of
 the cog leaves the cog to commands and Discord I/O.
 
 When needed, Gemini routing is charged to the *cheapest* model in the ladder;
-Grok routes through xAI with reasoning disabled and a tiny output cap.
+Grok routes through xAI with low reasoning and a small output cap.
 """
 import asyncio
 import logging
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # Thinking is set to the model's lowest tier as well, so the cap is slack
 # rather than load-bearing.
 _CLASSIFIER_MAX_TOKENS = 512
-_GROK_CLASSIFIER_MAX_TOKENS = 32
 
 # Force a valid label instead of hoping for one bare word. Same approach as
 # MKLOL/TLE-gf#10, which uses responseSchema on its classifier.
@@ -114,9 +113,9 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
                     author_id=author_id, sent_at=sent_at,
                     has_current_images=has_current_images),
                 system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
-                max_output_tokens=_GROK_CLASSIFIER_MAX_TOKENS,
+                max_output_tokens=constants.XAI_ROUTER_MAX_OUTPUT_TOKENS,
                 temperature=0,
-                reasoning_effort='none',
+                reasoning_effort='low',
                 session=session,
                 stats=stats,
                 max_attempts=2),

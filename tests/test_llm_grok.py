@@ -41,6 +41,12 @@ def _xai_answers(monkeypatch, answer='Grok answer', model='grok-live'):
 
     async def fake_complete(pool, prompt, **kwargs):
         seen.append({'prompt': prompt, 'kwargs': kwargs})
+        stats = kwargs.get('stats')
+        if stats is not None:
+            stats['attempts'] = stats.get('attempts', 0) + 1
+            stats['input_tokens'] = stats.get('input_tokens', 0) + 1
+            stats['output_tokens'] = stats.get('output_tokens', 0) + 1
+            stats['total_tokens'] = stats.get('total_tokens', 0) + 2
         return answer, xai_api.Lease(1, 'redacted', 'test', model)
 
     monkeypatch.setattr(xai_api, 'complete', fake_complete)
@@ -112,25 +118,27 @@ class TestGrokAskFlow:
         assert len(seen) == 2
         assert seen[0]['kwargs']['system_instruction'] == \
             llm_context.CLASSIFIER_INSTRUCTION
-        assert seen[0]['kwargs']['reasoning_effort'] == 'none'
+        assert seen[0]['kwargs']['reasoning_effort'] == 'low'
         assert seen[1]['kwargs']['system_instruction'] == \
             llm_context.GROK_SYSTEM_INSTRUCTION
         assert seen[1]['kwargs']['max_output_tokens'] == \
-            constants.XAI_MAX_OUTPUT_TOKENS == 512
-        assert seen[1]['kwargs']['reasoning_effort'] == 'none'
+            constants.XAI_MAX_OUTPUT_TOKENS == 1536
+        assert seen[1]['kwargs']['reasoning_effort'] == 'medium'
 
     def test_prompt_has_requested_voice_without_losing_base_rules(self):
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()
         assert 'profanity' in prompt and 'roast' in prompt
         assert 'competitive programmers' in prompt
-        assert 'less accurate' in prompt
+        assert 'codeforces' in prompt and 'time and memory' in prompt
+        assert 'proof and complexity' in prompt
+        assert 'technical accuracy' in prompt
         assert 'under 150 words' in prompt
 
     def test_answer_footer_uses_actual_grok_model(self, cog, monkeypatch):
-        _xai_answers(monkeypatch, model='grok-4.3')
+        _xai_answers(monkeypatch, model='grok-4.5')
         ctx = FakeCtx()
         _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok hello')
-        assert ctx.sent[-1].footer['text'] == 'grok-4.3'
+        assert ctx.sent[-1].footer['text'] == 'grok-4.5'
 
     def test_reply_text_and_image_follow_the_existing_pipeline(
             self, cog, monkeypatch):

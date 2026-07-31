@@ -34,20 +34,21 @@ export GEMINI_API_KEYS=""
 # API use requires prepaid credits or an invoiced account; a valid key alone
 # does not grant model access. XAI_API_KEYS (comma-separated) is also accepted.
 export XAI_API_KEY=""
-export XAI_MODEL="grok-4.3"
+export XAI_MODEL="grok-4.5"
 # Optional strongest-to-weakest fallback ladder. Every listed model may have a
 # different price; update the cost settings below to the most expensive one.
-export XAI_MODELS="grok-4.3"
+export XAI_MODELS="grok-4.5"
 # Grok-only credit guard. Discord users receive generic retry messages; these
-# thresholds are not exposed by bot commands or denial responses.
-export XAI_MAX_OUTPUT_TOKENS="512"
-export XAI_USER_RATE_LIMIT="10"
+# thresholds are not exposed by bot commands or denial responses. The output
+# cap covers both Grok's hidden reasoning and its visible answer.
+export XAI_MAX_OUTPUT_TOKENS="1536"
+export XAI_USER_RATE_LIMIT="30"
 export XAI_USER_RATE_WINDOW_SECONDS="1800"
-export XAI_DAILY_REQUEST_LIMIT="100"
+export XAI_DAILY_REQUEST_LIMIT="300"
 # Private spend guard; ordinary users only receive a generic breather message.
-export XAI_DAILY_BUDGET_USD="1.00"
-export XAI_INPUT_USD_PER_MILLION="1.25"
-export XAI_OUTPUT_USD_PER_MILLION="2.50"
+export XAI_DAILY_BUDGET_USD="0.30"
+export XAI_INPUT_USD_PER_MILLION="2.00"
+export XAI_OUTPUT_USD_PER_MILLION="6.00"
 export XAI_REQUEST_RESERVE_INPUT_TOKENS="6000"
 
 # End-to-end request/concurrency protection.
