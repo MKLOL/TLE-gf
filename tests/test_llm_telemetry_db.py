@@ -80,6 +80,39 @@ def test_xai_budget_reservation_is_atomic_and_reconcilable():
             summary.guarded_microusd) == (2, 100, 700)
 
 
+def test_xai_daily_limit_reset_is_utc_bounded_and_keeps_telemetry():
+    db = FakeLlmDb()
+    day_start = 2 * 86_400
+    rows = [
+        ('before', day_start - 1),
+        ('start', day_start),
+        ('today', day_start + 123),
+        ('next', day_start + 86_400),
+    ]
+    with db.conn:
+        db.conn.executemany(
+            'INSERT INTO llm_xai_request (user_id, requested_at) VALUES (?, ?)',
+            rows)
+    db.llm_record_request(
+        1, 7, 'xai', '1970-01-03', 'success', cost_microusd=99,
+        now=day_start + 10)
+
+    assert db.llm_reset_xai_daily_limits(now=day_start + 500) == 2
+    remaining = db.conn.execute(
+        'SELECT requested_at FROM llm_xai_request ORDER BY requested_at'
+    ).fetchall()
+    assert [row.requested_at for row in remaining] == [
+        day_start - 1, day_start + 86_400]
+    summary = db.llm_provider_summary('xai', '1970-01-03')
+    assert (summary.calls, summary.cost_microusd) == (1, 99)
+    assert db.llm_reserve_xai_request(
+        'before', user_limit=1, window_seconds=3600, daily_limit=200,
+        now=day_start + 500) == 'user'
+    assert db.llm_reserve_xai_request(
+        'new', user_limit=1, window_seconds=3600, daily_limit=200,
+        now=day_start + 500) is None
+
+
 def test_telemetry_retention_is_bounded():
     db = FakeLlmDb()
     for timestamp in (10, 20):

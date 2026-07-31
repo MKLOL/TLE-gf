@@ -380,6 +380,17 @@ class LlmDbMixin(LlmTelemetryDbMixin):
             FROM llm_xai_request WHERE requested_at >= ?
         ''', (day_start,)).fetchone()
 
+    def llm_reset_xai_daily_limits(self, now=None):
+        """Clear Grok guard reservations from the current UTC day."""
+        now = time.time() if now is None else float(now)
+        day_start = int(now // 86400) * 86400
+        with self.conn:
+            cursor = self.conn.execute(
+                'DELETE FROM llm_xai_request '
+                'WHERE requested_at >= ? AND requested_at < ?',
+                (day_start, day_start + 86400))
+        return cursor.rowcount
+
     # ── Per-user daily usage ────────────────────────────────────────────
 
     def llm_bump_usage(self, guild_id, user_id, day):

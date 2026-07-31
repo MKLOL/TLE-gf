@@ -308,8 +308,8 @@ class TestCommandDispatch:
     def test_ai_alias_and_access_subcommands_are_registered(self):
         group = llm_cog.Llm.llm
         assert 'ai' in group.aliases
-        assert {'ban', 'unban', 'banlist', 'disable', 'enable'} <= set(
-            group.all_commands)
+        assert {'ban', 'unban', 'banlist', 'disable', 'enable',
+                'grokreset'} <= set(group.all_commands)
 
     @pytest.mark.parametrize('question,expected', [
         ('"disable here"', 'disable here'),

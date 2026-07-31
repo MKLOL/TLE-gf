@@ -100,6 +100,18 @@ class LlmCommandsMixin:
             description=f'{health}\n\n{report}\n{ledger}',
             color=discord_common._ALERT_AMBER))
 
+    @llm.command(brief='Reset today\'s Grok limits (admin/mod only)')
+    async def grokreset(self, ctx):
+        if not await self._require_guild_moderator(ctx):
+            return
+        cleared = self._llm_db().llm_reset_xai_daily_limits()
+        logger.warning(
+            'Grok daily limits reset by user=%s guild=%s; cleared=%s',
+            ctx.author.id, ctx.guild.id, cleared)
+        await ctx.send(embed=discord_common.embed_success(
+            'Grok usage limits were reset bot-wide for the current UTC day. '
+            'Provider telemetry was kept.'))
+
     @llm.command(brief='Reset provider health circuits (bot owner only)')
     async def healthreset(self, ctx, provider: str, key_id: int = None,
                           model: str = None):

@@ -131,6 +131,37 @@ class TestOwnerStatus:
         assert 'Reset' in ctx.text
 
 
+class TestGrokLimitReset:
+    @staticmethod
+    def _reserve_today(database):
+        return database.llm_reserve_xai_request(
+            7, user_limit=15, window_seconds=3600, daily_limit=200,
+            now=time.time())
+
+    @pytest.mark.parametrize('role', (
+        constants.TLE_ADMIN, constants.TLE_MODERATOR,
+    ))
+    def test_admin_and_moderator_can_reset_today(self, role, db):
+        assert self._reserve_today(db) is None
+        ctx = FakeCtx(roles=(role,))
+
+        _invoke(llm_cog.Llm.grokreset, llm_cog.Llm(bot=None), ctx)
+
+        assert db.llm_xai_daily_summary().calls == 0
+        assert 'current UTC day' in ctx.text
+        assert 'bot-wide' in ctx.text
+        assert 'telemetry was kept' in ctx.text
+
+    def test_regular_user_cannot_reset_today(self, db):
+        assert self._reserve_today(db) is None
+        ctx = FakeCtx()
+
+        _invoke(llm_cog.Llm.grokreset, llm_cog.Llm(bot=None), ctx)
+
+        assert db.llm_xai_daily_summary().calls == 1
+        assert 'admins or moderators' in ctx.text
+
+
 class TestContextPrivacyPolicy:
     @staticmethod
     def _config_db(database):
