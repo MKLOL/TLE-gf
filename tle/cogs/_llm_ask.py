@@ -254,7 +254,8 @@ async def ask_grok(cog, ctx, question):
             guild_id=ctx.guild.id, model=constants.XAI_MODELS[0],
             reserved_microusd=accounting.xai_reservation_microusd(),
             daily_budget_microusd=accounting.daily_budget_microusd(),
-            return_id=True)
+            return_id=True,
+            enforce_user_limit=not cog._is_privileged(ctx.author))
         if isinstance(reservation_id, str):
             raise _GrokGuardError(
                 str(reservation_id), getattr(reservation_id, 'retry_at', None))

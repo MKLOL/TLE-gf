@@ -281,13 +281,16 @@ class LlmDbMixin(LlmTelemetryDbMixin):
     def llm_reserve_xai_request(self, user_id, user_limit, window_seconds,
                                 daily_limit, now=None, *, guild_id=None,
                                 model=None, reserved_microusd=0,
-                                daily_budget_microusd=0, return_id=False):
+                                daily_budget_microusd=0, return_id=False,
+                                enforce_user_limit=True):
         """Atomically reserve one Grok invocation.
 
         Returns ``None`` when accepted (or the row id with ``return_id=True``),
         or a string-compatible :class:`XaiRequestDenial`. Its ``retry_at`` is
         the first guaranteed opening, accounting for simultaneous guards. A
         reservation is kept on failure so failures cannot bypass protection.
+        ``enforce_user_limit=False`` skips only the personal rolling guard;
+        shared daily count and spend protection always remain active.
         """
         now = time.time() if now is None else float(now)
         user_id = str(user_id)
@@ -303,15 +306,17 @@ class LlmDbMixin(LlmTelemetryDbMixin):
             self.conn.execute(
                 'DELETE FROM llm_xai_request WHERE requested_at < ?',
                 (retain_after,))
-            user_count = self.conn.execute(
-                'SELECT COUNT(*) AS count FROM llm_xai_request '
-                'WHERE user_id = ? AND requested_at > ?',
-                (user_id, window_cutoff)).fetchone().count
+            user_count = None
+            if enforce_user_limit:
+                user_count = self.conn.execute(
+                    'SELECT COUNT(*) AS count FROM llm_xai_request '
+                    'WHERE user_id = ? AND requested_at > ?',
+                    (user_id, window_cutoff)).fetchone().count
             daily_count = self.conn.execute(
                 'SELECT COUNT(*) AS count FROM llm_xai_request '
                 'WHERE requested_at >= ?', (day_start,)).fetchone().count
             denials = []
-            if user_count >= user_limit:
+            if enforce_user_limit and user_count >= user_limit:
                 retry_at = None
                 if user_limit > 0:
                     row = self.conn.execute(

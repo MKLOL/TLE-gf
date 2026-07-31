@@ -132,7 +132,7 @@ class TestXaiEnvironment:
             monkeypatch.delenv(name, raising=False)
         module = _load_constants('_constants_xai_limits')
         assert module.XAI_MAX_OUTPUT_TOKENS == 1536
-        assert module.XAI_USER_RATE_LIMIT == 20
+        assert module.XAI_USER_RATE_LIMIT == 15
         assert module.XAI_USER_RATE_WINDOW_SECONDS == 60 * 60
         assert module.XAI_DAILY_REQUEST_LIMIT == 200
         assert module.XAI_INPUT_USD_PER_MILLION == 2.00

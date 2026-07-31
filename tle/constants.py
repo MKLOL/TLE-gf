@@ -139,12 +139,13 @@ XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.5').strip() or 'grok-4.5'
 # the default so deployments opt into—and knowingly price—fallback models.
 XAI_MODELS = tuple(m.strip() for m in os.environ.get(
     'XAI_MODELS', XAI_MODEL).split(',') if m.strip()) or (XAI_MODEL,)
-# Grok uses a smaller answer budget and a persistent credit guard. Count-limit
-# denials tell users when a slot returns; the private spend threshold remains
-# hidden. Gemini remains uncapped by the bot.
+# Grok uses a smaller answer budget and a persistent credit guard. The user
+# limit applies to regular members; Admin/Moderator roles bypass only that
+# guard. Denials tell users when a slot returns, while spend stays private.
+# Gemini remains uncapped by the bot.
 XAI_MAX_OUTPUT_TOKENS = _int_env('XAI_MAX_OUTPUT_TOKENS', 1536)
 XAI_ROUTER_MAX_OUTPUT_TOKENS = 256
-XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 20)
+XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 15)
 XAI_USER_RATE_WINDOW_SECONDS = _int_env(
     'XAI_USER_RATE_WINDOW_SECONDS', 60 * 60)
 XAI_DAILY_REQUEST_LIMIT = _int_env('XAI_DAILY_REQUEST_LIMIT', 200)

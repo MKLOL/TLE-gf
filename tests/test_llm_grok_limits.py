@@ -55,7 +55,7 @@ class TestGrokLimitGate:
             messages[reason] = ctx.text
 
         assert messages['user'] == (
-            'ALERT: You have used all 20 Grok requests available to you in '
+            'ALERT: You have used all 15 Grok requests available to you in '
             'the last hour. Try again <t:2000000001:R> '
             '(<t:2000000001:F>).')
         shared = (
@@ -66,22 +66,43 @@ class TestGrokLimitGate:
         assert not any(word in shared.casefold() for word in hidden)
         assert db.llm_get_usage(100, 1, llm_cog._today()) == 0
 
-    def test_cross_guild_user_limit_is_enforced_for_moderator(
+    def test_cross_guild_user_limit_is_enforced_for_regular_user(
             self, cog, db, monkeypatch):
         _add_xai_key(db)
         seen = _xai_answers(monkeypatch)
 
         for index in range(constants.XAI_USER_RATE_LIMIT):
-            ctx = FakeCtx(roles=('Moderator',), guild_id=100 + index % 2)
+            ctx = FakeCtx(guild_id=100 + index % 2)
             _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok again')
             assert 'Grok answer' in ctx.text
 
-        blocked = FakeCtx(roles=('Moderator',), guild_id=999)
+        blocked = FakeCtx(guild_id=999)
         _invoke(llm_cog.Llm.llm, cog, blocked, question='+grok again')
-        assert 'used all 20 Grok requests' in blocked.text
+        assert 'used all 15 Grok requests' in blocked.text
         assert '<t:' in blocked.text and ':R>' in blocked.text
         assert len(seen) == constants.XAI_USER_RATE_LIMIT * 2
         assert _event_count(db) == constants.XAI_USER_RATE_LIMIT
+
+    @pytest.mark.parametrize('role', (
+        constants.TLE_ADMIN, constants.TLE_MODERATOR,
+    ))
+    def test_privileged_roles_bypass_personal_but_not_shared_limit(
+            self, role, cog, db, monkeypatch):
+        monkeypatch.setattr(constants, 'XAI_USER_RATE_LIMIT', 1)
+        monkeypatch.setattr(constants, 'XAI_DAILY_REQUEST_LIMIT', 3)
+        _add_xai_key(db)
+        seen = _xai_answers(monkeypatch)
+
+        for _ in range(3):
+            ctx = FakeCtx(roles=(role,))
+            _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok again')
+            assert 'Grok answer' in ctx.text
+
+        blocked = FakeCtx(roles=(role,))
+        _invoke(llm_cog.Llm.llm, cog, blocked, question='+grok again')
+        assert 'shared daily allowance is used up' in blocked.text
+        assert len(seen) == 6
+        assert _event_count(db) == 3
 
     def test_success_reserves_once_despite_router_and_answer_calls(
             self, cog, db, monkeypatch):
