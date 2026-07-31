@@ -40,6 +40,16 @@ def _add_config_storage(database):
         values.__setitem__((str(guild_id), key), value))
     database.delete_guild_config = (
         lambda guild_id, key: values.pop((str(guild_id), key), None))
+
+    def delete_by_prefix(guild_id, prefix):
+        guild_id = str(guild_id)
+        keys = [entry for entry in values
+                if entry[0] == guild_id and entry[1].startswith(prefix)]
+        for entry in keys:
+            del values[entry]
+        return len(keys)
+
+    database.delete_guild_configs_by_prefix = delete_by_prefix
     return values
 
 
@@ -125,14 +135,70 @@ class TestBanCommands:
 
 
 class TestDisableCommands:
-    def test_guild_disable_and_enable_are_reversible(self, db):
-        _add_config_storage(db)
+    def test_guild_commands_reset_overrides_and_affect_every_channel(self, db):
+        values = _add_config_storage(db)
         cog = llm_cog.Llm(bot=None)
         ctx = FakeCtx(roles=(constants.TLE_MODERATOR,), channel=_channel(44))
-        _invoke(llm_cog.Llm.disable, cog, ctx)
-        assert llm_access.disabled_scope(db, 100, 44) == 'guild'
+
+        _invoke(llm_cog.Llm.disable, cog, ctx, 'here')
+        assert llm_access.disabled_scope(db, 100, 44) == 'channel'
         _invoke(llm_cog.Llm.enable, cog, ctx)
         assert llm_access.disabled_scope(db, 100, 44) is None
+        assert llm_access.disabled_scope(db, 100, 45) is None
+        assert llm_access.channel_disabled_key(44) not in {
+            key for guild_id, key in values if guild_id == '100'}
+        assert 'every channel' in ctx.text
+
+        _invoke(llm_cog.Llm.disable, cog, ctx)
+        assert llm_access.disabled_scope(db, 100, 44) == 'guild'
+        assert llm_access.disabled_scope(db, 100, 45) == 'guild'
+
+        _invoke(llm_cog.Llm.enable, cog, ctx, 'here')
+        assert llm_access.disabled_scope(db, 100, 44) is None
+        assert llm_access.disabled_scope(db, 100, 45) == 'guild'
+        assert values[('100', llm_access.channel_disabled_key(44))] == '0'
+
+        _invoke(llm_cog.Llm.disable, cog, ctx)
+        assert llm_access.disabled_scope(db, 100, 44) == 'guild'
+        assert llm_access.channel_disabled_key(44) not in {
+            key for guild_id, key in values if guild_id == '100'}
+
+        _invoke(llm_cog.Llm.enable, cog, ctx)
+        assert llm_access.disabled_scope(db, 100, 44) is None
+        assert llm_access.disabled_scope(db, 100, 45) is None
+
+    def test_enable_here_overrides_guild_disable_for_parent_and_threads(
+            self, db):
+        values = _add_config_storage(db)
+        cog = llm_cog.Llm(bot=None)
+        parent = _channel(44)
+        thread = _channel(99, parent_id=44)
+        sibling = _channel(98, parent_id=44)
+        global_ctx = FakeCtx(
+            roles=(constants.TLE_MODERATOR,), channel=parent)
+        thread_ctx = FakeCtx(
+            roles=(constants.TLE_MODERATOR,), channel=thread)
+
+        _invoke(llm_cog.Llm.disable, cog, global_ctx)
+        _invoke(llm_cog.Llm.enable, cog, thread_ctx, 'here')
+
+        assert values[('100', llm_access.channel_disabled_key(44))] == '0'
+        assert llm_access.disabled_scope(db, 100, 44) is None
+        assert llm_access.disabled_scope(
+            db, 100, llm_access.scope_channel_id(sibling)) is None
+        assert llm_access.disabled_scope(db, 100, 45) == 'guild'
+        assert 'overriding the server-wide disable' in thread_ctx.text
+
+    def test_enabled_channel_still_respects_user_bans(self, db):
+        _add_config_storage(db)
+        llm_access.set_disabled(
+            db, 100, disabled=True, scope='guild')
+        llm_access.set_disabled(
+            db, 100, 44, disabled=False, scope='channel')
+        db.llm_ban_user(100, 1, banned_by=3)
+
+        assert llm_access.request_block_reason(db, 100, 44, 1) == \
+            'You are not allowed to use LLM requests in this server.'
 
     def test_channel_disable_isolated_and_inherited_by_threads(self, db):
         _add_config_storage(db)

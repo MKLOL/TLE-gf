@@ -249,6 +249,22 @@ class TestGuildConfig:
         db.delete_guild_config(GUILD, 'key')
         assert db.get_guild_config(GUILD, 'key') is None
 
+    def test_delete_by_prefix_is_guild_scoped(self, db):
+        db.set_guild_config(GUILD, 'llm_channel:1', '1')
+        db.set_guild_config(GUILD, 'llm_channel:2', '0')
+        db.set_guild_config(GUILD, 'unrelated', '1')
+        db.set_guild_config(222222, 'llm_channel:1', '1')
+
+        assert db.delete_guild_configs_by_prefix(GUILD, 'llm_channel:') == 2
+        assert db.get_guild_config(GUILD, 'llm_channel:1') is None
+        assert db.get_guild_config(GUILD, 'llm_channel:2') is None
+        assert db.get_guild_config(GUILD, 'unrelated') == '1'
+        assert db.get_guild_config(222222, 'llm_channel:1') == '1'
+
+    def test_delete_by_prefix_rejects_empty_prefix(self, db):
+        with pytest.raises(ValueError, match='must not be empty'):
+            db.delete_guild_configs_by_prefix(GUILD, '')
+
     def test_per_guild_isolation(self, db):
         db.set_guild_config(GUILD, 'key', 'val1')
         db.set_guild_config(222222, 'key', 'val2')

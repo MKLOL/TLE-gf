@@ -268,22 +268,25 @@ class LlmCommandsMixin:
                 f'Usage: `;llm {action}` or `;llm {action} here`.'))
             return
         channel_id = llm_access.scope_channel_id(ctx.channel)
+        database = self._llm_db()
         llm_access.set_disabled(
-            self._llm_db(), ctx.guild.id, channel_id,
+            database, ctx.guild.id, channel_id,
             disabled=disabled, scope=resolved)
         if (not disabled and resolved == 'channel'
                 and llm_access.disabled_scope(
-                    self._llm_db(), ctx.guild.id, channel_id) == 'guild'):
-            message = ('The channel-specific disable was cleared, but LLM '
-                       'requests remain disabled server-wide.')
-        elif not disabled and resolved == 'guild':
-            message = ('Guild-wide LLM requests are enabled. Existing '
-                       'channel-specific disables remain active.')
-        else:
-            place = ('this channel and its threads' if resolved == 'channel'
-                     else 'this server')
+                    database, ctx.guild.id, channel_id) is None
+                and database.get_guild_config(
+                    ctx.guild.id, llm_access.GUILD_DISABLED_KEY) == '1'):
+            message = ('LLM requests are now enabled for this channel and its '
+                       'threads, overriding the server-wide disable.')
+        elif resolved == 'guild':
             state = 'disabled' if disabled else 'enabled'
-            message = f'LLM requests are now {state} for {place}.'
+            message = (f'LLM requests are now {state} for every channel in '
+                       'this server. Previous channel overrides were cleared.')
+        else:
+            state = 'disabled' if disabled else 'enabled'
+            message = (f'LLM requests are now {state} for this channel and '
+                       'its threads.')
         await ctx.send(embed=discord_common.embed_success(
             message))
 

@@ -8,6 +8,8 @@ from tle.util import discord_common
 
 GUILD_DISABLED_KEY = 'llm_disabled'
 _CHANNEL_DISABLED_PREFIX = 'llm_disabled_channel:'
+_ENABLED = '0'
+_DISABLED = '1'
 
 
 class LlmAccessDeniedError(Exception):
@@ -58,24 +60,40 @@ def disabled_scope(database, guild_id, channel_id=None):
     getter = getattr(database, 'get_guild_config', None)
     if getter is None:
         return None
-    if getter(guild_id, GUILD_DISABLED_KEY) == '1':
-        return 'guild'
-    if (channel_id is not None
-            and getter(guild_id, channel_disabled_key(channel_id)) == '1'):
+    channel_policy = (getter(guild_id, channel_disabled_key(channel_id))
+                      if channel_id is not None else None)
+    if channel_policy == _ENABLED:
+        return None
+    if channel_policy == _DISABLED:
         return 'channel'
+    if getter(guild_id, GUILD_DISABLED_KEY) == _DISABLED:
+        return 'guild'
     return None
 
 
 def set_disabled(database, guild_id, channel_id=None, *, disabled, scope):
-    """Set or clear a guild/channel request-disable flag."""
+    """Apply a server baseline or a channel override.
+
+    Server-wide commands clear every channel override so they really affect
+    all channels. A channel enable stores an explicit allow only while the
+    server is disabled; otherwise it simply clears that channel's disable.
+    """
     if scope == 'guild':
-        key = GUILD_DISABLED_KEY
-    elif scope == 'channel' and channel_id is not None:
-        key = channel_disabled_key(channel_id)
-    else:
+        database.delete_guild_configs_by_prefix(
+            guild_id, _CHANNEL_DISABLED_PREFIX)
+        if disabled:
+            database.set_guild_config(guild_id, GUILD_DISABLED_KEY, _DISABLED)
+        else:
+            database.delete_guild_config(guild_id, GUILD_DISABLED_KEY)
+        return
+    if scope != 'channel' or channel_id is None:
         raise ValueError('Invalid LLM disable scope')
+
+    key = channel_disabled_key(channel_id)
     if disabled:
-        database.set_guild_config(guild_id, key, '1')
+        database.set_guild_config(guild_id, key, _DISABLED)
+    elif database.get_guild_config(guild_id, GUILD_DISABLED_KEY) == _DISABLED:
+        database.set_guild_config(guild_id, key, _ENABLED)
     else:
         database.delete_guild_config(guild_id, key)
 

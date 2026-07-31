@@ -427,6 +427,18 @@ class StarboardDbMixin(StarboardQueriesDbMixin):
         )
         self.conn.commit()
 
+    def delete_guild_configs_by_prefix(self, guild_id, key_prefix):
+        """Delete and count this guild's config keys under ``key_prefix``."""
+        if not key_prefix:
+            raise ValueError('Guild config prefix must not be empty')
+        guild_id = str(guild_id)
+        with self.conn:
+            cursor = self.conn.execute(
+                'DELETE FROM guild_config '
+                'WHERE guild_id = ? AND substr(key, 1, ?) = ?',
+                (guild_id, len(key_prefix), key_prefix))
+        return cursor.rowcount
+
     def get_all_guild_configs(self, guild_id):
         """Get all config entries for a guild."""
         guild_id = str(guild_id)
