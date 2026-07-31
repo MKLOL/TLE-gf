@@ -12,7 +12,7 @@ just to decide whether history is needed.
 import logging
 
 from tle import constants
-from tle.util import gemini_api, llm_models
+from tle.util import gemini_api, llm_models, xai_api
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_history as llm_history
 
@@ -76,6 +76,34 @@ async def classify(pool, question, is_reply, session=None, stats=None,
 
     mode = llm_context.parse_mode(raw, is_reply)
     logger.info(';llm routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
+    return mode
+
+
+async def classify_grok(pool, question, is_reply, session=None, stats=None,
+                        author_name=None, author_id=None, sent_at=None):
+    """xAI-backed equivalent of :func:`classify` for the Grok route."""
+    if not constants.LLM_CONTEXT_ENABLED:
+        return llm_context.MODE_DIRECT
+    try:
+        raw, _ = await xai_api.complete(
+            pool,
+            llm_context.build_classifier_prompt(
+                question, is_reply, author_name=author_name,
+                author_id=author_id, sent_at=sent_at),
+            system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
+            max_output_tokens=_CLASSIFIER_MAX_TOKENS,
+            temperature=0,
+            reasoning_effort='none',
+            session=session,
+            stats=stats,
+            max_attempts=2)
+    except xai_api.XaiError as err:
+        logger.warning('@grok router failed (%s) — answering without context',
+                       err)
+        return llm_context.MODE_DIRECT
+
+    mode = llm_context.parse_mode(raw, is_reply)
+    logger.info('@grok routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
     return mode
 
 

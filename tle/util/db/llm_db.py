@@ -3,11 +3,11 @@
 Owns three tables:
 
 ``llm_api_key``
-    The Gemini API keys themselves, one row per key. Keys are bot-global (not
+    Provider-tagged API keys, one row per key. Keys are bot-global (not
     per-guild): whichever moderator adds one, every guild draws on the same
-    pool. ``guild_id``/``added_by`` are audit trail only. A ``fingerprint``
-    (sha256 of the key) is UNIQUE so re-adding the same key is a no-op rather
-    than a duplicate.
+    provider pool. ``guild_id``/``added_by`` are audit trail only. A
+    ``fingerprint`` (sha256 of the key) is UNIQUE so re-adding the same key is
+    a no-op rather than a duplicate.
 
 ``llm_bucket``
     Persisted quota state per ``(key, model)``. Google's free tier meters
@@ -30,6 +30,8 @@ import time
 
 logger = logging.getLogger(__name__)
 
+_KEY_PROVIDERS = frozenset(('gemini', 'xai'))
+
 
 def key_fingerprint(api_key):
     """Stable identifier for a key, used for dedup without comparing secrets."""
@@ -45,6 +47,7 @@ class LlmDbMixin:
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 api_key     TEXT NOT NULL,
                 fingerprint TEXT NOT NULL UNIQUE,
+                provider    TEXT NOT NULL DEFAULT 'gemini',
                 label       TEXT,
                 guild_id    TEXT,
                 added_by    TEXT,
@@ -71,52 +74,75 @@ class LlmDbMixin:
                 PRIMARY KEY (guild_id, user_id, day)
             )
         ''')
+        # Existing 1.45 databases reach create_tables() before migrations run,
+        # so their table does not have ``provider`` yet. The 1.46 upgrade
+        # creates the index after adding the column; fresh schemas can do it
+        # immediately here.
+        key_columns = {
+            row[1] for row in self.conn.execute(
+                'PRAGMA table_info(llm_api_key)').fetchall()
+        }
+        if 'provider' in key_columns:
+            self.conn.execute('''
+                CREATE INDEX IF NOT EXISTS llm_api_key_provider_active
+                ON llm_api_key (provider, active)
+            ''')
 
     # ── Key management ──────────────────────────────────────────────────
 
-    def llm_add_key(self, api_key, label=None, guild_id=None, added_by=None):
-        """Store one API key. Returns 'added', 'reactivated', or 'duplicate'.
+    def llm_add_key(self, api_key, label=None, guild_id=None, added_by=None,
+                    provider='gemini'):
+        """Store a key and return an add/reactivate/duplicate/conflict status.
 
         Re-adding a key that was previously forgotten reactivates it (and
         refreshes its label) rather than creating a second row.
         """
         api_key = api_key.strip()
+        provider = _provider(provider)
         fp = key_fingerprint(api_key)
         row = self.conn.execute(
-            'SELECT id, active FROM llm_api_key WHERE fingerprint = ?', (fp,)
+            'SELECT id, active, provider FROM llm_api_key WHERE fingerprint = ?',
+            (fp,)
         ).fetchone()
         if row is not None:
+            if row.provider != provider:
+                return 'provider_conflict'
             if row.active:
                 return 'duplicate'
             with self.conn:
                 self.conn.execute(
                     'UPDATE llm_api_key SET active = 1, api_key = ?, label = ?, '
-                    'added_at = ?, added_by = ?, guild_id = ? WHERE id = ?',
-                    (api_key, label, time.time(), _s(added_by), _s(guild_id), row.id))
+                    'added_at = ?, added_by = ?, guild_id = ? '
+                    'WHERE id = ?',
+                    (api_key, label, time.time(), _s(added_by), _s(guild_id),
+                     row.id))
             return 'reactivated'
         with self.conn:
             self.conn.execute(
                 'INSERT INTO llm_api_key '
-                '(api_key, fingerprint, label, guild_id, added_by, added_at, active) '
-                'VALUES (?, ?, ?, ?, ?, ?, 1)',
-                (api_key, fp, label, _s(guild_id), _s(added_by), time.time()))
+                '(api_key, fingerprint, provider, label, guild_id, added_by, '
+                'added_at, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+                (api_key, fp, provider, label, _s(guild_id), _s(added_by),
+                 time.time()))
         return 'added'
 
-    def llm_get_keys(self, active_only=True):
-        """All stored keys, oldest first."""
-        query = ('SELECT id, api_key, fingerprint, label, guild_id, added_by, '
-                 'added_at, active FROM llm_api_key')
+    def llm_get_keys(self, active_only=True, provider='gemini'):
+        """Stored keys for one provider, oldest first."""
+        query = ('SELECT id, api_key, fingerprint, provider, label, guild_id, '
+                 'added_by, added_at, active FROM llm_api_key WHERE provider = ?')
+        params = [_provider(provider)]
         if active_only:
-            query += ' WHERE active = 1'
+            query += ' AND active = 1'
         query += ' ORDER BY id'
-        return self.conn.execute(query).fetchall()
+        return self.conn.execute(query, params).fetchall()
 
-    def llm_forget_key(self, key_id):
-        """Deactivate a key by id. Returns True if a row changed."""
+    def llm_forget_key(self, key_id, provider='gemini'):
+        """Deactivate a provider key by id. Returns True if a row changed."""
         with self.conn:
             cur = self.conn.execute(
-                'UPDATE llm_api_key SET active = 0 WHERE id = ? AND active = 1',
-                (key_id,))
+                'UPDATE llm_api_key SET active = 0 '
+                'WHERE id = ? AND provider = ? AND active = 1',
+                (key_id, _provider(provider)))
         return cur.rowcount > 0
 
     # ── Bucket (per key × model) quota state ────────────────────────────
@@ -200,3 +226,11 @@ class LlmDbMixin:
 def _s(value):
     """Discord ids are ints in Python but TEXT in SQLite; None stays None."""
     return None if value is None else str(value)
+
+
+def _provider(value):
+    """Normalize provider labels at the DB boundary."""
+    provider = (value or 'gemini').strip().lower()
+    if provider not in _KEY_PROVIDERS:
+        raise ValueError(f'Unsupported LLM key provider: {provider}')
+    return provider

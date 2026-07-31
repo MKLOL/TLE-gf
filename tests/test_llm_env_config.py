@@ -103,3 +103,21 @@ class TestImportSurvivesEmptyEnvironment:
         module = _load_constants('_constants_default_models')
         assert module.LLM_MODELS
         assert not any(name.startswith('gemini-2.0') for name in module.LLM_MODELS)
+
+
+class TestXaiEnvironment:
+    def test_default_model_is_current_grok(self, monkeypatch):
+        monkeypatch.delenv('XAI_MODEL', raising=False)
+        module = _load_constants('_constants_xai_default')
+        assert module.XAI_MODEL == 'grok-4.3'
+
+    def test_empty_model_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv('XAI_MODEL', '   ')
+        module = _load_constants('_constants_xai_empty_model')
+        assert module.XAI_MODEL == 'grok-4.3'
+
+    def test_singular_and_plural_key_settings_are_merged(self, monkeypatch):
+        monkeypatch.setenv('XAI_API_KEY', 'xai-single')
+        monkeypatch.setenv('XAI_API_KEYS', 'xai-one,xai-two')
+        module = _load_constants('_constants_xai_keys')
+        assert module.XAI_API_KEYS == 'xai-one,xai-two,xai-single'

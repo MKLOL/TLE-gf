@@ -162,7 +162,8 @@ class KeyPool:
 
     def reload(self):
         """Re-read keys and persisted daily exhaustion from the database."""
-        self._keys = list(self._db.llm_get_keys(active_only=True))
+        self._keys = list(self._db.llm_get_keys(
+            active_only=True, provider='gemini'))
         now = self._now()
         self._exhausted = {
             (row.key_id, row.model): row.exhausted_until
@@ -318,7 +319,7 @@ class KeyPool:
             'LLM key id=%s retired after %d rejections — re-add it with '
             '`;llm keys` once fixed. Last error: %s',
             lease.key_id, strikes, _truncate(message))
-        self._db.llm_forget_key(lease.key_id)
+        self._db.llm_forget_key(lease.key_id, provider='gemini')
         self._keys = [row for row in self._keys if row.id != lease.key_id]
         self._invalid_strikes.pop(lease.key_id, None)
         return True

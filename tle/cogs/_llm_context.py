@@ -37,6 +37,21 @@ SYSTEM_INSTRUCTION = (
     'guessing. Never claim to have run code or checked a website.'
 )
 
+# Grok gets the same scope, context rules, and truthfulness constraints as the
+# Gemini path, with a deliberately sharper voice requested for Nakamura. The
+# guardrails keep a playful roast from turning into targeted harassment.
+GROK_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION + (
+    '\nYour voice on this route is witty, irreverent, and a little edgy. You '
+    'may occasionally roast the user or their code and use natural profanity '
+    '(including words like "damn", "hell", or "shit") when it makes the '
+    'reply funnier. Keep it playful and sparing; do not force a joke into '
+    'every answer, and never let the bit make technical advice less accurate. '
+    'Punch up, not down: do not use slurs, attack protected traits, humiliate '
+    'someone over vulnerability or tragedy, threaten anyone, or turn repeated '
+    'roasting into harassment. If the subject is sensitive or the user needs '
+    'serious help, drop the attitude and be straightforward.'
+)
+
 _IMAGE_MIME_PREFIX = 'image/'
 _SUPPORTED_IMAGE_MIMES = ('image/png', 'image/jpeg', 'image/webp', 'image/heic',
                           'image/heif')
@@ -197,20 +212,22 @@ def is_supported_image(content_type):
 
 
 def select_image_attachments(messages, max_images, max_bytes,
-                             max_total_bytes=None):
+                             max_total_bytes=None, mime_check=None):
     """Pick image attachments worth forwarding, in the order given.
 
     ``messages`` is an iterable of discord Messages (any of which may be
     None), passed referenced-message-first so the message being asked about
     wins when the caps bite. Returns a list of attachment objects, capped at
     ``max_images``, skipping anything larger than ``max_bytes``, and stopping
-    once the running total would exceed ``max_total_bytes``.
+    once the running total would exceed ``max_total_bytes``. ``mime_check``
+    can narrow the accepted image formats for a provider such as xAI.
 
     The total cap is not redundant with the per-image one: inline image data
     is base64-encoded on the wire, inflating it by 4/3, and Gemini rejects a
     request whose inline payload exceeds roughly 20 MB. Four 4 MB images pass
     every per-image check and then fail as a batch.
     """
+    mime_check = mime_check or is_supported_image
     picked = []
     total = 0
     for message in messages:
@@ -219,7 +236,7 @@ def select_image_attachments(messages, max_images, max_bytes,
         for attachment in getattr(message, 'attachments', None) or []:
             if len(picked) >= max_images:
                 return picked
-            if not is_supported_image(getattr(attachment, 'content_type', None)):
+            if not mime_check(getattr(attachment, 'content_type', None)):
                 continue
             size = getattr(attachment, 'size', 0) or 0
             if size > max_bytes:

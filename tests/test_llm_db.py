@@ -65,6 +65,39 @@ class TestKeyStorage:
         assert fp == key_fingerprint('  AIzaSyExampleKeyValue123 ')
         assert 'AIzaSy' not in fp
 
+    def test_provider_defaults_to_gemini_and_filters_xai(self, db):
+        db.llm_add_key('AIzaSyExampleKeyValue123')
+        db.llm_add_key('xai-ExampleKeyValue123456', provider='xai')
+
+        gemini = db.llm_get_keys()
+        xai = db.llm_get_keys(provider='xai')
+        assert [(row.provider, row.api_key) for row in gemini] == [
+            ('gemini', 'AIzaSyExampleKeyValue123')]
+        assert [(row.provider, row.api_key) for row in xai] == [
+            ('xai', 'xai-ExampleKeyValue123456')]
+
+    def test_same_key_cannot_cross_provider_boundaries(self, db):
+        key = 'xai-ExampleKeyValue123456'
+        assert db.llm_add_key(key, provider='xai') == 'added'
+        assert db.llm_add_key(key, provider='gemini') == 'provider_conflict'
+        assert db.llm_get_keys(provider='gemini') == []
+        assert len(db.llm_get_keys(provider='xai')) == 1
+
+    def test_forget_is_scoped_to_the_provider(self, db):
+        db.llm_add_key('xai-ExampleKeyValue123456', provider='xai')
+        key_id = db.llm_get_keys(provider='xai')[0].id
+
+        assert db.llm_forget_key(key_id, provider='gemini') is False
+        assert len(db.llm_get_keys(provider='xai')) == 1
+        assert db.llm_forget_key(key_id, provider='xai') is True
+        assert db.llm_get_keys(provider='xai') == []
+
+    def test_provider_is_normalized_and_validated(self, db):
+        db.llm_add_key('xai-ExampleKeyValue123456', provider=' XAI ')
+        assert db.llm_get_keys(provider='xai')[0].provider == 'xai'
+        with pytest.raises(ValueError, match='Unsupported LLM key provider'):
+            db.llm_get_keys(provider='openai')
+
 
 class TestBuckets:
     def test_exhausted_bucket_is_returned_until_it_expires(self, db):

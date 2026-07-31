@@ -34,13 +34,17 @@ A one-time background task runs on startup to populate `author_id` and `star_cou
 
 Key-value config per guild (`guild_config` table). Used for feature gating (e.g., `starboard_leaderboard`). Managed via `;meta config`.
 
-### `;llm` — Gemini with a rotating key pool
+### `;llm` — Gemini plus Grok
 
 `;llm <question>` answers in an embed; sent as a *reply*, it answers about the replied-to message and forwards any image attachments (Gemini is multimodal). Prefixing a model — `;llm 3.5f-h <question>` — pins it and its reasoning tier (`;llm models` lists them; aliases are `<version><f|l>` plus `pro`, tiers `-min/-l/-m/-h/-off`, with the long spellings kept as synonyms). Moderators manage the key pool with `;llm keys <key> ...` / `keylist` / `keyforget` / `keystatus`.
 
-**There is no per-user cap or cooldown**, by request. The shared free-tier allowance is the only limit; calls are counted per user purely so `;llm keystatus` can show where it went.
+Grok is a provider route over xAI's Chat Completions API: `;llm +grok <question>` and a channel message beginning with the literal text `@grok <question>` share the same reply/history/image pipeline. Its system prompt keeps the Gemini prompt's broad subject scope and truthfulness rules, then adds an irreverent voice with occasional playful roasts/profanity. The router also uses xAI, so Grok never depends on Gemini quota or credentials. `XAI_MODEL` defaults to `grok-4.3`.
 
-**Two-stage pipeline** (`_llm_pipeline.py`), adapted from [MKLOL/TLE-gf#10](https://github.com/MKLOL/TLE-gf/pull/10): a cheap routing call classifies the question `direct` / `requires_context` / `requires_reply_chain`, and only then is channel history collected (`_llm_history.py`). Routing goes to `LLM_MODELS[0]` (the ladder is cheapest-first) with structured output forcing a valid label, and any failure falls back to `direct` — losing the optimisation must never block the answer. It costs a second request per question; `LLM_CONTEXT_ENABLED=0` turns it off. **A reply always gathers its surrounding window regardless of the router's verdict** — reading history costs a Discord call, not an API one.
+xAI keys are provider-isolated in `llm_api_key` (migration 1.46.0); never put them in the Gemini `KeyPool`. Moderators use `;llm grokkeys` / `grokkeylist` / `grokkeyforget`, or provision `XAI_API_KEY` / comma-separated `XAI_API_KEYS`. A valid xAI key does not imply credits or model access; 403 team/billing failures stay active so funding the team fixes them without re-uploading the key.
+
+**There is no per-user cap or cooldown**, by request. Gemini quota and xAI billing/rate limits are the only limits; calls are counted per user purely so `;llm keystatus` can show where they went.
+
+**Two-stage pipeline** (`_llm_pipeline.py`), adapted from [MKLOL/TLE-gf#10](https://github.com/MKLOL/TLE-gf/pull/10): a cheap routing call classifies the question `direct` / `requires_context` / `requires_reply_chain`, and only then is channel history collected (`_llm_history.py`). Gemini routing goes to `LLM_MODELS[0]` (the ladder is cheapest-first) with structured output forcing a valid label; Grok routing goes through xAI with reasoning disabled. Any failure falls back to `direct` — losing the optimisation must never block the answer. It costs a second provider request per question; `LLM_CONTEXT_ENABLED=0` turns it off. **A reply always gathers its surrounding window regardless of the router's verdict** — reading history costs a Discord call, not an API one.
 
 **`maxOutputTokens` includes reasoning tokens.** This is the trap that broke context entirely once: the router had a 16-token cap, which the model spent thinking, returning a 200 with no text — `extract_text` raised, `classify` caught it, and every question in the server silently routed to `direct`. Any call with a tight budget must also pin thinking low (`llm_models.LEAST` resolves to `off` on 2.5, `minimal` on 3.x). An empty `MAX_TOKENS` response now raises `EmptyOutputBudgetError`, which names the setting instead of reading as a model quirk.
 
@@ -72,6 +76,7 @@ This uses the **native** Gemini endpoint, not Google's OpenAI-compatibility shim
 | `tle/cogs/llm.py` | `;llm` cog (ask, reply-context, mod-only key management) |
 | `tle/util/llm_keypool.py` | `KeyPool` — `(key, model)` bucket rotation and 429 classification |
 | `tle/util/gemini_api.py` | Native Gemini REST client + retry-across-buckets loop |
+| `tle/util/xai_api.py` | xAI Chat Completions client + provider-isolated round-robin keys |
 | `tle/util/db/llm_db.py` | `LlmDbMixin` — key storage, bucket state, per-user usage |
 | `tle/util/llm_models.py` | Selectable model catalog + reasoning-tier encoding |
 | `tle/cogs/_llm_pipeline.py` | Route (classify) → gather history → build prompt |

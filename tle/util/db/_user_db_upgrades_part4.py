@@ -155,3 +155,23 @@ def upgrade_1_45_0(db):
     ''')
     db.commit()
     logger.info('1.45.0: Upgrade complete')
+
+
+@registry.register('1.46.0', 'Provider-isolated LLM API keys')
+def upgrade_1_46_0(db):
+    """Tag existing keys as Gemini so xAI credentials stay separate."""
+    logger.info('1.46.0: Adding LLM API key provider')
+    columns = {
+        row[1] for row in db.execute('PRAGMA table_info(llm_api_key)').fetchall()
+    }
+    if 'provider' not in columns:
+        db.execute(
+            "ALTER TABLE llm_api_key ADD COLUMN provider TEXT NOT NULL "
+            "DEFAULT 'gemini'"
+        )
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS llm_api_key_provider_active '
+        'ON llm_api_key (provider, active)'
+    )
+    db.commit()
+    logger.info('1.46.0: Upgrade complete')

@@ -71,6 +71,8 @@ constants_mod.AKARI_MAX_PUZZLE_LOOKAHEAD = 2
 constants_mod.AKARI_RANKING_MAX_INACTIVE_DAYS = 30
 constants_mod.LLM_MODELS = ('model-a', 'model-b')
 constants_mod.GEMINI_API_KEYS = ''
+constants_mod.XAI_API_KEYS = ''
+constants_mod.XAI_MODEL = 'grok-test'
 constants_mod.LLM_MAX_PROMPT_CHARS = 4000
 constants_mod.LLM_CONTEXT_ENABLED = True
 constants_mod.LLM_CONTEXT_MESSAGES = 50
@@ -320,8 +322,10 @@ _load_module('tle.util.db.llm_db', os.path.join(_db_path, 'llm_db.py'))
 _load_module('tle.util.llm_keypool', os.path.join(_util_path, 'llm_keypool.py'))
 _load_module('tle.util.llm_models', os.path.join(_util_path, 'llm_models.py'))
 _load_module('tle.util.gemini_api', os.path.join(_util_path, 'gemini_api.py'))
+_load_module('tle.util.xai_api', os.path.join(_util_path, 'xai_api.py'))
 _load_module('tle.cogs._llm_context', os.path.join(_cogs_path, '_llm_context.py'))
 _load_module('tle.cogs._llm_history', os.path.join(_cogs_path, '_llm_history.py'))
 _load_module('tle.cogs._llm_pipeline', os.path.join(_cogs_path, '_llm_pipeline.py'))
 _load_module('tle.cogs._llm_format', os.path.join(_cogs_path, '_llm_format.py'))
+_load_module('tle.cogs._llm_ask', os.path.join(_cogs_path, '_llm_ask.py'))
 _load_module('tle.cogs.llm', os.path.join(_cogs_path, 'llm.py'))

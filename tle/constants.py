@@ -116,6 +116,14 @@ LLM_MODELS = tuple(m.strip() for m in os.environ.get(
 # secrets into Discord. Keys added via `;llm keys` are stored in user.db and
 # are merged with these on startup.
 GEMINI_API_KEYS = os.environ.get('GEMINI_API_KEYS', '')
+# xAI provisioning. The singular spelling matches xAI's examples; the plural
+# accepts a comma-separated pool for operators who keep multiple teams/keys.
+XAI_API_KEYS = ','.join(
+    value for value in (
+        os.environ.get('XAI_API_KEYS', '').strip(),
+        os.environ.get('XAI_API_KEY', '').strip(),
+    ) if value)
+XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.3').strip() or 'grok-4.3'
 # Per-user call counts are still recorded (see `;llm keystatus`) so moderators
 # can see who is consuming the shared allowance, but nothing is enforced —
 # there is deliberately no per-user cap or cooldown.
