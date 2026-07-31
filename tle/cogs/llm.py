@@ -1,8 +1,9 @@
 """``;llm`` — ask Gemini or Grok, with channel context when needed.
 
-There is deliberately no per-user cap or cooldown. Provider quotas are the
-only limit. Calls are still *counted* per user so `;llm keystatus` can show
-moderators who is consuming them.
+Gemini deliberately has no bot-side user cap. Grok has a persistent rolling
+per-user guard and bot-wide daily guard to protect paid credits; their numeric
+thresholds are not exposed in Discord responses. Calls are still counted for
+moderator visibility.
 
 Key management is mod-gated, provider-isolated, and self-redacting: add-key
 commands delete the invoking message, and no code path in this cog ever prints

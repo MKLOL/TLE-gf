@@ -1,11 +1,13 @@
-"""Migration coverage for provider-isolated LLM API keys."""
+"""Migration coverage for provider-isolated LLM state and Grok limits."""
 import sqlite3
 
 import pytest
 
 from tle.util.db.llm_db import LlmDbMixin, key_fingerprint
 from tle.util.db.user_db_conn import namedtuple_factory
-from tle.util.db.user_db_upgrades import upgrade_1_45_0, upgrade_1_46_0
+from tle.util.db.user_db_upgrades import (
+    upgrade_1_45_0, upgrade_1_46_0, upgrade_1_47_0,
+)
 
 
 @pytest.fixture
@@ -78,3 +80,20 @@ def test_pre_migration_table_setup_skips_the_future_provider_index(legacy_db):
     columns = {row[1] for row in legacy_db.execute(
         'PRAGMA table_info(llm_api_key)').fetchall()}
     assert 'provider' not in columns
+
+
+def test_grok_request_ledger_migration_is_idempotent(legacy_db):
+    upgrade_1_47_0(legacy_db)
+    upgrade_1_47_0(legacy_db)
+
+    columns = {
+        row[1] for row in legacy_db.execute(
+            'PRAGMA table_info(llm_xai_request)').fetchall()
+    }
+    indexes = {
+        row[1] for row in legacy_db.execute(
+            'PRAGMA index_list(llm_xai_request)').fetchall()
+    }
+    assert columns == {'id', 'user_id', 'requested_at'}
+    assert indexes == {
+        'llm_xai_request_time', 'llm_xai_request_user_time'}

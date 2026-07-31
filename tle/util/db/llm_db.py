@@ -1,6 +1,6 @@
 """LLM DB methods — API key storage and per-bucket quota state.
 
-Owns three tables:
+Owns four tables:
 
 ``llm_api_key``
     Provider-tagged API keys, one row per key. Keys are bot-global (not
@@ -17,12 +17,16 @@ Owns three tables:
     under a minute, so losing them on restart costs at most one 429.
 
 ``llm_usage``
-    Per-user, per-UTC-day call counts, so one person cannot drain the shared
-    daily allowance for the whole server.
+    Per-user, per-UTC-day call counts for moderator visibility.
+
+``llm_xai_request``
+    A compact timestamp ledger for Grok-only credit protection: per-user
+    rolling-window limits plus one bot-wide UTC-day limit. Old rows are pruned
+    whenever a request reserves a slot.
 
 The key material is stored in plaintext: the bot must be able to present it
-to Google on every call, so there is nothing to gain from hashing it. Treat
-``user.db`` as a secret-bearing file.
+to the provider on every call, so there is nothing to gain from hashing it.
+Treat ``user.db`` as a secret-bearing file.
 """
 import hashlib
 import logging
@@ -73,6 +77,21 @@ class LlmDbMixin:
                 count    INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (guild_id, user_id, day)
             )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS llm_xai_request (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                requested_at REAL NOT NULL
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS llm_xai_request_time
+            ON llm_xai_request (requested_at)
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS llm_xai_request_user_time
+            ON llm_xai_request (user_id, requested_at)
         ''')
         # Existing 1.45 databases reach create_tables() before migrations run,
         # so their table does not have ``provider`` yet. The 1.46 upgrade
@@ -182,6 +201,47 @@ class LlmDbMixin:
                 'WHERE exhausted_until IS NULL OR exhausted_until <= ?', (now,))
         return cur.rowcount
 
+    # ── Grok credit guard ───────────────────────────────────────────────
+
+    def llm_reserve_xai_request(self, user_id, user_limit, window_seconds,
+                                daily_limit, now=None):
+        """Atomically reserve one Grok invocation.
+
+        Returns ``None`` when accepted, ``'user'`` for the rolling per-user
+        guard, or ``'daily'`` for the bot-wide UTC-day guard. A reservation is
+        kept even if the upstream call fails because it still consumed shared
+        provider capacity and could otherwise be abused as a free retry loop.
+        """
+        now = time.time() if now is None else float(now)
+        user_id = str(user_id)
+        window_cutoff = now - max(0, window_seconds)
+        day_start = int(now // 86400) * 86400
+        retain_after = min(window_cutoff, day_start)
+
+        with self.conn:
+            # The write starts a transaction before the counts, so concurrent
+            # callers cannot both observe the final free slot.
+            self.conn.execute(
+                'DELETE FROM llm_xai_request WHERE requested_at < ?',
+                (retain_after,))
+            user_count = self.conn.execute(
+                'SELECT COUNT(*) AS count FROM llm_xai_request '
+                'WHERE user_id = ? AND requested_at > ?',
+                (user_id, window_cutoff)).fetchone().count
+            if user_count >= user_limit:
+                return 'user'
+
+            daily_count = self.conn.execute(
+                'SELECT COUNT(*) AS count FROM llm_xai_request '
+                'WHERE requested_at >= ?', (day_start,)).fetchone().count
+            if daily_count >= daily_limit:
+                return 'daily'
+
+            self.conn.execute(
+                'INSERT INTO llm_xai_request (user_id, requested_at) '
+                'VALUES (?, ?)', (user_id, now))
+        return None
+
     # ── Per-user daily usage ────────────────────────────────────────────
 
     def llm_bump_usage(self, guild_id, user_id, day):
@@ -203,8 +263,8 @@ class LlmDbMixin:
     def llm_top_users(self, guild_id, day, limit=5):
         """Heaviest users for ``day``, busiest first, with the guild total.
 
-        Returns ``(rows, total)``. Nothing is capped per user, so this is how a
-        moderator finds out where the shared allowance went.
+        Returns ``(rows, total)``. This is reporting data; Grok admission is
+        enforced separately by :meth:`llm_reserve_xai_request`.
         """
         rows = self.conn.execute(
             'SELECT user_id, count FROM llm_usage '

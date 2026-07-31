@@ -1,7 +1,10 @@
 """Tests for the LLM key/quota DB layer (``tle/util/db/llm_db.py``)."""
+import sqlite3
+
 import pytest
 
-from tle.util.db.llm_db import key_fingerprint
+from tle.util.db.llm_db import LlmDbMixin, key_fingerprint
+from tle.util.db.user_db_conn import namedtuple_factory
 from tests.llm_test_utils import FakeLlmDb
 
 
@@ -151,3 +154,92 @@ class TestUsage:
         db.llm_bump_usage(1, 2, '2026-07-30')
         assert db.llm_purge_old_usage('2026-07-30') == 1
         assert db.llm_get_usage(1, 2, '2026-07-30') == 1
+
+
+class TestXaiRequestLimits:
+    USER_LIMIT = 10
+    WINDOW = 30 * 60
+    DAILY_LIMIT = 100
+
+    def reserve(self, db, user_id, now):
+        return db.llm_reserve_xai_request(
+            user_id, self.USER_LIMIT, self.WINDOW, self.DAILY_LIMIT, now=now)
+
+    @staticmethod
+    def event_count(db):
+        return db.conn.execute(
+            'SELECT COUNT(*) AS count FROM llm_xai_request'
+        ).fetchone().count
+
+    def test_tenth_request_is_accepted_and_eleventh_is_rejected(self, db):
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=1_000) is None
+
+        assert self.reserve(db, 7, now=1_000) == 'user'
+        assert self.event_count(db) == self.USER_LIMIT
+
+    def test_user_limit_is_global_across_discord_id_representations(self, db):
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=1_000) is None
+
+        assert self.reserve(db, '7', now=1_001) == 'user'
+        assert self.reserve(db, 8, now=1_001) is None
+
+    def test_exact_rolling_window_boundary_reopens_a_slot(self, db):
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=1_000) is None
+
+        assert self.reserve(db, 7, now=1_000 + self.WINDOW) is None
+
+    def test_global_daily_limit_spans_users(self, db):
+        now = 2 * 86_400 + 100
+        for user_id in range(self.DAILY_LIMIT):
+            assert self.reserve(db, user_id, now=now) is None
+
+        assert self.reserve(db, 999, now=now) == 'daily'
+        assert self.event_count(db) == self.DAILY_LIMIT
+
+    def test_utc_day_resets_but_rolling_user_window_spans_midnight(self, db):
+        before_midnight = 86_400 - 10
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=before_midnight) is None
+
+        after_midnight = 86_400 + 10
+        assert self.reserve(db, 7, now=after_midnight) == 'user'
+        assert self.reserve(db, 8, now=after_midnight) is None
+
+    def test_full_daily_pool_resets_at_utc_midnight(self, db):
+        before_midnight = 86_400 - 1
+        for user_id in range(self.DAILY_LIMIT):
+            assert self.reserve(db, user_id, now=before_midnight) is None
+
+        assert self.reserve(db, 999, now=before_midnight) == 'daily'
+        assert self.reserve(db, 999, now=86_400) is None
+
+    def test_rejected_request_does_not_create_an_event(self, db):
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=1_000) is None
+
+        before = self.event_count(db)
+        assert self.reserve(db, 7, now=1_001) == 'user'
+        assert self.event_count(db) == before
+
+    def test_reservations_survive_database_reopen(self, tmp_path):
+        class FileLlmDb(LlmDbMixin):
+            def __init__(self, path):
+                self.conn = sqlite3.connect(path)
+                self.conn.row_factory = namedtuple_factory
+                self._create_llm_tables()
+                self.conn.commit()
+
+        path = tmp_path / 'user.db'
+        first = FileLlmDb(path)
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(first, 7, now=1_000) is None
+        first.conn.close()
+
+        reopened = FileLlmDb(path)
+        try:
+            assert self.reserve(reopened, 7, now=1_001) == 'user'
+        finally:
+            reopened.conn.close()

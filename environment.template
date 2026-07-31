@@ -35,6 +35,12 @@ export GEMINI_API_KEYS=""
 # does not grant model access. XAI_API_KEYS (comma-separated) is also accepted.
 export XAI_API_KEY=""
 export XAI_MODEL="grok-4.3"
+# Grok-only credit guard. Discord users receive generic retry messages; these
+# thresholds are not exposed by bot commands or denial responses.
+export XAI_MAX_OUTPUT_TOKENS="512"
+export XAI_USER_RATE_LIMIT="10"
+export XAI_USER_RATE_WINDOW_SECONDS="1800"
+export XAI_DAILY_REQUEST_LIMIT="100"
 # Model ladder, tried in order. Each entry is a separate quota bucket on the
 # same key, not the same allowance renamed — so this multiplies capacity.
 # Verified July 2026: all three are current and free-tier eligible. Roughly

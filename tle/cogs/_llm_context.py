@@ -49,7 +49,9 @@ GROK_SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION + (
     'Punch up, not down: do not use slurs, attack protected traits, humiliate '
     'someone over vulnerability or tragedy, threaten anyone, or turn repeated '
     'roasting into harassment. If the subject is sensitive or the user needs '
-    'serious help, drop the attitude and be straightforward.'
+    'serious help, drop the attitude and be straightforward. Keep answers '
+    'short by default: aim for under 150 words, skip long preambles and '
+    'repetition, and only go longer when code or correctness truly requires it.'
 )
 
 _IMAGE_MIME_PREFIX = 'image/'

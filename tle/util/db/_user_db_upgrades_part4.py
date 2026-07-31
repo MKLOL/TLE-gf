@@ -175,3 +175,26 @@ def upgrade_1_46_0(db):
     )
     db.commit()
     logger.info('1.46.0: Upgrade complete')
+
+
+@registry.register('1.47.0', 'Persistent Grok request limits')
+def upgrade_1_47_0(db):
+    """Add the timestamp ledger used by Grok's credit guard."""
+    logger.info('1.47.0: Adding Grok request ledger')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_xai_request (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      TEXT NOT NULL,
+            requested_at REAL NOT NULL
+        )
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS llm_xai_request_time
+        ON llm_xai_request (requested_at)
+    ''')
+    db.execute('''
+        CREATE INDEX IF NOT EXISTS llm_xai_request_user_time
+        ON llm_xai_request (user_id, requested_at)
+    ''')
+    db.commit()
+    logger.info('1.47.0: Upgrade complete')

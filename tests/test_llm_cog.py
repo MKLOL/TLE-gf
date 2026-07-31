@@ -1,8 +1,8 @@
 """Tests for the ``;llm`` cog (``tle/cogs/llm.py``).
 
-Covers the gating (cooldown, per-user daily cap, moderator exemption), the
-reply-context path, and the key-management commands — in particular that
-adding keys deletes the invoking message and never echoes key material.
+Covers Gemini's uncapped request path, reply-context handling, and key
+management commands — in particular that adding keys deletes the invoking
+message and never echoes key material.
 """
 from datetime import datetime, timezone
 
@@ -310,10 +310,10 @@ class TestReplyContext:
 
 
 class TestNoRateLimits:
-    """There is deliberately no per-user cap or cooldown.
+    """Gemini deliberately has no bot-side per-user cap or cooldown.
 
-    The shared free-tier allowance is the only limit; usage is recorded for
-    visibility in `;llm keystatus`, never enforced.
+    Provider quota is its only limit; usage is recorded for visibility in
+    `;llm keystatus`, never enforced for this provider.
     """
 
     @pytest.fixture(autouse=True)

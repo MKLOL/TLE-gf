@@ -124,9 +124,16 @@ XAI_API_KEYS = ','.join(
         os.environ.get('XAI_API_KEY', '').strip(),
     ) if value)
 XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.3').strip() or 'grok-4.3'
+# Grok uses a smaller answer budget and a persistent credit guard. Thresholds
+# are operator configuration and deliberately are not shown in Discord denial
+# messages. Gemini remains uncapped by the bot.
+XAI_MAX_OUTPUT_TOKENS = _int_env('XAI_MAX_OUTPUT_TOKENS', 512)
+XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 10)
+XAI_USER_RATE_WINDOW_SECONDS = _int_env(
+    'XAI_USER_RATE_WINDOW_SECONDS', 30 * 60)
+XAI_DAILY_REQUEST_LIMIT = _int_env('XAI_DAILY_REQUEST_LIMIT', 100)
 # Per-user call counts are still recorded (see `;llm keystatus`) so moderators
-# can see who is consuming the shared allowance, but nothing is enforced —
-# there is deliberately no per-user cap or cooldown.
+# can see who is consuming provider capacity.
 LLM_MAX_PROMPT_CHARS = _int_env('LLM_MAX_PROMPT_CHARS', 4000)
 # Reasoning tokens are drawn from this same budget on thinking models, so it
 # has to cover the model's thinking as well as the reply — a value sized for

@@ -115,12 +115,16 @@ class TestGrokAskFlow:
         assert seen[0]['kwargs']['reasoning_effort'] == 'none'
         assert seen[1]['kwargs']['system_instruction'] == \
             llm_context.GROK_SYSTEM_INSTRUCTION
+        assert seen[1]['kwargs']['max_output_tokens'] == \
+            constants.XAI_MAX_OUTPUT_TOKENS == 512
+        assert seen[1]['kwargs']['reasoning_effort'] == 'none'
 
     def test_prompt_has_requested_voice_without_losing_base_rules(self):
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()
         assert 'profanity' in prompt and 'roast' in prompt
         assert 'competitive programmers' in prompt
         assert 'less accurate' in prompt
+        assert 'under 150 words' in prompt
 
     def test_answer_footer_uses_actual_grok_model(self, cog, monkeypatch):
         _xai_answers(monkeypatch, model='grok-4.3')

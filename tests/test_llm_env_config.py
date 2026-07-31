@@ -18,6 +18,8 @@ _INT_SETTINGS = [
     'LLM_MAX_IMAGE_BYTES', 'LLM_MAX_TOTAL_IMAGE_BYTES',
     'LLM_CONTEXT_MESSAGES', 'LLM_CONTEXT_WINDOW_SECONDS',
     'LLM_REPLY_BEFORE', 'LLM_REPLY_AFTER',
+    'XAI_MAX_OUTPUT_TOKENS', 'XAI_USER_RATE_LIMIT',
+    'XAI_USER_RATE_WINDOW_SECONDS', 'XAI_DAILY_REQUEST_LIMIT',
 ]
 
 
@@ -121,3 +123,14 @@ class TestXaiEnvironment:
         monkeypatch.setenv('XAI_API_KEYS', 'xai-one,xai-two')
         module = _load_constants('_constants_xai_keys')
         assert module.XAI_API_KEYS == 'xai-one,xai-two,xai-single'
+
+    def test_credit_guard_defaults_are_conservative(self, monkeypatch):
+        for name in ('XAI_MAX_OUTPUT_TOKENS', 'XAI_USER_RATE_LIMIT',
+                     'XAI_USER_RATE_WINDOW_SECONDS',
+                     'XAI_DAILY_REQUEST_LIMIT'):
+            monkeypatch.delenv(name, raising=False)
+        module = _load_constants('_constants_xai_limits')
+        assert module.XAI_MAX_OUTPUT_TOKENS == 512
+        assert module.XAI_USER_RATE_LIMIT == 10
+        assert module.XAI_USER_RATE_WINDOW_SECONDS == 30 * 60
+        assert module.XAI_DAILY_REQUEST_LIMIT == 100

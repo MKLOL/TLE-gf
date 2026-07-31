@@ -145,6 +145,16 @@ async def ask_grok(cog, ctx, question):
             '`;llm grokkeys <key>`, or set `XAI_API_KEY`.'))
         return
 
+    limit_reason = db().llm_reserve_xai_request(
+        ctx.author.id,
+        user_limit=constants.XAI_USER_RATE_LIMIT,
+        window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
+        daily_limit=constants.XAI_DAILY_REQUEST_LIMIT)
+    if limit_reason is not None:
+        await ctx.send(embed=discord_common.embed_alert(
+            'Grok is taking a breather right now. Try again later.'))
+        return
+
     attachments = llm_context.select_image_attachments(
         [referenced, ctx.message],
         constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
@@ -167,7 +177,8 @@ async def ask_grok(cog, ctx, question):
             answer, lease = await xai_api.complete(
                 pool, prompt, images=images,
                 system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
-                max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
+                max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
+                reasoning_effort='none',
                 session=cog._get_session(), stats=stats)
     except xai_api.XaiError as err:
         failure = err
