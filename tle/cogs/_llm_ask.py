@@ -9,6 +9,7 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, gemini_api, llm_models, xai_api
+from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_accounting as accounting
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_format as llm_format
@@ -69,6 +70,8 @@ async def ask(cog, ctx, question):
 
 
 async def ask_gemini(cog, ctx, question):
+    if not await llm_access.allow_request_or_notify(db(), ctx):
+        return
     referenced = await cog._resolve_reference(ctx)
     controls = llm_context.parse_context_controls(
         question, max_messages=constants.LLM_CONTEXT_MESSAGES)
@@ -122,6 +125,7 @@ async def ask_gemini(cog, ctx, question):
 
     async def operation():
         nonlocal mode, window, lease
+        llm_access.raise_if_request_blocked(db(), ctx)
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'gemini', pool, question, referenced, attachments,
             controls, router_stats)
@@ -139,6 +143,9 @@ async def ask_gemini(cog, ctx, question):
         async with ctx.typing():
             answer, explicit = await cog._runtime.run(
                 'gemini', ctx.author.id, operation)
+    except llm_access.LlmAccessDeniedError as err:
+        await ctx.send(embed=discord_common.embed_alert(str(err)))
+        return
     except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
         _record(cog, ctx, 'gemini', _runtime_outcome(err), started,
                 _primary_model(models, configured_models), router_stats,
@@ -176,6 +183,8 @@ async def ask_gemini(cog, ctx, question):
 
 
 async def ask_grok(cog, ctx, question):
+    if not await llm_access.allow_request_or_notify(db(), ctx):
+        return
     referenced = await cog._resolve_reference(ctx)
     controls = llm_context.parse_context_controls(
         question, max_messages=constants.LLM_CONTEXT_MESSAGES)
@@ -215,6 +224,7 @@ async def ask_grok(cog, ctx, question):
 
     async def operation():
         nonlocal mode, window, lease, reservation_id
+        llm_access.raise_if_request_blocked(db(), ctx)
         reservation_id = db().llm_reserve_xai_request(
             ctx.author.id, user_limit=constants.XAI_USER_RATE_LIMIT,
             window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
@@ -242,6 +252,9 @@ async def ask_grok(cog, ctx, question):
         async with ctx.typing():
             answer, explicit = await cog._runtime.run(
                 'xai', ctx.author.id, operation)
+    except llm_access.LlmAccessDeniedError as err:
+        await ctx.send(embed=discord_common.embed_alert(str(err)))
+        return
     except _GrokGuardError:
         _record(cog, ctx, 'xai', 'guarded', started,
                 constants.XAI_MODELS[0], router_stats, answer_stats,

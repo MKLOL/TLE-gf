@@ -31,7 +31,7 @@ _PROVIDER_CREDENTIAL_RE = re.compile(
     r'(?![A-Za-z0-9_-])',
 )
 _LLM_KEY_COMMAND_RE = re.compile(
-    r'\A(?P<command>\s*(?:;|<@!?\d+>\s*)llm\s+'
+    r'\A(?P<command>\s*(?:;|<@!?\d+>\s*)(?:llm|ai)\s+'
     r'(?:keys|grokkeys|xkeys|xaikeys))(?=\s|\Z)[\s\S]*\Z',
     re.IGNORECASE,
 )

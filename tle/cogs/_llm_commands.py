@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from tle import constants
 from tle.util import discord_common, llm_models
+from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_ask as llm_ask
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_status as llm_status
@@ -19,10 +20,10 @@ class LlmCommandsMixin:
     """Public and owner-only prefix commands inherited by ``Llm``."""
 
     @commands.group(brief='Ask Gemini or Grok a question',
-                    invoke_without_command=True)
+                    invoke_without_command=True, aliases=('ai',))
     async def llm(self, ctx, *, question: str = None):
         """Ask Gemini, or use a leading ``+grok`` to ask Grok."""
-        await llm_ask.ask(self, ctx, question)
+        await llm_ask.ask(self, ctx, _unwrap_quoted_request(question))
 
     @llm.command(brief='List selectable models and reasoning tiers')
     async def models(self, ctx):
@@ -147,6 +148,75 @@ class LlmCommandsMixin:
         await ctx.send(embed=discord_common.embed_success(
             f'LLM context policy for this {scope} is now `{mode}`.'))
 
+    @llm.command(brief='Ban a user from LLM requests', usage='@user|user_id')
+    async def ban(self, ctx, target: str = None):
+        if not await self._require_guild_moderator(ctx):
+            return
+        identity = llm_access.user_target(ctx, target)
+        if identity is None:
+            await ctx.send(embed=discord_common.embed_alert(
+                'Usage: `;llm ban @user` or `;llm ban <user_id>`.'))
+            return
+        user_id, label = identity
+        added = self._llm_db().llm_ban_user(
+            ctx.guild.id, user_id, banned_by=ctx.author.id)
+        if added:
+            message = f'`{label}` can no longer use LLM requests here.'
+            embed = discord_common.embed_success(message)
+        else:
+            embed = discord_common.embed_neutral(
+                f'`{label}` is already banned from LLM requests here.')
+        await ctx.send(embed=embed)
+
+    @llm.command(brief='Unban a user from LLM requests', usage='@user|user_id')
+    async def unban(self, ctx, target: str = None):
+        if not await self._require_guild_moderator(ctx):
+            return
+        identity = llm_access.user_target(ctx, target)
+        if identity is None:
+            await ctx.send(embed=discord_common.embed_alert(
+                'Usage: `;llm unban @user` or `;llm unban <user_id>`.'))
+            return
+        user_id, label = identity
+        removed = self._llm_db().llm_unban_user(ctx.guild.id, user_id)
+        if removed:
+            embed = discord_common.embed_success(
+                f'`{label}` can use LLM requests here again.')
+        else:
+            embed = discord_common.embed_neutral(
+                f'`{label}` is not banned from LLM requests here.')
+        await ctx.send(embed=embed)
+
+    @llm.command(brief='Show users banned from LLM requests')
+    async def banlist(self, ctx):
+        if not await self._require_guild_moderator(ctx):
+            return
+        rows = self._llm_db().llm_get_banned_users(ctx.guild.id)
+        if not rows:
+            await ctx.send(embed=discord_common.embed_neutral(
+                'No users are banned from LLM requests in this server.'))
+            return
+        getter = getattr(ctx.guild, 'get_member', None)
+        lines = []
+        for row in rows[:50]:
+            member = getter(int(row.user_id)) if getter is not None else None
+            label = (llm_access.member_label(member) if member is not None
+                     else f'User {row.user_id}')
+            lines.append(f'`{label}` — `{row.user_id}`')
+        if len(rows) > 50:
+            lines.append(f'*…and {len(rows) - 50} more.*')
+        await ctx.send(embed=discord.Embed(
+            title='LLM request ban list', description='\n'.join(lines),
+            color=discord_common._ALERT_AMBER))
+
+    @llm.command(brief='Disable LLM requests in the server or here')
+    async def disable(self, ctx, scope: str = None):
+        await self._set_llm_disabled(ctx, scope, disabled=True)
+
+    @llm.command(brief='Enable LLM requests in the server or here')
+    async def enable(self, ctx, scope: str = None):
+        await self._set_llm_disabled(ctx, scope, disabled=False)
+
     @llm.command(brief='Add xAI API keys (bot owner only)',
                  aliases=('xkeys', 'xaikeys'))
     async def grokkeys(self, ctx, *api_keys: str):
@@ -171,6 +241,48 @@ class LlmCommandsMixin:
 
     def _llm_db(self):
         return llm_ask.db()
+
+    async def _require_guild_moderator(self, ctx):
+        if self._is_privileged(ctx.author):
+            return True
+        if self.bot is not None:
+            try:
+                if await self.bot.is_owner(ctx.author):
+                    return True
+            except Exception:  # noqa: BLE001 - fail closed
+                logger.exception('Could not verify LLM access-control owner')
+        await ctx.send(embed=discord_common.embed_alert(
+            'Only this guild’s admins or moderators can manage LLM access.'))
+        return False
+
+    async def _set_llm_disabled(self, ctx, scope, *, disabled):
+        if not await self._require_guild_moderator(ctx):
+            return
+        resolved = llm_access.access_scope(scope)
+        if resolved is None:
+            action = 'disable' if disabled else 'enable'
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Usage: `;llm {action}` or `;llm {action} here`.'))
+            return
+        channel_id = llm_access.scope_channel_id(ctx.channel)
+        llm_access.set_disabled(
+            self._llm_db(), ctx.guild.id, channel_id,
+            disabled=disabled, scope=resolved)
+        if (not disabled and resolved == 'channel'
+                and llm_access.disabled_scope(
+                    self._llm_db(), ctx.guild.id, channel_id) == 'guild'):
+            message = ('The channel-specific disable was cleared, but LLM '
+                       'requests remain disabled server-wide.')
+        elif not disabled and resolved == 'guild':
+            message = ('Guild-wide LLM requests are enabled. Existing '
+                       'channel-specific disables remain active.')
+        else:
+            place = ('this channel and its threads' if resolved == 'channel'
+                     else 'this server')
+            state = 'disabled' if disabled else 'enabled'
+            message = f'LLM requests are now {state} for {place}.'
+        await ctx.send(embed=discord_common.embed_success(
+            message))
 
     async def _require_global_owner(self, ctx, *, deleted=None,
                                     has_secret=False):
@@ -270,6 +382,18 @@ class LlmCommandsMixin:
 
 def _strip_wrapping(token):
     return (token or '').strip().strip('`<>').strip()
+
+
+def _unwrap_quoted_request(question):
+    """Remove one whole-message quote pair used to escape subcommand names."""
+    if question is None:
+        return None
+    text = question.strip()
+    quote_pairs = {'"': '"', "'": "'", '“': '”', '‘': '’'}
+    closing = quote_pairs.get(text[:1])
+    if closing is not None and len(text) >= 2 and text.endswith(closing):
+        return text[1:-1].strip()
+    return question
 
 
 def _is_xai_key(token):

@@ -54,13 +54,15 @@ def _load_logging_cog(monkeypatch, discord_common):
 @pytest.mark.parametrize('subcommand', (
     'keys', 'grokkeys', 'xkeys', 'xaikeys',
 ))
-def test_key_command_arguments_are_always_redacted(monkeypatch, subcommand):
+@pytest.mark.parametrize('root', ('llm', 'ai'))
+def test_key_command_arguments_are_always_redacted(
+        monkeypatch, subcommand, root):
     common = _load_discord_common(monkeypatch)
-    raw = f';llm {subcommand} totally-unfamiliar-secret-format\nsecond-secret'
+    raw = f';{root} {subcommand} totally-unfamiliar-secret-format\nsecond-secret'
 
     safe = common.redact_credentials(raw)
 
-    assert safe == f';llm {subcommand} [credentials redacted]'
+    assert safe == f';{root} {subcommand} [credentials redacted]'
     assert 'unfamiliar' not in safe
     assert 'second-secret' not in safe
 
@@ -80,9 +82,10 @@ def test_provider_keys_are_redacted_without_censoring_ordinary_text(monkeypatch)
     assert common.redact_credentials(ordinary) == ordinary
 
 
-def test_mention_prefix_key_command_redacts_the_entire_tail(monkeypatch):
+@pytest.mark.parametrize('root', ('llm', 'ai'))
+def test_mention_prefix_key_command_redacts_the_entire_tail(monkeypatch, root):
     common = _load_discord_common(monkeypatch)
-    raw = '<@!123456789> llm grokkeys unfamiliar-format\nsecond-line'
+    raw = f'<@!123456789> {root} grokkeys unfamiliar-format\nsecond-line'
     safe = common.redact_credentials(raw)
     assert safe.endswith('[credentials redacted]')
     assert 'unfamiliar-format' not in safe

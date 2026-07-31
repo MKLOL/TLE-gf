@@ -1,6 +1,6 @@
 """LLM DB methods — API key storage and per-bucket quota state.
 
-Owns four tables:
+Owns five tables:
 
 ``llm_api_key``
     Provider-tagged API keys, one row per key. Keys are bot-global (not
@@ -23,6 +23,10 @@ Owns four tables:
     A compact timestamp ledger for Grok-only credit protection: per-user
     rolling-window limits plus one bot-wide UTC-day limit. Old rows are pruned
     whenever a request reserves a slot.
+
+``llm_user_ban``
+    Guild-scoped request bans. These block both provider routes while leaving
+    moderation subcommands available so the ban can always be reversed.
 
 The key material is stored in plaintext: the bot must be able to present it
 to the provider on every call, so there is nothing to gain from hashing it.
@@ -100,6 +104,19 @@ class LlmDbMixin(LlmTelemetryDbMixin):
         self.conn.execute('''
             CREATE INDEX IF NOT EXISTS llm_xai_request_user_time
             ON llm_xai_request (user_id, requested_at)
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS llm_user_ban (
+                guild_id  TEXT NOT NULL,
+                user_id   TEXT NOT NULL,
+                banned_by TEXT,
+                banned_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE INDEX IF NOT EXISTS llm_user_ban_guild_time
+            ON llm_user_ban (guild_id, banned_at)
         ''')
         # Existing 1.45 databases reach create_tables() before migrations run,
         # so their table does not have ``provider`` yet. The 1.46 upgrade
@@ -211,6 +228,41 @@ class LlmDbMixin(LlmTelemetryDbMixin):
                 'DELETE FROM llm_bucket '
                 'WHERE exhausted_until IS NULL OR exhausted_until <= ?', (now,))
         return cur.rowcount
+
+    # ── Guild-scoped request bans ──────────────────────────────────────
+
+    def llm_ban_user(self, guild_id, user_id, *, banned_by=None, now=None):
+        """Ban a user from LLM requests in one guild; return whether added."""
+        now = time.time() if now is None else float(now)
+        with self.conn:
+            cur = self.conn.execute(
+                'INSERT OR IGNORE INTO llm_user_ban '
+                '(guild_id, user_id, banned_by, banned_at) VALUES (?, ?, ?, ?)',
+                (_s(guild_id), _s(user_id), _s(banned_by), now))
+        return cur.rowcount > 0
+
+    def llm_unban_user(self, guild_id, user_id):
+        """Remove a guild-scoped LLM request ban; return whether removed."""
+        with self.conn:
+            cur = self.conn.execute(
+                'DELETE FROM llm_user_ban WHERE guild_id = ? AND user_id = ?',
+                (_s(guild_id), _s(user_id)))
+        return cur.rowcount > 0
+
+    def llm_is_user_banned(self, guild_id, user_id):
+        """Return whether ``user_id`` is banned from requests in ``guild_id``."""
+        row = self.conn.execute(
+            'SELECT 1 AS banned FROM llm_user_ban '
+            'WHERE guild_id = ? AND user_id = ?',
+            (_s(guild_id), _s(user_id))).fetchone()
+        return row is not None
+
+    def llm_get_banned_users(self, guild_id):
+        """Return a guild's request bans, oldest first."""
+        return self.conn.execute(
+            'SELECT user_id, banned_by, banned_at FROM llm_user_ban '
+            'WHERE guild_id = ? ORDER BY banned_at, user_id',
+            (_s(guild_id),)).fetchall()
 
     # ── Grok credit guard ───────────────────────────────────────────────
 

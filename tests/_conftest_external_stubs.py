@@ -107,18 +107,30 @@ sys.modules['discord.ext.commands.errors'] = _commands_errors
 
 class _StubGroupResult:
     """Fake return value of @commands.group() — supports chained .command() and .group()."""
-    def __init__(self, func):
+    def __init__(self, func, attrs=None):
+        attrs = attrs or {}
         self.__name__ = getattr(func, '__name__', 'stub')
         self.__doc__ = getattr(func, '__doc__', None)
         self.__wrapped__ = func
+        self.name = attrs.get('name', self.__name__)
+        self.aliases = list(attrs.get('aliases', ()))
+        self.all_commands = {}
     def command(self, **kw):
-        return lambda f: _StubGroupResult(f)
+        return self._register(kw)
     def group(self, **kw):
-        return lambda f: _StubGroupResult(f)
+        return self._register(kw)
+    def _register(self, attrs):
+        def decorator(func):
+            child = _StubGroupResult(func, attrs)
+            self.all_commands[child.name] = child
+            for alias in child.aliases:
+                self.all_commands[alias] = child
+            return child
+        return decorator
     def __call__(self, *a, **kw):
         pass
 
-_commands_mod.group = lambda **kw: (lambda f: _StubGroupResult(f))
+_commands_mod.group = lambda **kw: (lambda f: _StubGroupResult(f, kw))
 
 # Stub discord.app_commands for slash command support
 _app_commands = types.ModuleType('discord.app_commands')

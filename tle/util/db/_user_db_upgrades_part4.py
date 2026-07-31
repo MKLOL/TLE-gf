@@ -249,3 +249,23 @@ def upgrade_1_48_0(db):
         'ON llm_request_usage (guild_id, day)')
     db.commit()
     logger.info('1.48.0: Upgrade complete')
+
+
+@registry.register('1.49.0', 'Guild-scoped LLM request bans')
+def upgrade_1_49_0(db):
+    """Add persistent user bans shared by Gemini, Grok, and ``@grok``."""
+    logger.info('1.49.0: Adding guild-scoped LLM request bans')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_user_ban (
+            guild_id  TEXT NOT NULL,
+            user_id   TEXT NOT NULL,
+            banned_by TEXT,
+            banned_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS llm_user_ban_guild_time '
+        'ON llm_user_ban (guild_id, banned_at)')
+    db.commit()
+    logger.info('1.49.0: Upgrade complete')
