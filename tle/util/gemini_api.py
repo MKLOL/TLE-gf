@@ -18,6 +18,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 _AIOHTTP_CLIENT_ERROR = getattr(aiohttp, 'ClientError', OSError)
+_TRANSPORT_ERRORS = (_AIOHTTP_CLIENT_ERROR, TimeoutError)
 
 BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 _REQUEST_TIMEOUT = 45
@@ -187,6 +188,43 @@ def is_invalid_key_error(status, payload):
             or 'CONSUMER_SUSPENDED' in blob)
 
 
+def is_model_unavailable_error(status, payload):
+    """True when changing keys cannot make the requested model work."""
+    if status == 404:
+        return True
+    if status not in (400, 403):
+        return False
+    error = (payload or {}).get('error') or {}
+    blob = f"{error.get('status', '')} {error.get('message', '')}".lower()
+    blob = blob.replace('_', ' ')
+    unavailable = ('not found', 'not available', 'unsupported',
+                   'not supported', 'does not support', 'no access',
+                   'permission denied', 'access denied', 'not authorized')
+    return 'model' in blob and any(marker in blob for marker in unavailable)
+
+
+def _model_ladder(models):
+    if isinstance(models, str):
+        models = [models]
+    return list(dict.fromkeys(model for model in models or [] if model))
+
+
+def _record_stats(stats, attempts, payload=None):
+    if stats is None:
+        return
+    stats['attempts'] = stats.get('attempts', 0) + attempts
+    usage = (payload or {}).get('usageMetadata') or {}
+    fields = {
+        'input_tokens': 'promptTokenCount',
+        'output_tokens': 'candidatesTokenCount',
+        'total_tokens': 'totalTokenCount',
+    }
+    for target, source in fields.items():
+        value = usage.get(source)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            stats[target] = stats.get(target, 0) + value
+
+
 # ── Network ─────────────────────────────────────────────────────────────
 
 async def generate_once(api_key, model, payload, session=None):
@@ -239,7 +277,11 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     if pool.key_count() == 0:
         raise NoKeysError('No Gemini API keys are configured.')
 
-    ladder = models or pool.models
+    ladder = _model_ladder(models if models is not None else pool.models)
+    allow_model_fallback = models is not None and len(ladder) > 1
+    if not ladder:
+        _record_stats(stats, 0)
+        raise ModelUnavailableError('No Gemini models are configured.')
     if max_attempts is None:
         # One more than the bucket count, so a pool small enough to walk fully
         # gets a final acquire() that returns None — that is what distinguishes
@@ -252,15 +294,25 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     parts = build_parts(prompt, images)
 
     last_error = None
+    last_model_error = None
     attempts = 0
     pool_drained = False
+    unavailable_models = set()
+    recorded = False
 
-    def _record():
-        if stats is not None:
-            stats['attempts'] = attempts
+    def _record(payload=None):
+        nonlocal recorded
+        if not recorded:
+            _record_stats(stats, attempts, payload)
+            recorded = True
 
     for _ in range(max_attempts):
-        lease = await pool.acquire(models=models)
+        active_models = [model for model in ladder
+                         if model not in unavailable_models]
+        if not active_models:
+            _record()
+            raise ModelUnavailableError(last_model_error)
+        lease = await pool.acquire(models=active_models)
         if lease is None:
             pool_drained = True
             break
@@ -278,7 +330,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         try:
             status, body = await generate_once(lease.api_key, lease.model,
                                                payload, session=session)
-        except _AIOHTTP_CLIENT_ERROR as err:
+        except _TRANSPORT_ERRORS as err:
             logger.warning('Gemini transport error on key=%s model=%s: %s',
                            lease.key_id, lease.model, err)
             pool.report_transient(lease)
@@ -287,7 +339,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
 
         if status == 200:
             pool.report_success(lease)
-            _record()
+            _record(body)
             return extract_text(body), lease
 
         message = truncate_error(
@@ -301,17 +353,25 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             last_error = message
             continue
 
+        if is_model_unavailable_error(status, body):
+            # This is model-wide, not credential-specific. Skip every other
+            # key for this model during this call and continue down the
+            # caller-supplied weaker-model ladder when one exists.
+            unavailable_models.add(lease.model)
+            last_model_error = (
+                f'Model `{lease.model}` is not available: {message}')
+            last_error = message
+            logger.warning('Gemini model unavailable, falling back from %s: %s',
+                           lease.model, message)
+            if not allow_model_fallback:
+                _record()
+                raise ModelUnavailableError(last_model_error)
+            continue
+
         if is_invalid_key_error(status, body):
             pool.report_invalid(lease, message=message)
             last_error = message
             continue
-
-        if status == 404:
-            # A bad model id is a config error — every key will fail the same
-            # way, so fail loudly instead of burning the pool discovering it.
-            _record()
-            raise ModelUnavailableError(
-                f'Model `{lease.model}` is not available: {message}')
 
         if status >= 500:
             logger.warning('Gemini %d on key=%s model=%s: %s',
@@ -329,7 +389,9 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     if pool_drained:
         raise NoCapacityError(
             last_error or 'All Gemini keys are rate-limited or out of quota.',
-            retry_after=pool.retry_after_hint(models=models))
+            retry_after=pool.retry_after_hint(models=[
+                model for model in ladder
+                if model not in unavailable_models]))
     # The ceiling stopped us, not the quota — buckets may still be healthy, so
     # do not quote a wait derived only from the blocked ones.
     raise NoCapacityError(

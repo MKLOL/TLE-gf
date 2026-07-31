@@ -145,12 +145,15 @@ class KeyPool:
     ``report_invalid``. ``acquire`` returns None when every bucket is blocked.
     """
 
-    def __init__(self, db, models, now_fn=time.time):
+    def __init__(self, db, models, now_fn=time.time, ephemeral_keys=None):
         self._db = db
         self._models = [m for m in models if m]
         self._now = now_fn
         self._lock = asyncio.Lock()
         self._keys = []              # list of key rows, in preference order
+        self._ephemeral_keys = list(ephemeral_keys or [])
+        self._ephemeral_ids = set()
+        self._disabled_ephemeral = set()
         self._cooldown = {}          # (key_id, model) -> until   [RPM, memory]
         self._exhausted = {}         # (key_id, model) -> until   [RPD, mirrors DB]
         self._unknown_strikes = {}   # (key_id, model) -> count
@@ -162,8 +165,24 @@ class KeyPool:
 
     def reload(self):
         """Re-read keys and persisted daily exhaustion from the database."""
-        self._keys = list(self._db.llm_get_keys(
-            active_only=True, provider='gemini'))
+        ephemeral = []
+        seen_ephemeral_ids, seen_ephemeral_material = set(), set()
+        for row in self._ephemeral_keys:
+            if (row.id in seen_ephemeral_ids
+                    or row.api_key in seen_ephemeral_material):
+                continue
+            ephemeral.append(row)
+            seen_ephemeral_ids.add(row.id)
+            seen_ephemeral_material.add(row.api_key)
+        ephemeral_ids = {row.id for row in ephemeral}
+        ephemeral_material = {row.api_key for row in ephemeral}
+        persisted = [
+            row for row in self._db.llm_get_keys(
+                active_only=True, provider='gemini')
+            if row.id not in ephemeral_ids and row.api_key not in ephemeral_material
+        ]
+        self._keys = persisted + ephemeral
+        self._ephemeral_ids = {row.id for row in ephemeral}
         now = self._now()
         self._exhausted = {
             (row.key_id, row.model): row.exhausted_until
@@ -173,6 +192,19 @@ class KeyPool:
         logger.info('LLM key pool loaded: %d key(s), %d model(s), '
                     '%d bucket(s) currently exhausted',
                     len(self._keys), len(self._models), len(self._exhausted))
+
+    def set_ephemeral_keys(self, rows):
+        """Merge process-only credentials into the pool.
+
+        Rows need ``id``, ``api_key`` and ``label`` attributes. Callers should
+        use stable negative ids so their in-memory health survives reloads and
+        cannot collide with SQLite ids. An ephemeral row wins over a duplicate
+        persisted value so an authentication failure never deactivates the
+        environment-managed credential through the database path.
+        """
+        self._ephemeral_keys = list(rows or [])
+        if self._loaded:
+            self.reload()
 
     def _ensure_loaded(self):
         if not self._loaded:
@@ -239,7 +271,7 @@ class KeyPool:
                  for row in self._keys
                  for model in (models or self._models)
                  for until in [self._blocked_until(row.id, model)]
-                 if until is not None]
+                 if until is not None and until != float('inf')]
         return min(waits) if waits else None
 
     # ── Outcome reporting ───────────────────────────────────────────────
@@ -307,12 +339,23 @@ class KeyPool:
 
         if strikes < _INVALID_STRIKES_TO_RETIRE:
             until = self._now() + _INVALID_COOLDOWN
-            for model in self._models:
+            for model in set(self._models + [lease.model]):
                 self._cooldown[(lease.key_id, model)] = until
             logger.warning(
                 'LLM key id=%s rejected (strike %d/%d), benched for %.0f min: %s',
                 lease.key_id, strikes, _INVALID_STRIKES_TO_RETIRE,
                 _INVALID_COOLDOWN / 60, _truncate(message))
+            return False
+
+        if lease.key_id in self._ephemeral_ids:
+            self._disabled_ephemeral.add(lease.key_id)
+            for model in set(self._models + [lease.model]):
+                self._cooldown[(lease.key_id, model)] = float('inf')
+            logger.error(
+                'Ephemeral LLM key id=%s disabled for this process after %d '
+                'rejections. Fix the environment value and restart, or reset '
+                'pool health. Last error: %s',
+                lease.key_id, strikes, _truncate(message))
             return False
 
         logger.error(
@@ -324,6 +367,38 @@ class KeyPool:
         self._invalid_strikes.pop(lease.key_id, None)
         return True
 
+    def reset_health(self, key_id=None, model=None):
+        """Clear in-memory health state, optionally for one key or model.
+
+        Persisted daily quota exhaustion is intentionally left alone: a reset
+        should not turn a known-spent Google bucket into another paid probe.
+        Returns the number of in-memory state entries removed.
+        """
+        removed = 0
+
+        def matches(bucket):
+            bucket_key, bucket_model = bucket
+            return ((key_id is None or bucket_key == key_id)
+                    and (model is None or bucket_model == model))
+
+        for mapping in (self._cooldown, self._unknown_strikes):
+            for bucket in list(mapping):
+                if matches(bucket):
+                    mapping.pop(bucket, None)
+                    removed += 1
+        if model is None:
+            for candidate in list(self._invalid_strikes):
+                if key_id is None or candidate == key_id:
+                    self._invalid_strikes.pop(candidate, None)
+                    removed += 1
+            for candidate in list(self._disabled_ephemeral):
+                if key_id is None or candidate == key_id:
+                    self._disabled_ephemeral.discard(candidate)
+                    removed += 1
+        return removed
+
+    reset = reset_health
+
     # ── Introspection (for ;llm status) ─────────────────────────────────
 
     def status(self):
@@ -334,7 +409,9 @@ class KeyPool:
         for row in self._keys:
             for model in self._models:
                 until = self._blocked_until(row.id, model)
-                if until is None:
+                if row.id in self._disabled_ephemeral:
+                    state, wait = 'invalid environment key', None
+                elif until is None:
                     state, wait = 'ready', None
                 elif (row.id, model) in self._exhausted and \
                         self._exhausted[(row.id, model)] > now:
