@@ -18,12 +18,10 @@ import discord
 from discord.ext import commands
 
 from tle import constants
-from tle.util import codeforces_common as cf_common
-from tle.util import discord_common, gemini_api, llm_models
+from tle.util import discord_common, llm_models
 from tle.util.llm_keypool import KeyPool
-from tle.cogs import _llm_context as llm_context
+from tle.cogs import _llm_ask as llm_ask
 from tle.cogs import _llm_format as llm_format
-from tle.cogs import _llm_pipeline as llm_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +33,9 @@ _MIN_KEY_LENGTH = 20
 _KEY_SHAPED = re.compile(r'^[A-Za-z0-9_\-]{%d,}$' % _MIN_KEY_LENGTH)
 
 
-class LlmNotReadyError(commands.CommandError):
-    """The database is not connected yet.
-
-    ``cf_common.initialize`` fetches Codeforces data *before* it assigns
-    ``user_db``, and the bot accepts commands throughout — so for the first
-    seconds after a restart ``cf_common.user_db`` is None. Every command in
-    this cog needs it, so the window is worth naming rather than raising
-    AttributeError from three frames deep.
-    """
-
-
-def _db():
-    """The user database, or raise if the bot has not finished starting.
-
-    Always looked up fresh: caching the value risks capturing the ``None``
-    that exists during startup and holding it for the life of the process.
-    """
-    database = cf_common.user_db
-    if database is None:
-        raise LlmNotReadyError(
-            'The bot is still starting up and the database is not connected '
-            'yet. Try again in a few seconds.')
-    return database
+LlmNotReadyError = llm_ask.LlmNotReadyError
+_db = llm_ask.db
+_today = llm_ask.today
 
 
 def looks_like_api_key(token):
@@ -75,6 +53,7 @@ class Llm(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.logger = logger
         self._pool = None
         self._session = None
         self._bootstrapped = False
@@ -200,84 +179,7 @@ class Llm(commands.Cog):
           ;llm 3.5f <question>     — pick the model
           ;llm 3.5f-h <question>   — and the reasoning tier
         """
-        referenced = await self._resolve_reference(ctx)
-        if question is None and referenced is None:
-            await ctx.send_help(ctx.command)
-            return
-
-        try:
-            spec, tier, question = llm_models.split_selector(question)
-        except ValueError as err:
-            await ctx.send(embed=discord_common.embed_alert(str(err)))
-            return
-        if spec is not None and not question and referenced is None:
-            await ctx.send(embed=discord_common.embed_alert(
-                f'`{spec.aliases[0]}` selected, but no question followed it.'))
-            return
-
-        if question and len(question) > constants.LLM_MAX_PROMPT_CHARS:
-            await ctx.send(embed=discord_common.embed_alert(
-                f'Question too long (max {constants.LLM_MAX_PROMPT_CHARS} characters).'))
-            return
-
-        pool = self._get_pool()
-        if pool.key_count() == 0:
-            await ctx.send(embed=discord_common.embed_alert(
-                'No Gemini API keys are configured. A moderator can add some '
-                'with `;llm keys <key> [key ...]`.'))
-            return
-
-        models = [spec.model_id] if spec is not None else None
-        attachments = llm_context.select_image_attachments(
-            [referenced, ctx.message],
-            constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
-            max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
-
-        stats, failure, mode, window = {}, None, llm_context.MODE_DIRECT, []
-        try:
-            async with ctx.typing():
-                mode = await llm_pipeline.classify(
-                    pool, question, referenced is not None,
-                    session=self._get_session(), stats=stats,
-                    author_name=getattr(ctx.author, 'display_name', None),
-                    author_id=getattr(ctx.author, 'id', None),
-                    sent_at=getattr(ctx.message, 'created_at', None))
-                window = await llm_pipeline.gather(
-                    ctx, mode, referenced, bot_user_id=self._bot_user_id())
-                prompt = llm_pipeline.build_prompt(question, referenced, window)
-                images = await llm_context.read_images(attachments)
-                answer, lease = await gemini_api.complete(
-                    pool, prompt, images=images,
-                    system_instruction=llm_context.SYSTEM_INSTRUCTION,
-                    max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
-                    session=self._get_session(), stats=stats,
-                    models=models, tier=tier)
-        except gemini_api.GeminiError as err:
-            failure = err
-
-        if failure is not None:
-            # Usage is recorded, not enforced — but it should still reflect
-            # requests that actually reached Google, so `;llm keystatus` shows
-            # true consumption rather than only successful calls.
-            if stats.get('attempts'):
-                _db().llm_bump_usage(
-                    ctx.guild.id, ctx.author.id, _today())
-            if isinstance(failure, (gemini_api.ModelUnavailableError,)):
-                logger.error('Gemini model misconfigured: %s', failure)
-            elif not isinstance(failure, (gemini_api.NoCapacityError,
-                                          gemini_api.BlockedError,
-                                          gemini_api.NoKeysError)):
-                logger.exception('Gemini request failed', exc_info=failure)
-            await ctx.send(embed=discord_common.embed_alert(
-                self._describe_failure(failure)))
-            return
-
-        _db().llm_bump_usage(ctx.guild.id, ctx.author.id, _today())
-        tier_note = f'{lease.model} ({tier})' if tier else lease.model
-        for embed in llm_format.build_answer_embeds(
-                answer, tier_note, author=ctx.author,
-                footer_extra=llm_pipeline.describe_mode(mode, window)):
-            await ctx.send(embed=embed)
+        await llm_ask.ask_gemini(self, ctx, question)
 
     def _bot_user_id(self):
         """The bot's own user id, so its answers stay out of the transcript."""
@@ -286,24 +188,7 @@ class Llm(commands.Cog):
 
     @staticmethod
     def _describe_failure(err):
-        """User-facing text for a failed request — never raw upstream HTML."""
-        if isinstance(err, gemini_api.NoCapacityError):
-            if err.attempts_exhausted:
-                return ('Gemini failed on every key I tried. Give it a moment '
-                        'and ask again.')
-            if err.retry_after:
-                return (f'All Gemini keys are out of quota right now. Try again '
-                        f'in {llm_format.format_duration(err.retry_after)}.')
-            return 'All Gemini keys are out of quota right now. Try again later.'
-        if isinstance(err, gemini_api.BlockedError):
-            return str(err)
-        if isinstance(err, gemini_api.ModelUnavailableError):
-            return ('The configured Gemini model is unavailable. A moderator '
-                    'should check `LLM_MODELS`.')
-        if isinstance(err, gemini_api.NoKeysError):
-            return ('No Gemini API keys are configured. A moderator can add '
-                    'some with `;llm keys <key> [key ...]`.')
-        return f'Gemini request failed: {gemini_api.truncate_error(err)}'
+        return llm_ask.describe_gemini_failure(err)
 
     @staticmethod
     async def _resolve_reference(ctx):
@@ -429,10 +314,6 @@ class Llm(commands.Cog):
             title='Gemini key pool',
             description=description,
             color=discord_common._ALERT_AMBER))
-
-
-def _today():
-    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 
 async def _delete_quietly(message):
