@@ -198,3 +198,74 @@ def upgrade_1_47_0(db):
     ''')
     db.commit()
     logger.info('1.47.0: Upgrade complete')
+
+
+@registry.register('1.48.0', 'Provider telemetry and Grok spend reservations')
+def upgrade_1_48_0(db):
+    """Add prompt-free request metrics and credit reservation metadata."""
+    logger.info('1.48.0: Adding LLM telemetry and spend guards')
+    columns = {
+        row[1] for row in db.execute(
+            'PRAGMA table_info(llm_xai_request)').fetchall()
+    }
+    additions = {
+        'guild_id': 'TEXT',
+        'model': 'TEXT',
+        'reserved_microusd': 'INTEGER NOT NULL DEFAULT 0',
+        'actual_microusd': 'INTEGER',
+        'outcome': 'TEXT',
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            db.execute(
+                f'ALTER TABLE llm_xai_request ADD COLUMN {name} {declaration}')
+
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_request_usage (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            requested_at      REAL NOT NULL,
+            day               TEXT NOT NULL,
+            guild_id          TEXT NOT NULL,
+            user_id           TEXT NOT NULL,
+            provider          TEXT NOT NULL,
+            model             TEXT,
+            outcome           TEXT NOT NULL,
+            router_attempts    INTEGER NOT NULL DEFAULT 0,
+            answer_attempts    INTEGER NOT NULL DEFAULT 0,
+            input_tokens       INTEGER NOT NULL DEFAULT 0,
+            output_tokens      INTEGER NOT NULL DEFAULT 0,
+            total_tokens       INTEGER NOT NULL DEFAULT 0,
+            latency_ms         INTEGER NOT NULL DEFAULT 0,
+            cost_microusd      INTEGER NOT NULL DEFAULT 0,
+            context_mode       TEXT,
+            context_messages   INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS llm_request_usage_provider_day '
+        'ON llm_request_usage (provider, day)')
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS llm_request_usage_guild_day '
+        'ON llm_request_usage (guild_id, day)')
+    db.commit()
+    logger.info('1.48.0: Upgrade complete')
+
+
+@registry.register('1.49.0', 'Guild-scoped LLM request bans')
+def upgrade_1_49_0(db):
+    """Add persistent user bans shared by Gemini, Grok, and ``@grok``."""
+    logger.info('1.49.0: Adding guild-scoped LLM request bans')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_user_ban (
+            guild_id  TEXT NOT NULL,
+            user_id   TEXT NOT NULL,
+            banned_by TEXT,
+            banned_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS llm_user_ban_guild_time '
+        'ON llm_user_ban (guild_id, banned_at)')
+    db.commit()
+    logger.info('1.49.0: Upgrade complete')

@@ -1,0 +1,23 @@
+# Never bake runtime credentials or databases into an image layer.
+environment
+.env
+.env.*
+data/
+logs/
+*.db
+*.db-*
+*.part
+tle-backup-service/known_hosts
+tle-backup-service/*.env
+
+# Development metadata and local environments are not runtime inputs.
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.claude/
+.DS_Store

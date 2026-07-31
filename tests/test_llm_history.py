@@ -414,10 +414,11 @@ class TestBuildPrompt:
         assert llm_pipeline.build_prompt('what is a BIT?', None, []) == \
             'what is a BIT?'
 
-    def test_a_reply_without_a_window_quotes_the_message(self):
+    def test_a_reply_without_a_window_uses_a_structured_record(self):
         referenced = HistMessage(author='nife', content='use a BIT')
         prompt = llm_pipeline.build_prompt('why?', referenced, [])
-        assert 'BEGIN QUOTED MESSAGE' in prompt
+        assert 'BEGIN TRANSCRIPT' in prompt
+        assert '"focus":true' in prompt
         assert 'use a BIT' in prompt
 
     def test_a_window_becomes_a_transcript(self):

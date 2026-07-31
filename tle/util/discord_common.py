@@ -2,6 +2,7 @@ import asyncio
 import logging
 import functools
 import random
+import re
 
 import discord
 from discord.ext import commands
@@ -17,6 +18,44 @@ _CF_COLORS = (0xFFCA1F, 0x198BCC, 0xFF2020)
 _SUCCESS_GREEN = 0x28A745
 _ALERT_AMBER = 0xFFBF00
 _BOT_PREFIX = ';'
+_REDACTED_CREDENTIAL = '[credentials redacted]'
+
+# Provider keys have stable prefixes, but allow only credential-like lengths so
+# ordinary prose such as "xai-api" or "an AIza prefix" is left untouched.
+_PROVIDER_CREDENTIAL_RE = re.compile(
+    r'(?<![A-Za-z0-9_-])(?:'
+    r'(?:xai-|AIza)[A-Za-z0-9_-]{20,}|'
+    r'(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|'
+    r'AKIA[A-Z0-9]{16}|'
+    r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
+    r'(?![A-Za-z0-9_-])',
+)
+_LLM_KEY_COMMAND_RE = re.compile(
+    r'\A(?P<command>\s*(?:;|<@!?\d+>\s*)(?:llm|ai)\s+'
+    r'(?:keys|grokkeys|xkeys|xaikeys))(?=\s|\Z)[\s\S]*\Z',
+    re.IGNORECASE,
+)
+
+
+def redact_credentials(value):
+    """Return log-safe text with provider credentials removed.
+
+    A key-management command's entire argument tail is sensitive even when a
+    pasted value has an unfamiliar format. Provider-shaped tokens are also
+    redacted wherever they occur, including exception messages.
+    """
+    text = str(value)
+    command = _LLM_KEY_COMMAND_RE.match(text)
+    if command is not None:
+        text = f'{command.group("command")} {_REDACTED_CREDENTIAL}'
+    return _PROVIDER_CREDENTIAL_RE.sub(_REDACTED_CREDENTIAL, text)
+
+
+class RedactingFormatter(logging.Formatter):
+    """Sanitize the fully rendered record, including exception traceback."""
+
+    def format(self, record):
+        return redact_credentials(super().format(record))
 
 
 def embed_neutral(desc, color=None):
@@ -125,7 +164,9 @@ async def bot_error_handler(ctx, exception):
         msg = 'Ignoring exception in command {}:'.format(ctx.command)
         exc_info = type(exception), exception, exception.__traceback__
         extra = {
-            "message_content": ctx.message.content,
+            # Never attach a raw credential-bearing command to a LogRecord:
+            # file handlers and third-party handlers receive the same record.
+            "message_content": redact_credentials(ctx.message.content),
             "jump_url": ctx.message.jump_url
         }
         logger.exception(msg, exc_info=exc_info, extra=extra)

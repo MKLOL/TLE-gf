@@ -188,6 +188,24 @@ class TestGateCheck:
         assert 'disabled in this channel' in text
         assert '<#' not in text
 
+    def test_blocked_key_upload_is_deleted_before_the_gate_rejects_it(
+            self, db, cog):
+        db.set_command_gate('g1', 'c1')
+        ctx = self._ctx(command_name='grokkeys',
+                        channel=SimpleNamespace(id='c1'))
+        ctx.command.root_parent = SimpleNamespace(name='llm')
+
+        class Message:
+            deleted = False
+
+            async def delete(self):
+                self.deleted = True
+
+        ctx.message = Message()
+        with pytest.raises(discord_common.FeatureDisabledSilent):
+            asyncio.run(cog._gate_check(ctx))
+        assert ctx.message.deleted is True
+
     def test_thread_gate_blocks_parent_with_link(self, db, cog):
         db.set_command_gate('g1', 'c1', 't9')
         ctx = self._ctx(command_name='gitgud', channel=SimpleNamespace(id='c1'))

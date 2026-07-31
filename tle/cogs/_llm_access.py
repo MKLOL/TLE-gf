@@ -1,0 +1,114 @@
+"""Persistent request access policy shared by every LLM entry point."""
+
+import re
+
+import discord
+
+from tle.util import discord_common
+
+GUILD_DISABLED_KEY = 'llm_disabled'
+_CHANNEL_DISABLED_PREFIX = 'llm_disabled_channel:'
+
+
+class LlmAccessDeniedError(Exception):
+    """Raised when policy changes after a request's initial preflight."""
+
+
+def channel_disabled_key(channel_id):
+    return f'{_CHANNEL_DISABLED_PREFIX}{channel_id}'
+
+
+def access_scope(scope):
+    if scope is None or scope.casefold() in ('guild', 'server'):
+        return 'guild'
+    if scope.casefold() in ('here', 'channel'):
+        return 'channel'
+    return None
+
+
+def member_label(member):
+    label = getattr(member, 'display_name', str(getattr(member, 'id', 'user')))
+    return discord.utils.escape_markdown(discord.utils.escape_mentions(label))
+
+
+def user_target(ctx, target):
+    """Resolve a member object, mention, or numeric ID without requiring cache."""
+    if target is None:
+        return None
+    if getattr(target, 'id', None) is not None:
+        return int(target.id), member_label(target)
+    match = re.fullmatch(r'(?:<@!?(\d+)>|(\d+))', str(target).strip())
+    if match is None:
+        return None
+    user_id = int(match.group(1) or match.group(2))
+    getter = getattr(ctx.guild, 'get_member', None)
+    member = getter(user_id) if getter is not None else None
+    label = member_label(member) if member is not None else f'User {user_id}'
+    return user_id, label
+
+
+def scope_channel_id(channel):
+    """Map a thread to its parent so ``disable here`` covers its threads."""
+    parent_id = getattr(channel, 'parent_id', None)
+    return parent_id or getattr(channel, 'id', None)
+
+
+def disabled_scope(database, guild_id, channel_id=None):
+    """Return ``guild``/``channel`` when requests are disabled, else ``None``."""
+    getter = getattr(database, 'get_guild_config', None)
+    if getter is None:
+        return None
+    if getter(guild_id, GUILD_DISABLED_KEY) == '1':
+        return 'guild'
+    if (channel_id is not None
+            and getter(guild_id, channel_disabled_key(channel_id)) == '1'):
+        return 'channel'
+    return None
+
+
+def set_disabled(database, guild_id, channel_id=None, *, disabled, scope):
+    """Set or clear a guild/channel request-disable flag."""
+    if scope == 'guild':
+        key = GUILD_DISABLED_KEY
+    elif scope == 'channel' and channel_id is not None:
+        key = channel_disabled_key(channel_id)
+    else:
+        raise ValueError('Invalid LLM disable scope')
+    if disabled:
+        database.set_guild_config(guild_id, key, '1')
+    else:
+        database.delete_guild_config(guild_id, key)
+
+
+def request_block_reason(database, guild_id, channel_id, user_id):
+    """Return a public-safe reason when an LLM request must not proceed."""
+    scope = disabled_scope(database, guild_id, channel_id)
+    if scope == 'guild':
+        return 'LLM requests are disabled in this server.'
+    if scope == 'channel':
+        return 'LLM requests are disabled in this channel.'
+    if database.llm_is_user_banned(guild_id, user_id):
+        return 'You are not allowed to use LLM requests in this server.'
+    return None
+
+
+def context_block_reason(database, ctx):
+    channel_id = scope_channel_id(getattr(ctx, 'channel', None))
+    return request_block_reason(
+        database, ctx.guild.id, channel_id, ctx.author.id)
+
+
+async def allow_request_or_notify(database, ctx):
+    """Run a request preflight and send its denial reason when blocked."""
+    reason = context_block_reason(database, ctx)
+    if reason is None:
+        return True
+    await ctx.send(embed=discord_common.embed_alert(reason))
+    return False
+
+
+def raise_if_request_blocked(database, ctx):
+    """Recheck policy inside the runtime queue before reserving/provider use."""
+    reason = context_block_reason(database, ctx)
+    if reason is not None:
+        raise LlmAccessDeniedError(reason)

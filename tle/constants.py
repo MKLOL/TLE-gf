@@ -45,6 +45,17 @@ def _int_env(name, default):
         print(f'WARNING: {name}={raw!r} is not an integer, using {default}')
         return default
 
+
+def _float_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        print(f'WARNING: {name}={raw!r} is not numeric, using {default}')
+        return default
+
 TLE_ADMIN = os.environ.get('TLE_ADMIN', 'Admin')
 TLE_MODERATOR = os.environ.get('TLE_MODERATOR', 'Moderator')
 
@@ -113,9 +124,8 @@ LLM_MODELS = tuple(m.strip() for m in os.environ.get(
     'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite,'
     'gemini-2.5-flash'
 ).split(',') if m.strip())
-# Optional bootstrap keys, comma-separated, for provisioning without typing
-# secrets into Discord. Keys added via `;llm keys` are stored in user.db and
-# are merged with these on startup.
+# Optional process-only keys, comma-separated. They are never copied into
+# SQLite; owner-uploaded Discord keys remain available as a fallback.
 GEMINI_API_KEYS = os.environ.get('GEMINI_API_KEYS', '')
 # xAI provisioning. The singular spelling matches xAI's examples; the plural
 # accepts a comma-separated pool for operators who keep multiple teams/keys.
@@ -125,6 +135,10 @@ XAI_API_KEYS = ','.join(
         os.environ.get('XAI_API_KEY', '').strip(),
     ) if value)
 XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.3').strip() or 'grok-4.3'
+# Strongest-to-weakest fallback ladder. The legacy singular setting remains
+# the default so deployments opt into—and knowingly price—fallback models.
+XAI_MODELS = tuple(m.strip() for m in os.environ.get(
+    'XAI_MODELS', XAI_MODEL).split(',') if m.strip()) or (XAI_MODEL,)
 # Grok uses a smaller answer budget and a persistent credit guard. Thresholds
 # are operator configuration and deliberately are not shown in Discord denial
 # messages. Gemini remains uncapped by the bot.
@@ -133,6 +147,28 @@ XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 10)
 XAI_USER_RATE_WINDOW_SECONDS = _int_env(
     'XAI_USER_RATE_WINDOW_SECONDS', 30 * 60)
 XAI_DAILY_REQUEST_LIMIT = _int_env('XAI_DAILY_REQUEST_LIMIT', 100)
+# Current grok-4.3 short-context prices, configurable because model prices and
+# a custom XAI_MODELS ladder can differ. A private $1/day guard conserves the
+# operator's $5 balance; public denial messages never reveal it.
+XAI_INPUT_USD_PER_MILLION = max(
+    0.0, _float_env('XAI_INPUT_USD_PER_MILLION', 1.25))
+XAI_OUTPUT_USD_PER_MILLION = max(
+    0.0, _float_env('XAI_OUTPUT_USD_PER_MILLION', 2.50))
+XAI_DAILY_BUDGET_USD = max(
+    0.0, _float_env('XAI_DAILY_BUDGET_USD', 1.00))
+XAI_REQUEST_RESERVE_INPUT_TOKENS = max(
+    1, _int_env('XAI_REQUEST_RESERVE_INPUT_TOKENS', 6000))
+# One deadline covers history, attachments, router, fallbacks, and answer.
+LLM_REQUEST_TIMEOUT_SECONDS = max(
+    1, _int_env('LLM_REQUEST_TIMEOUT_SECONDS', 90))
+LLM_ROUTER_TIMEOUT_SECONDS = max(
+    1, _int_env('LLM_ROUTER_TIMEOUT_SECONDS', 15))
+LLM_QUEUE_TIMEOUT_SECONDS = max(
+    1, _int_env('LLM_QUEUE_TIMEOUT_SECONDS', 10))
+LLM_GEMINI_CONCURRENCY = max(1, _int_env('LLM_GEMINI_CONCURRENCY', 3))
+LLM_XAI_CONCURRENCY = max(1, _int_env('LLM_XAI_CONCURRENCY', 2))
+LLM_TELEMETRY_RETENTION_DAYS = max(
+    1, _int_env('LLM_TELEMETRY_RETENTION_DAYS', 30))
 # Per-user call counts are still recorded (see `;llm keystatus`) so moderators
 # can see who is consuming provider capacity.
 LLM_MAX_PROMPT_CHARS = _int_env('LLM_MAX_PROMPT_CHARS', 4000)
@@ -148,10 +184,9 @@ LLM_MAX_OUTPUT_TOKENS = _int_env('LLM_MAX_OUTPUT_TOKENS', 2048)
 LLM_MAX_IMAGES = _int_env('LLM_MAX_IMAGES', 4)
 LLM_MAX_IMAGE_BYTES = _int_env('LLM_MAX_IMAGE_BYTES', 4 * 1024 * 1024)
 LLM_MAX_TOTAL_IMAGE_BYTES = _int_env('LLM_MAX_TOTAL_IMAGE_BYTES', 12 * 1024 * 1024)
-# Channel-history context. A cheap routing call first decides whether the
-# question needs the conversation at all; when it does, these bound how much
-# gets pulled in. Set LLM_CONTEXT_ENABLED=0 to skip routing entirely and halve
-# the request count per question.
+# Channel-history context. High-confidence requests route locally; only
+# ambiguous non-replies pay for a classifier. Guild/channel policy can further
+# restrict this to explicit requests or disable history entirely.
 LLM_CONTEXT_ENABLED = os.environ.get('LLM_CONTEXT_ENABLED', '1').strip() != '0'
 LLM_CONTEXT_MESSAGES = _int_env('LLM_CONTEXT_MESSAGES', 50)
 LLM_CONTEXT_WINDOW_SECONDS = _int_env('LLM_CONTEXT_WINDOW_SECONDS', 600)

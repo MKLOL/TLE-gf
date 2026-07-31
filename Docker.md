@@ -24,9 +24,13 @@ foo@bar:~$ sudo docker build .
 
 ```bash
 cp environment.template environment
+chmod 600 environment
 ```
 
-Fill in appropriate variables in new "environment" file.
+Fill in appropriate variables in the new `environment` file. `run.sh` refuses
+to load it when group or other users can read it. The file, runtime databases,
+and logs are also excluded from Docker builds by `.dockerignore`; do not pass
+credentials with Docker `--build-arg` or copy them into an image layer.
 
 
 - open the file `environment`.

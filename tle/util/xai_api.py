@@ -1,9 +1,11 @@
 """Small async client and key rotator for xAI Chat Completions."""
+import asyncio
 import base64
 import logging
-from collections import namedtuple
 
 import aiohttp
+
+from tle.util.xai_keypool import Lease, XaiKeyPool
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +17,6 @@ _REQUEST_TIMEOUT = 60
 _MAX_ERROR_CHARS = 400
 _MAX_ATTEMPTS = 8
 _IMAGE_MIMES = frozenset(('image/jpeg', 'image/png'))
-
-Lease = namedtuple('XaiLease', 'key_id api_key label model')
 
 
 class XaiError(Exception):
@@ -58,39 +58,9 @@ class ServiceUnavailableError(XaiError):
 class NoCapacityError(XaiError):
     """Configured keys failed for a mixture of retryable reasons."""
 
-
-class XaiKeyPool:
-    """Round-robin view of active xAI keys in the shared LLM key table."""
-
-    def __init__(self, db, model):
-        self.db = db
-        self.model = model
-        self._keys = []
-        self._cursor = 0
-        self.reload()
-
-    def reload(self):
-        self._keys = list(self.db.llm_get_keys(
-            active_only=True, provider='xai'))
-        if self._keys:
-            self._cursor %= len(self._keys)
-        else:
-            self._cursor = 0
-
-    def key_count(self):
-        return len(self._keys)
-
-    def leases(self, max_attempts=None):
-        """Return a rotating snapshot, trying each key at most once."""
-        if not self._keys:
-            return []
-        limit = min(len(self._keys), max_attempts or _MAX_ATTEMPTS,
-                    _MAX_ATTEMPTS)
-        start = self._cursor % len(self._keys)
-        self._cursor = (start + 1) % len(self._keys)
-        ordered = self._keys[start:] + self._keys[:start]
-        return [Lease(row.id, row.api_key, row.label, self.model)
-                for row in ordered[:limit]]
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def is_supported_image(content_type):
@@ -201,6 +171,56 @@ def _is_bad_key_error(status, message):
     return status == 401 or 'api key' in normalized or 'authentication' in normalized
 
 
+def is_model_unavailable_error(status, message):
+    """True when the model id, rather than a credential, cannot be used."""
+    if status == 404:
+        return True
+    if status not in (400, 403):
+        return False
+    normalized = (message or '').lower().replace('_', ' ')
+    unavailable = ('not found', 'not available', 'unknown model',
+                   'unsupported', 'not supported', 'does not exist')
+    return 'model' in normalized and any(
+        marker in normalized for marker in unavailable)
+
+
+def is_model_access_error(status, message):
+    """Identify a 403 scoped to one model, excluding billing/team failures."""
+    if status != 403:
+        return False
+    normalized = (message or '').lower().replace('_', ' ')
+    if any(word in normalized for word in (
+            'credit', 'billing', 'balance', 'fund', 'subscription')):
+        return False
+    access = ('access', 'permission', 'authoriz', 'entitle', 'available')
+    return 'model' in normalized and any(word in normalized for word in access)
+
+
+def _record_stats(stats, attempts, payload=None):
+    if stats is None:
+        return
+    stats['attempts'] = stats.get('attempts', 0) + attempts
+    usage = (payload or {}).get('usage') or {}
+    fields = {
+        'input_tokens': 'prompt_tokens',
+        'output_tokens': 'completion_tokens',
+        'total_tokens': 'total_tokens',
+    }
+    for target, source in fields.items():
+        value = usage.get(source)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            stats[target] = stats.get(target, 0) + value
+    raw_cost = usage.get('cost_in_usd_ticks')
+    try:
+        ticks = int(raw_cost)
+    except (TypeError, ValueError):
+        ticks = None
+    if ticks is not None and ticks >= 0:
+        # xAI defines 1 USD as 10^10 ticks; one micro-USD is 10^4 ticks.
+        microusd = (ticks + 9_999) // 10_000
+        stats['cost_microusd'] = stats.get('cost_microusd', 0) + microusd
+
+
 def _retry_after(headers, payload):
     headers = {str(key).lower(): value for key, value in (headers or {}).items()}
     raw = headers.get('retry-after')
@@ -236,21 +256,43 @@ async def generate_once(api_key, payload, session=None):
 async def complete(pool, prompt, images=None, system_instruction=None,
                    max_output_tokens=None, temperature=None,
                    reasoning_effort=None, session=None, stats=None,
-                   max_attempts=None):
-    """Try active xAI keys in round-robin order until one answers."""
-    leases = pool.leases(max_attempts=max_attempts)
-    if not leases:
+                   max_attempts=None, models=None):
+    """Try healthy xAI key/model buckets, falling back down the ladder."""
+    if pool.key_count() == 0:
         raise NoKeysError('No xAI API keys are configured.')
+
+    ladder = pool.models if models is None else models
+    if isinstance(ladder, str):
+        ladder = [ladder]
+    ladder = list(dict.fromkeys(model for model in ladder or [] if model))
+    if not ladder:
+        _record_stats(stats, 0)
+        raise ModelUnavailableError('No xAI models are configured.')
+
+    attempt_limit = min(_MAX_ATTEMPTS, max_attempts or _MAX_ATTEMPTS)
+    # Health changes while walking the snapshot. Pull enough candidates for
+    # skipped same-model or newly-benched buckets not to consume the on-wire
+    # attempt budget.
+    leases = pool.leases(
+        max_attempts=pool.candidate_count(models=ladder), models=ladder)
 
     attempts = 0
     failures = []
     rate_retry_after = None
+    unavailable_models = set()
+    recorded = False
 
-    def record():
-        if stats is not None:
-            stats['attempts'] = attempts
+    def record(payload=None):
+        nonlocal recorded
+        if not recorded:
+            _record_stats(stats, attempts, payload)
+            recorded = True
 
     for lease in leases:
+        if attempts >= attempt_limit:
+            break
+        if lease.model in unavailable_models or not pool.is_available(lease):
+            continue
         payload = build_payload(
             lease.model, prompt, images=images,
             system_instruction=system_instruction,
@@ -260,41 +302,59 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         try:
             status, body, headers = await generate_once(
                 lease.api_key, payload, session=session)
+        except asyncio.CancelledError:
+            # A deadline can cancel this coroutine after the provider has the
+            # request. Count that attempt and avoid immediately reusing the
+            # same key/model bucket for the answer stage.
+            record()
+            pool.report_transient(lease, message='request cancelled')
+            raise
         except _TRANSPORT_ERRORS as err:
-            logger.warning('xAI transport error on key=%s: %s',
-                           lease.key_id, err)
+            logger.warning('xAI transport error on key=%s model=%s: %s',
+                           lease.key_id, lease.model, err)
+            pool.report_transient(lease, message=err)
             failures.append(ServiceUnavailableError('network error'))
             continue
 
         message = error_message(body) or f'HTTP {status}'
         if status == 200:
+            pool.report_success(lease)
+            record(body)
             try:
                 answer, actual_model = extract_text(body)
             except XaiError:
-                record()
                 raise
-            record()
             if actual_model:
                 lease = lease._replace(model=actual_model)
             return answer, lease
+        if status in (400, 404) and is_model_unavailable_error(status, message):
+            pool.report_model_unavailable(lease, message=message)
+            unavailable_models.add(lease.model)
+            failures.append(ModelUnavailableError(message))
+            logger.warning('xAI model unavailable, falling back from %s: %s',
+                           lease.model, message)
+            continue
         if _is_bad_key_error(status, message):
+            pool.report_invalid(lease, message=message)
             failures.append(AuthenticationError(message))
             continue
         if status == 403:
+            model_specific = is_model_access_error(status, message)
+            pool.report_access(lease, message=message,
+                               model_specific=model_specific)
             failures.append(AccessDeniedError(message))
             continue
         if status == 429:
             hint = _retry_after(headers, body)
-            if hint is not None:
-                rate_retry_after = (hint if rate_retry_after is None
-                                    else min(rate_retry_after, hint))
+            applied = pool.report_rate_limit(
+                lease, retry_after=hint, message=message)
+            rate_retry_after = (applied if rate_retry_after is None
+                                else min(rate_retry_after, applied))
             failures.append(RateLimitError(
                 message, retry_after=rate_retry_after))
             continue
-        if status == 404:
-            record()
-            raise ModelUnavailableError(message)
         if status >= 500:
+            pool.report_transient(lease, message=message)
             failures.append(ServiceUnavailableError(message))
             continue
 
@@ -303,9 +363,12 @@ async def complete(pool, prompt, images=None, system_instruction=None,
 
     record()
     if not failures:
-        raise XaiError('No xAI key produced an answer.')
+        raise NoCapacityError(
+            'All xAI keys or models are temporarily unavailable.',
+            retry_after=pool.retry_after_hint(models=ladder))
     failure_types = {type(error) for error in failures}
     if len(failure_types) == 1:
         raise failures[-1]
     raise NoCapacityError(
-        'Configured xAI keys failed for different retryable reasons.')
+        'Configured xAI keys failed for different retryable reasons.',
+        retry_after=pool.retry_after_hint(models=ladder))

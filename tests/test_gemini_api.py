@@ -238,6 +238,15 @@ class TestComplete:
         assert answer == 'from the fallback'
         assert [call['model'] for call in calls] == ['model-a', 'model-b']
 
+    def test_one_model_selector_fails_fast_without_burning_the_pool(
+            self, pool, monkeypatch):
+        calls = _responder(monkeypatch, [
+            (404, {'error': {'message': 'models/model-a is not found'}}),
+        ])
+        with pytest.raises(gemini_api.ModelUnavailableError):
+            run(gemini_api.complete(pool, 'question', models=['model-a']))
+        assert len(calls) == 1
+
     def test_a_ladder_of_unknown_models_fails_loudly(self, pool, monkeypatch):
         # LLM_MODELS is simply wrong; only a moderator can fix that, so it
         # must not be reported as a passing quota problem.
@@ -372,6 +381,19 @@ class TestToolFallback:
         assert answer == 'answer'
         assert 'tools' in calls[0]['payload']
         assert 'tools' not in calls[1]['payload']
+
+    def test_tool_rejection_wins_over_model_unavailable_classification(
+            self, pool, monkeypatch):
+        rejection = (400, {'error': {
+            'status': 'INVALID_ARGUMENT',
+            'message': 'Model model-a does not support the url_context tool',
+        }})
+        calls = _responder(monkeypatch,
+                           [rejection, (200, text_response('answer'))])
+        answer, lease = run(gemini_api.complete(
+            pool, 'question', tools=[{'url_context': {}}]))
+        assert answer == 'answer' and lease.model == 'model-a'
+        assert [call['model'] for call in calls] == ['model-a', 'model-a']
 
     def test_the_rejected_bucket_is_not_burned(self, monkeypatch):
         # A one-bucket pool has nothing to fall back to, so the retry has to

@@ -25,9 +25,11 @@ import fcntl
 import glob
 import logging
 import os
+import re
 import shlex
 import sys
 import tempfile
+from contextlib import contextmanager
 
 try:
     import paramiko
@@ -63,6 +65,54 @@ KNOWN_HOSTS = _cfg("TLE_KNOWN_HOSTS", os.path.join(_HERE, "known_hosts"))
 # /tmp etc., which fails under a sandbox with no writable /tmp — only fall back to
 # it when TLE_LOCKFILE is unset.
 LOCKFILE = os.environ.get("TLE_LOCKFILE") or os.path.join(tempfile.gettempdir(), "tle-backup.lock")
+_REDACTED = "[redacted]"
+_API_KEY_RE = re.compile(
+    r'(?<![A-Za-z0-9_-])(?:xai-|AIza)[A-Za-z0-9_-]{20,}'
+    r'(?![A-Za-z0-9_-])',
+)
+
+
+@contextmanager
+def private_creation_mask():
+    """Make files created by libraries private, restoring the caller's mask."""
+    previous = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+def ensure_private_directory(path):
+    """Create a service-owned directory and enforce owner-only access."""
+    with private_creation_mask():
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def ensure_private_parent(path):
+    """Privately create a missing parent without changing shared parents."""
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and not os.path.exists(parent):
+        ensure_private_directory(parent)
+
+
+def open_private(path, *, truncate=False):
+    """Open an owner-only service artifact without a permissive creation race."""
+    ensure_private_parent(path)
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= os.O_TRUNC if truncate else os.O_APPEND
+    fd = os.open(path, flags, 0o600)
+    os.chmod(path, 0o600)
+    return os.fdopen(fd, "w")
+
+
+def safe_error(exc):
+    """Remove configured credentials and provider-shaped keys from errors."""
+    text = str(exc)
+    for secret in (SRC_PASSWORD,):
+        if secret:
+            text = text.replace(secret, _REDACTED)
+    return _API_KEY_RE.sub(_REDACTED, text)
 
 
 def connect():
@@ -70,9 +120,8 @@ def connect():
     # Trust-on-first-use: load (or create) a pinned known_hosts file. AutoAddPolicy
     # records the host key on first connect and persists it; on later runs paramiko
     # raises BadHostKeyException if the key CHANGED (MITM protection for the DB pull).
-    os.makedirs(os.path.dirname(KNOWN_HOSTS) or ".", exist_ok=True)
-    if not os.path.exists(KNOWN_HOSTS):
-        open(KNOWN_HOSTS, "a").close()
+    ensure_private_parent(KNOWN_HOSTS)
+    open_private(KNOWN_HOSTS).close()
     try:
         client.load_host_keys(KNOWN_HOSTS)
     except IOError:
@@ -130,7 +179,7 @@ def prune():
 
 
 def do_backup():
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ensure_private_directory(BACKUP_DIR)
     now = datetime.datetime.now(datetime.timezone.utc)
     dest = os.path.join(BACKUP_DIR, f"user_db_{now.strftime('%Y%m%d_%H%M%S')}.db")
     part = dest + ".part"
@@ -140,12 +189,17 @@ def do_backup():
     LOG.info("connecting to %s@%s:%d", SRC_USER, SRC_HOST, SRC_PORT)
     client = connect()
     try:
-        # 1) consistent snapshot on the source
-        run_remote(client, f"rm -f {snap}")
-        rc, out, err = run_remote(client, f'sqlite3 {src} ".timeout 15000" ".backup {snap}"')
+        # 1) consistent snapshot on the source. The umask applies before
+        # sqlite creates the file, avoiding a readable window before chmod.
+        rc, out, err = run_remote(
+            client,
+            f'rm -f {snap} && umask 077 && '
+            f'sqlite3 {src} ".timeout 15000" ".backup {snap}"')
         if rc != 0:
-            raise RuntimeError(f"remote snapshot failed (rc={rc}): {err or out}")
-        rc, out, err = run_remote(client, f"test -s {snap} && stat -c %s {snap}")
+            raise RuntimeError(
+                f"remote snapshot failed (rc={rc}): {safe_error(err or out)}")
+        rc, out, err = run_remote(
+            client, f"test -s {snap} && chmod 600 {snap} && stat -c %s {snap}")
         if rc != 0 or not out.isdigit():
             raise RuntimeError("remote snapshot missing or empty after .backup")
         remote_size = int(out)
@@ -154,9 +208,12 @@ def do_backup():
         # 2) download atomically
         sftp = client.open_sftp()
         try:
+            # Pre-create so SFTP never opens a world-readable partial file.
+            open_private(part, truncate=True).close()
             sftp.get(REMOTE_SNAPSHOT, part)
         finally:
             sftp.close()
+        os.chmod(part, 0o600)
         local_size = os.path.getsize(part)
         if local_size != remote_size:
             raise RuntimeError(f"size mismatch: remote={remote_size} local={local_size}")
@@ -164,6 +221,7 @@ def do_backup():
         # 3) verify, then commit the filename
         verify_sqlite(part)
         os.replace(part, dest)
+        os.chmod(dest, 0o600)
         LOG.info("backup OK: %s (%d bytes)", dest, local_size)
 
         # 4) best-effort: stamp last-backup time in the live DB for ;backup status.
@@ -177,12 +235,22 @@ def do_backup():
         if rc == 0:
             LOG.info("stamped %s=%s in live DB", KVS_KEY, epoch)
         else:
-            LOG.warning("could not stamp backup time (non-fatal, rc=%d): %s", rc, err or out)
+            LOG.warning("could not stamp backup time (non-fatal, rc=%d): %s",
+                        rc, safe_error(err or out))
 
-        # 5) clean up remote snapshot
-        run_remote(client, f"rm -f {snap}")
     finally:
-        client.close()
+        # Attempt cleanup even when snapshot creation, transfer, or validation
+        # fails. A stale remote copy is still a complete credential-bearing DB.
+        try:
+            rc, out, err = run_remote(client, f"rm -f {snap}")
+            if rc != 0:
+                LOG.warning("could not remove remote snapshot (rc=%d): %s",
+                            rc, safe_error(err or out))
+        except Exception as cleanup_error:  # noqa: BLE001 - preserve root cause
+            LOG.warning("could not remove remote snapshot: %s",
+                        safe_error(cleanup_error))
+        finally:
+            client.close()
 
     # 6) prune (only reached on a successful backup)
     prune()
@@ -191,7 +259,7 @@ def do_backup():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # Single-run lock: skip (cleanly) if a previous run is still going.
-    lock_fd = open(LOCKFILE, "w")
+    lock_fd = open_private(LOCKFILE, truncate=True)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -210,7 +278,7 @@ if __name__ == "__main__":
     except Exception as exc:  # noqa: BLE001 — top-level guard for cron/journal visibility
         if not logging.getLogger().handlers:
             logging.basicConfig(level=logging.INFO)
-        LOG.error("BACKUP FAILED: %s", exc)
+        LOG.error("BACKUP FAILED: %s", safe_error(exc))
         # leave any *.part behind for inspection unless zero-byte; next run overwrites
         for f in glob.glob(os.path.join(BACKUP_DIR, "*.part")):
             try:
