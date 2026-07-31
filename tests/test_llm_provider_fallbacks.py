@@ -205,6 +205,15 @@ class TestXaiReliability:
         assert pool.reset(key_id=lease.key_id, model=lease.model) > 0
         assert pool.status()[0]['state'] == 'ready'
 
+    def test_status_omits_secret_bearing_metadata(self):
+        secret = 'xai-abcdefghijklmnopqrstuv-secret'
+        pool, _ = _xai_pool(models=('grok-strong',))
+        pool.report_access(pool.leases()[0], message=secret)
+        rows = pool.status()
+        assert secret not in str(rows)
+        assert all('label' not in row and 'last_error' not in row
+                   for row in rows)
+
     def test_authentication_benches_then_retires_persisted_key(
             self, monkeypatch):
         clock = FakeClock()

@@ -288,6 +288,7 @@ class TestStatus:
 
     def test_status_never_contains_key_material(self, pool):
         assert 'AIzaSy' not in str(pool.status())
+        assert all('label' not in row for row in pool.status())
 
 
 class TestExcludingAttemptedBuckets:

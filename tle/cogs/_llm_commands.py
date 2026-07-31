@@ -27,9 +27,12 @@ class LlmCommandsMixin:
 
     @llm.command(brief='List selectable models and reasoning tiers')
     async def models(self, ctx):
-        ladder = ', '.join(f'`{name}`' for name in constants.LLM_MODELS)
+        ladder = ', '.join(
+            f'`{llm_format.safe_display(name)}`'
+            for name in constants.LLM_MODELS)
         grok_ladder = ' → '.join(
-            f'`{name}`' for name in constants.XAI_MODELS)
+            f'`{llm_format.safe_display(name)}`'
+            for name in constants.XAI_MODELS)
         await ctx.send(embed=discord.Embed(
             title='Selectable models',
             description=(
@@ -336,7 +339,7 @@ class LlmCommandsMixin:
                          else _is_xai_key(api_key))
                 counts['wrong_provider' if other else 'rejected'] += 1
                 continue
-            label = (f'{provider}-owner-{ctx.author.id}-'
+            label = (f'owner-{provider}-{ctx.author.id}-'
                      f'{datetime.now(timezone.utc):%Y%m%d}')
             result = self._llm_db().llm_add_key(
                 api_key, label=label, guild_id=ctx.guild.id,

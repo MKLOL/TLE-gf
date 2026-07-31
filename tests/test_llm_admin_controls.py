@@ -75,7 +75,9 @@ class TestOwnerStatus:
     KEY = 'xai-StatusExampleKey1234567890'
 
     def test_grok_status_is_provider_split_and_threshold_free(self, db):
-        db.llm_add_key(self.KEY, provider='xai')
+        # Treat labels as untrusted legacy metadata: an old/corrupt label must
+        # never make a credential visible in the provider-health embed.
+        db.llm_add_key(self.KEY, label=self.KEY, provider='xai')
         day = llm_cog._today()
         db.llm_record_request(
             100, 1, 'xai', day, 'success', model='grok-test',
@@ -99,6 +101,14 @@ class TestOwnerStatus:
         assert self.KEY not in text
         assert 'daily limit' not in text.casefold()
         assert 'per 30' not in text.casefold()
+
+    def test_models_command_redacts_credential_shaped_configuration(
+            self, monkeypatch):
+        monkeypatch.setattr(constants, 'XAI_MODELS', (self.KEY,))
+        ctx = FakeCtx()
+        _invoke(llm_cog.Llm.models, llm_cog.Llm(OwnerBot()), ctx)
+        assert self.KEY not in ctx.text
+        assert 'REDACTED' in ctx.text
 
     def test_non_owner_cannot_see_health_or_spend(self, db):
         db.llm_add_key(self.KEY, provider='xai')

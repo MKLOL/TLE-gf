@@ -283,8 +283,7 @@ class XaiKeyPool:
                     state = reason[0] if reason else 'cooling down'
                     wait = None if until == float('inf') else until - now
                 out.append({
-                    'key_id': row.id, 'label': row.label, 'model': model,
+                    'key_id': row.id, 'model': model,
                     'state': state, 'wait': wait,
-                    'last_error': reason[1] if reason else None,
                 })
         return out

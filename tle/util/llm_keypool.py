@@ -445,8 +445,8 @@ class KeyPool:
                     state, wait = 'daily quota spent', until - now
                 else:
                     state, wait = 'cooling down', until - now
-                out.append({'key_id': row.id, 'label': row.label,
-                            'model': model, 'state': state, 'wait': wait})
+                out.append({'key_id': row.id, 'model': model,
+                            'state': state, 'wait': wait})
         return out
 
 

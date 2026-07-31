@@ -95,6 +95,14 @@ class TestBuildAnswerEmbeds:
         assert secret not in embeds[0].description
         assert '[REDACTED]' in embeds[0].description
 
+    def test_provider_credentials_in_footer_metadata_are_redacted(self):
+        secret = 'xai-abcdefghijklmnopqrstuv-secret'
+        embeds = llm_format.build_answer_embeds(
+            'answer', secret, footer_extra=f'fallback from {secret}')
+        footer = embeds[-1].footer['text']
+        assert secret not in footer
+        assert 'REDACTED' in footer
+
 
 class TestFormatKeyRows:
     def test_no_keys(self):
@@ -116,6 +124,15 @@ class TestFormatKeyRows:
         db.llm_add_key('AIzaSyABCDEFGHIJKLMNOPQRSTUV1234')
         rendered = llm_format.format_key_rows(db.llm_get_keys())
         assert 'AIzaSyABCDEFGHIJKLMNOPQRSTUV1234' not in rendered
+
+    def test_secret_valued_label_is_redacted(self):
+        secret = 'xai-abcdefghijklmnopqrstuv-secret'
+        db = FakeLlmDb()
+        db.llm_add_key(secret, label=secret, provider='xai')
+        rendered = llm_format.format_key_rows(
+            db.llm_get_keys(provider='xai'))
+        assert secret not in rendered
+        assert 'REDACTED' in rendered
 
 
 class TestFormatPoolStatus:
@@ -147,3 +164,17 @@ class TestFormatPoolStatus:
         ]
         rendered = llm_format.format_pool_status(rows)
         assert rendered.count('Key #7') == 1
+
+    def test_secret_metadata_never_reaches_provider_health(self):
+        secret = 'xai-abcdefghijklmnopqrstuv-secret'
+        rows = [{
+            'key_id': 7,
+            'label': secret,
+            'model': secret,
+            'state': f'provider rejected {secret}',
+            'wait': None,
+        }]
+        rendered = llm_format.format_pool_status(rows)
+        assert secret not in rendered
+        assert 'REDACTED' in rendered
+        assert 'label' not in rendered

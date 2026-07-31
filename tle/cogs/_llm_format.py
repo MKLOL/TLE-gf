@@ -12,6 +12,19 @@ _ANSWER_COLOR = 0x4285F4  # Google blue
 _MAX_EMBED_PAGES = 4
 
 
+def safe_display(value, limit=100):
+    """Bound and credential-redact untrusted metadata shown in Discord."""
+    if value is None:
+        return ''
+    # Import lazily to keep this presentation module usable in the lightweight
+    # Discord test environment and to share the outbound secret patterns.
+    from tle.cogs._llm_history import redact_secrets
+    text = redact_secrets(value)
+    text = ' '.join(text.split())
+    text = text.replace('`', "'").replace('@', '@\N{ZERO WIDTH SPACE}')
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
 def redact_key(api_key):
     """Render a key safe to display: keep enough to identify, drop the secret.
 
@@ -82,16 +95,19 @@ def build_answer_embeds(answer, model, author=None, footer_extra=None):
     answer = redact_secrets(answer)
     chunks = split_for_embed(answer)
     embeds = []
+    safe_model = safe_display(model) or 'unknown model'
+    safe_extra = safe_display(footer_extra, limit=160)
     for index, chunk in enumerate(chunks):
         embed = discord.Embed(description=chunk, color=_ANSWER_COLOR)
         if index == len(chunks) - 1:
-            footer = model
-            if footer_extra:
-                footer = f'{model} • {footer_extra}'
+            footer = safe_model
+            if safe_extra:
+                footer = f'{safe_model} • {safe_extra}'
             embed.set_footer(text=footer)
         embeds.append(embed)
     if embeds and author is not None:
         name = getattr(author, 'display_name', None) or str(author)
+        name = safe_display(name, limit=80) or 'unknown user'
         avatar = getattr(getattr(author, 'display_avatar', None), 'url', None)
         try:
             embeds[0].set_author(name=f'Asked by {name}', icon_url=avatar)
@@ -107,9 +123,7 @@ def format_key_rows(keys):
     lines = []
     for row in keys:
         raw_label = getattr(row, 'label', None)
-        safe_label = (' '.join(str(raw_label).split())[:60]
-                      .replace('`', "'").replace('@', '@\N{ZERO WIDTH SPACE}')) \
-            if raw_label else None
+        safe_label = safe_display(raw_label, limit=60) if raw_label else None
         label = f' `{safe_label}`' if safe_label else ''
         added_by = getattr(row, 'added_by', None)
         who = f' — added by <@{added_by}>' if added_by else ''
@@ -138,23 +152,23 @@ def format_pool_status(status_rows, add_hint=';llm keys'):
         by_key.setdefault(row['key_id'], []).append(row)
     lines = []
     for key_id, rows in sorted(by_key.items()):
-        label = rows[0].get('label')
-        header = f'**Key #{key_id}**' + (f' `{label}`' if label else '')
-        lines.append(header)
+        lines.append(f'**Key #{safe_display(key_id, limit=24)}**')
         for row in rows:
-            if row['state'] == 'ready':
+            raw_state = row['state']
+            if raw_state == 'ready':
                 mark = '\N{LARGE GREEN CIRCLE}'
                 detail = 'ready'
-            elif row['state'] == 'daily quota spent':
+            elif raw_state == 'daily quota spent':
                 mark = '\N{LARGE RED CIRCLE}'
                 detail = f"daily quota spent, back in {format_duration(row['wait'])}"
-            elif row['state'] == 'invalid environment key':
+            elif raw_state == 'invalid environment key':
                 mark = '\N{LARGE RED CIRCLE}'
-                detail = row['state']
+                detail = raw_state
             else:
                 mark = '\N{LARGE YELLOW CIRCLE}'
-                detail = row['state']
+                detail = safe_display(raw_state) or 'unknown state'
                 if row.get('wait') is not None:
                     detail += f", {format_duration(row['wait'])}"
-            lines.append(f'{mark} `{row["model"]}` — {detail}')
+            model = safe_display(row.get('model')) or 'unknown model'
+            lines.append(f'{mark} `{model}` — {detail}')
     return '\n'.join(lines)
