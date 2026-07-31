@@ -165,18 +165,9 @@ def build_context_prompt(question, transcript, is_reply=False,
     )
 
 
-def build_question_prompt(question, context_requested=False):
-    """Build a question prompt, optionally explaining missing context."""
-    asked = question.strip()
-    if not context_requested:
-        return asked
-    return (
-        'The router marked this request as likely dependent on recent Discord '
-        'conversation, but no transcript was available. Do not answer with '
-        'only "I do not have context" and do not guess. Ask the user to send '
-        'the specific message, exchange, or details needed to answer.\n\n'
-        f'The user asks: {asked}'
-    )
+def build_question_prompt(question):
+    """A plain ``;llm <question>`` with no referenced message."""
+    return question.strip()
 
 
 def build_reply_prompt(question, ref_author=None, ref_content=None,
