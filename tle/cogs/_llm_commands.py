@@ -9,6 +9,7 @@ from tle import constants
 from tle.util import discord_common, llm_models
 from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_ask as llm_ask
+from tle.cogs import _llm_cooldown as llm_cooldown
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_status as llm_status
 
@@ -231,6 +232,10 @@ class LlmCommandsMixin:
     @llm.command(brief='Enable LLM requests in the server or here')
     async def enable(self, ctx, scope: str = None):
         await self._set_llm_disabled(ctx, scope, disabled=False)
+
+    @llm.command(brief='Set a shared channel or server LLM cooldown')
+    async def cooldown(self, ctx, *arguments: str):
+        await llm_cooldown.configure(self, ctx, arguments)
 
     @llm.command(brief='Add xAI API keys (bot owner only)',
                  aliases=('xkeys', 'xaikeys'))

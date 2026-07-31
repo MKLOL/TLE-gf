@@ -1,6 +1,6 @@
 """LLM DB methods — API key storage and per-bucket quota state.
 
-Owns five tables:
+Owns the core LLM tables:
 
 ``llm_api_key``
     Provider-tagged API keys, one row per key. Keys are bot-global (not
@@ -28,6 +28,9 @@ Owns five tables:
     Guild-scoped request bans. These block both provider routes while leaving
     moderation subcommands available so the ban can always be reversed.
 
+``llm_cooldown``
+    Persistent shared admission cooldowns for one server or parent channel.
+
 The key material is stored in plaintext: the bot must be able to present it
 to the provider on every call, so there is nothing to gain from hashing it.
 Treat ``user.db`` as a secret-bearing file.
@@ -37,6 +40,7 @@ import logging
 import time
 
 from tle.util.db.llm_telemetry_db import LlmTelemetryDbMixin
+from tle.util.db.llm_cooldown_db import LlmCooldownDbMixin
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +62,12 @@ def key_fingerprint(api_key):
     return hashlib.sha256(api_key.strip().encode('utf-8')).hexdigest()
 
 
-class LlmDbMixin(LlmTelemetryDbMixin):
+class LlmDbMixin(LlmCooldownDbMixin, LlmTelemetryDbMixin):
     """Mixin providing LLM key-pool and quota DB methods."""
 
     def _create_llm_tables(self):
         self._create_llm_telemetry_tables()
+        self._create_llm_cooldown_tables()
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS llm_api_key (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,

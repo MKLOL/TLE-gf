@@ -269,3 +269,21 @@ def upgrade_1_49_0(db):
         'ON llm_user_ban (guild_id, banned_at)')
     db.commit()
     logger.info('1.49.0: Upgrade complete')
+
+
+@registry.register('1.50.0', 'Persistent shared LLM cooldowns')
+def upgrade_1_50_0(db):
+    """Add server-wide and parent-channel prompt admission cooldowns."""
+    logger.info('1.50.0: Adding shared LLM cooldowns')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_cooldown (
+            guild_id       TEXT NOT NULL,
+            channel_id     TEXT NOT NULL,
+            seconds        INTEGER NOT NULL
+                           CHECK (seconds BETWEEN 1 AND 86400),
+            last_attempt_at REAL,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.50.0: Upgrade complete')

@@ -1,5 +1,6 @@
 """Persistent request access policy shared by every LLM entry point."""
 
+import math
 import re
 
 import discord
@@ -100,6 +101,16 @@ def set_disabled(database, guild_id, channel_id=None, *, disabled, scope):
 
 def request_block_reason(database, guild_id, channel_id, user_id):
     """Return a public-safe reason when an LLM request must not proceed."""
+    reason = _policy_block_reason(database, guild_id, channel_id, user_id)
+    if reason is not None:
+        return reason
+    checker = getattr(database, 'llm_cooldown_retry', None)
+    denial = (checker(guild_id, channel_id)
+              if checker is not None else None)
+    return _cooldown_block_reason(denial)
+
+
+def _policy_block_reason(database, guild_id, channel_id, user_id):
     scope = disabled_scope(database, guild_id, channel_id)
     if scope == 'guild':
         return 'LLM requests are disabled in this server.'
@@ -108,6 +119,17 @@ def request_block_reason(database, guild_id, channel_id, user_id):
     if database.llm_is_user_banned(guild_id, user_id):
         return 'You are not allowed to use LLM requests in this server.'
     return None
+
+
+def _cooldown_block_reason(denial):
+    if denial is None:
+        return None
+    stamp = max(0, int(math.ceil(denial.retry_at)))
+    description = ('a shared server-wide cooldown'
+                   if denial.scope == 'global'
+                   else 'a shared cooldown in this channel')
+    return (f'LLM requests are on {description}. '
+            f'Try again <t:{stamp}:R> (<t:{stamp}:F>).')
 
 
 def context_block_reason(database, ctx):
@@ -126,7 +148,14 @@ async def allow_request_or_notify(database, ctx):
 
 
 def raise_if_request_blocked(database, ctx):
-    """Recheck policy inside the runtime queue before reserving/provider use."""
-    reason = context_block_reason(database, ctx)
+    """Recheck policy and atomically claim cooldowns inside the runtime queue."""
+    channel_id = scope_channel_id(getattr(ctx, 'channel', None))
+    reason = _policy_block_reason(
+        database, ctx.guild.id, channel_id, ctx.author.id)
+    if reason is None:
+        claimer = getattr(database, 'llm_claim_cooldowns', None)
+        denial = (claimer(ctx.guild.id, channel_id)
+                  if claimer is not None else None)
+        reason = _cooldown_block_reason(denial)
     if reason is not None:
         raise LlmAccessDeniedError(reason)
