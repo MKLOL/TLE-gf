@@ -17,7 +17,9 @@ Collection is deliberately conservative about what it forwards: author display
 name, text, and attachment *filenames*. Attachment contents are handled
 separately (see ``_llm_context.read_images``) and only for the focused message.
 """
+import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -27,28 +29,56 @@ _MAX_MESSAGE_CHARS = 600
 # Whole-transcript budget, so a busy channel cannot blow up the prompt.
 _MAX_TRANSCRIPT_CHARS = 12000
 # Discord applies ``limit`` before we can filter bot/empty messages. Scan a
-# bounded multiple so nearby useful human messages are not crowded out.
+# bounded multiple so nearby useful messages are not crowded out.
 _HISTORY_SCAN_FACTOR = 3
 _MAX_AUTHOR_CHARS = 80
 
 _OLDER_OMITTED = '… (older messages omitted)'
 _LATER_OMITTED = '… (later messages omitted)'
 
+_LITERAL_SECRET_PATTERNS = (
+    re.compile(r'(?<![\w-])xai-[A-Za-z0-9_-]{12,}', re.IGNORECASE),
+    re.compile(r'(?<![\w-])AIza[A-Za-z0-9_-]{20,}'),
+    re.compile(r'\bBearer\s+[A-Za-z0-9._~+/=-]{12,}', re.IGNORECASE),
+    re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'),
+    re.compile(r'\bAKIA[A-Z0-9]{16}\b'),
+    re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+               r'\.[A-Za-z0-9_-]{10,}\b'),
+    re.compile(r'\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6}'
+               r'\.[A-Za-z0-9_-]{20,}\b'),
+)
+_ASSIGNED_SECRET = re.compile(
+    r'\b(?P<name>[A-Za-z0-9_.-]{0,32}'
+    r'(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|'
+    r'password|passwd))(?P<separator>\s*[:=]\s*)'
+    r'(?P<value>"[^"]*"|\'[^\']*\'|[^\s,;]+)', re.IGNORECASE)
 
-def _is_usable(message, bot_user_id=None):
-    """Skip the bot's own output and empty messages."""
+
+def redact_secrets(value):
+    """Remove likely credentials before a transcript leaves Discord."""
+    text = str(value or '')
+    text = _ASSIGNED_SECRET.sub(
+        lambda match: (match.group('name') + match.group('separator') +
+                       '[REDACTED]'), text)
+    for pattern in _LITERAL_SECRET_PATTERNS:
+        text = pattern.sub('[REDACTED]', text)
+    return text
+
+
+def _is_usable(message, bot_user_id=None, include_other_bots=False):
+    """Skip this bot's own output, unwanted bots, and empty messages."""
     author = getattr(message, 'author', None)
     if author is not None and bot_user_id is not None:
         if getattr(author, 'id', None) == bot_user_id:
             return False
-    if getattr(author, 'bot', False):
+    if getattr(author, 'bot', False) and not include_other_bots:
         return False
     return bool(getattr(message, 'content', '') or
                 getattr(message, 'attachments', None))
 
 
 async def collect_recent(channel, before=None, limit=50, window_seconds=600,
-                         bot_user_id=None):
+                         bot_user_id=None, include_other_bots=False):
     """Messages just before ``before``, newest-last.
 
     Returns [] rather than raising if history is unreadable — an answer
@@ -73,7 +103,7 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
         scan_limit = wanted * _HISTORY_SCAN_FACTOR
         async for message in channel.history(limit=scan_limit, before=before,
                                              after=after, oldest_first=False):
-            if _is_usable(message, bot_user_id):
+            if _is_usable(message, bot_user_id, include_other_bots):
                 collected.append(message)
                 if len(collected) >= wanted:
                     break
@@ -86,7 +116,8 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
 
 async def collect_reply_window(channel, target, before_count=25,
                                after_count=24, window_seconds=600,
-                               bot_user_id=None, until=None):
+                               bot_user_id=None, until=None,
+                               include_other_bots=False):
     """Messages surrounding ``target``, oldest-first, including it.
 
     A reply usually points at one line of a longer exchange; answering well
@@ -112,10 +143,8 @@ async def collect_reply_window(channel, target, before_count=25,
         async for message in channel.history(
                 limit=before_limit * _HISTORY_SCAN_FACTOR, before=target,
                 after=after, oldest_first=False):
-            if _is_usable(message, bot_user_id):
+            if _is_usable(message, bot_user_id, include_other_bots):
                 earlier.append(message)
-                if len(earlier) >= before_limit:
-                    break
         earlier.reverse()
 
         # Stop at both the configured time horizon and the invoking command.
@@ -127,19 +156,164 @@ async def collect_reply_window(channel, target, before_count=25,
         async for message in channel.history(
                 limit=after_limit * _HISTORY_SCAN_FACTOR, after=target,
                 before=later_before, oldest_first=True):
-            if _is_usable(message, bot_user_id):
+            if _is_usable(message, bot_user_id, include_other_bots):
                 later.append(message)
-                if len(later) >= after_limit:
-                    break
         later.sort(key=lambda m: getattr(m, 'created_at', 0) or 0)
     except Exception:  # noqa: BLE001
         logger.exception('Could not read reply context for ;llm')
-        return [target] if _is_usable(target, bot_user_id) else []
+        return [target]
 
-    window = earlier
-    if _is_usable(target, bot_user_id):
-        window = window + [target]
-    return window + later
+    # The explicitly selected reply target is context even when this bot sent
+    # it or it contains only an embed. Bot filtering applies to neighbors.
+    _merge_resolved_ancestors(
+        earlier, target, window_seconds, bot_user_id, include_other_bots)
+    all_messages = earlier + [target] + later
+    earlier = _select_relevant(earlier, target, all_messages, before_limit)
+    later = _select_relevant(later, target, all_messages, after_limit)
+    return earlier + [target] + later
+
+
+def _merge_resolved_ancestors(earlier, target, window_seconds, bot_user_id,
+                              include_other_bots):
+    """Add resolved reply ancestors that a bounded history scan missed."""
+    known = {_message_token(message) for message in earlier}
+    current = target
+    seen = {_message_token(target)}
+    for _ in range(len(earlier) + 32):
+        resolved = getattr(getattr(current, 'reference', None),
+                           'resolved', None)
+        if resolved is None:
+            break
+        token = _message_token(resolved)
+        if token in seen:
+            break
+        seen.add(token)
+        if (_is_usable(resolved, bot_user_id, include_other_bots) and
+                _within_window(resolved, target, window_seconds) and
+                token not in known):
+            earlier.append(resolved)
+            known.add(token)
+        current = resolved
+    earlier.sort(key=_chronological_key)
+
+
+def _select_relevant(candidates, target, all_messages, limit):
+    """Take relation-first candidates, then restore chronological order."""
+    wanted = max(0, int(limit))
+    if wanted == 0 or not candidates:
+        return []
+
+    lookup = {_message_token(message): message for message in all_messages}
+    target_token = _message_token(target)
+    ancestor_tokens = set()
+    current = target
+    visited = {target_token}
+    for _ in range(len(all_messages) + 1):
+        parent_token = _reply_target_token(current)
+        if parent_token is None or parent_token in visited:
+            break
+        parent = lookup.get(parent_token)
+        if parent is None:
+            resolved = getattr(getattr(current, 'reference', None),
+                               'resolved', None)
+            if resolved is None:
+                break
+            parent = resolved
+            parent_token = _message_token(parent)
+        ancestor_tokens.add(parent_token)
+        visited.add(parent_token)
+        current = parent
+
+    chain_tokens = ancestor_tokens | {target_token}
+    direct_tokens = {
+        _message_token(message) for message in all_messages
+        if _reply_target_token(message) in chain_tokens
+    }
+    participant_tokens = {
+        token for token in (
+            _author_token(message) for message in all_messages
+            if (_message_token(message) in chain_tokens or
+                _message_token(message) in direct_tokens)
+        ) if token is not None
+    }
+    positions = {_message_token(message): index
+                 for index, message in enumerate(all_messages)}
+    focus_position = positions.get(target_token, 0)
+
+    def rank(message):
+        token = _message_token(message)
+        if token in ancestor_tokens:
+            category = 0
+        elif token in direct_tokens:
+            category = 1
+        elif _author_token(message) in participant_tokens:
+            category = 2
+        else:
+            category = 3
+        position = positions.get(token, focus_position)
+        return category, abs(position - focus_position), position
+
+    picked = sorted(candidates, key=rank)[:wanted]
+    picked.sort(key=_chronological_key)
+    return picked
+
+
+def _message_token(message):
+    message_id = getattr(message, 'id', None)
+    if message_id is not None:
+        return 'id', str(message_id)
+    return 'object', id(message)
+
+
+def _reply_target_token(message):
+    reference = getattr(message, 'reference', None)
+    if reference is None:
+        return None
+    message_id = getattr(reference, 'message_id', None)
+    if message_id is not None:
+        return 'id', str(message_id)
+    resolved = getattr(reference, 'resolved', None)
+    return _message_token(resolved) if resolved is not None else None
+
+
+def _author_token(message):
+    author = getattr(message, 'author', None)
+    author_id = getattr(author, 'id', None)
+    if author_id is not None:
+        return 'id', str(author_id)
+    name = getattr(author, 'display_name', None)
+    return ('name', str(name).casefold()) if name else None
+
+
+def _within_window(message, target, window_seconds):
+    for attribute in ('channel', 'guild'):
+        left = getattr(getattr(message, attribute, None), 'id', None)
+        right = getattr(getattr(target, attribute, None), 'id', None)
+        if left is not None and right is not None and left != right:
+            return False
+    message_at = getattr(message, 'created_at', None)
+    target_at = getattr(target, 'created_at', None)
+    if message_at is None or target_at is None:
+        return True
+    try:
+        age = (target_at - message_at).total_seconds()
+        return 0 <= age <= window_seconds
+    except (AttributeError, TypeError):
+        return True
+
+
+def _chronological_key(message):
+    created_at = getattr(message, 'created_at', None)
+    try:
+        stamp = created_at.timestamp()
+    except (AttributeError, OSError, TypeError, ValueError):
+        stamp = 0
+    message_id = getattr(message, 'id', 0) or 0
+    try:
+        message_id = int(message_id)
+    except (TypeError, ValueError):
+        message_id = 0
+    return stamp, message_id
 
 
 def _reply_later_boundary(target, until, window_seconds):
@@ -161,16 +335,18 @@ def _reply_later_boundary(target, until, window_seconds):
     return cutoff
 
 
-def format_transcript(messages, focus=None):
+def format_transcript(messages, focus=None, structured=False):
     """Render collected messages as a plain transcript for the prompt.
 
     ``focus`` (the replied-to message) is marked so the model knows which line
-    the question is actually about.
+    the question is actually about. ``structured`` adds escaped metadata used
+    by the live LLM pipeline while the legacy rendering remains available to
+    callers that only need a human-readable preview.
     """
     rendered = []
     focus_position = None
     for message in messages or []:
-        line = _render_message(message, focus)
+        line = _render_message(message, focus, structured=structured)
         if line is None:
             continue
         if message is focus:
@@ -219,28 +395,62 @@ def format_transcript(messages, focus=None):
     return _compose_transcript(rendered, start, end)
 
 
-def _render_message(message, focus):
+def _render_message(message, focus, structured=False):
     """Render one bounded transcript entry, or ``None`` when empty."""
     author = getattr(getattr(message, 'author', None), 'display_name', None) \
         or 'unknown'
-    author = _one_line(author, _MAX_AUTHOR_CHARS)
+    author = _one_line(redact_secrets(author), _MAX_AUTHOR_CHARS)
     body = (getattr(message, 'content', '') or '').strip()
+    if not body:
+        pieces = []
+        for embed in (getattr(message, 'embeds', None) or [])[:2]:
+            pieces.extend(value for value in (
+                getattr(embed, 'title', None),
+                getattr(embed, 'description', None)) if value)
+        body = ' | '.join(str(value) for value in pieces)
+    body = redact_secrets(body)
 
     attachments = getattr(message, 'attachments', None) or []
-    names = [_one_line(getattr(item, 'filename', ''), 100)
+    names = [_one_line(redact_secrets(getattr(item, 'filename', '')), 100)
              for item in attachments]
     names = [name for name in names if name]
     if attachments:
         detail = ', '.join(names[:5]) if names else 'attachment'
         body = (body + ' ' if body else '') + f'[attached: {detail}]'
     if not body:
-        return None
+        if message is not focus:
+            return None
+        body = '(empty message)'
     if len(body) > _MAX_MESSAGE_CHARS:
         body = body[:_MAX_MESSAGE_CHARS - 1] + '…'
+
+    if structured:
+        message_id = getattr(message, 'id', None)
+        reply_to = _reply_target_token(message)
+        reply_id = reply_to[1] if reply_to and reply_to[0] == 'id' else None
+        timestamp = _format_message_timestamp(
+            getattr(message, 'created_at', None))
+        return json.dumps({
+            'id': str(message_id) if message_id is not None else None,
+            'timestamp': timestamp,
+            'author': author,
+            'reply_to': reply_id,
+            'focus': message is focus,
+            'content': body,
+        }, ensure_ascii=False, separators=(',', ':'))
 
     marker = (' \N{LEFTWARDS ARROW}\N{VARIATION SELECTOR-16} (the message '
               'being asked about)' if message is focus else '')
     return f'{author}: {body}{marker}'
+
+
+def _format_message_timestamp(created_at):
+    if created_at is None:
+        return 'unknown'
+    try:
+        return created_at.strftime('%Y-%m-%dT%H:%M:%SZ')
+    except AttributeError:
+        return _one_line(created_at, 80)
 
 
 def _one_line(value, limit):

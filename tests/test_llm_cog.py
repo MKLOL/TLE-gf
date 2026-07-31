@@ -157,7 +157,8 @@ class TestAsk:
         _invoke(llm_cog.Llm.llm, cog, FakeCtx(message=message),
                 question='does their reasoning hold?')
         routing = seen['prompts'][0]
-        assert 'author: nife (id 1)' in routing
+        assert 'author: nife' in routing
+        assert '(id 1)' not in routing
         assert 'sent_at: 2026-07-30 23:04 UTC' in routing
 
     def test_missing_message_metadata_does_not_break_routing(self, cog,
@@ -400,7 +401,7 @@ class TestKeyCommands:
         ctx = FakeCtx(roles=('Moderator',))
         _invoke(llm_cog.Llm.keylist, cog, ctx)
         assert self._KEY_A not in str(ctx.sent[0].description)
-        assert 'AIzaSy…' in ctx.sent[0].description
+        assert 'sha256:' in ctx.sent[0].description
 
     def test_keyforget_removes_a_key_from_the_pool(self, cog, db):
         db.llm_add_key(self._KEY_A)
@@ -425,18 +426,19 @@ class TestKeyCommands:
 
 
 class TestEnvBootstrap:
-    def test_env_keys_are_imported_once(self, cog, db, monkeypatch):
+    def test_env_keys_remain_process_only(self, cog, db, monkeypatch):
         monkeypatch.setattr(constants, 'GEMINI_API_KEYS',
                             'AIzaSyEnvKeyOne1234567890,AIzaSyEnvKeyTwo1234567890')
         assert cog._get_pool().key_count() == 2
         cog._get_pool()
-        assert len(db.llm_get_keys()) == 2
+        assert db.llm_get_keys() == []
 
     def test_short_env_entries_are_ignored(self, cog, db, monkeypatch):
         monkeypatch.setattr(constants, 'GEMINI_API_KEYS',
                             'AIzaSyEnvKeyOne1234567890,,junk')
         cog._get_pool()
-        assert len(db.llm_get_keys()) == 1
+        assert cog._get_pool().key_count() == 1
+        assert db.llm_get_keys() == []
 
     def test_empty_env_is_a_no_op(self, cog, db, monkeypatch):
         monkeypatch.setattr(constants, 'GEMINI_API_KEYS', '')

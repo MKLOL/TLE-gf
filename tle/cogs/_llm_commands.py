@@ -9,6 +9,7 @@ from tle import constants
 from tle.util import discord_common, llm_models
 from tle.cogs import _llm_ask as llm_ask
 from tle.cogs import _llm_format as llm_format
+from tle.cogs import _llm_status as llm_status
 
 logger = logging.getLogger(__name__)
 _MIN_KEY_LENGTH = 20
@@ -26,16 +27,21 @@ class LlmCommandsMixin:
     @llm.command(brief='List selectable models and reasoning tiers')
     async def models(self, ctx):
         ladder = ', '.join(f'`{name}`' for name in constants.LLM_MODELS)
+        grok_ladder = ' → '.join(
+            f'`{name}`' for name in constants.XAI_MODELS)
         await ctx.send(embed=discord.Embed(
             title='Selectable models',
             description=(
                 f'{llm_models.describe_catalog()}\n\n'
                 f'{llm_models.describe_tiers()}\n\n'
-                f'Grok: `+grok` uses `{constants.XAI_MODEL}` and is also '
+                f'Grok: `+grok` uses {grok_ladder} and is also '
                 f'available as `@grok <question>`.\n\n'
                 f'Prefix a question to pick one, e.g. '
                 f'`;llm 3.5f-h why is this TLE?`\n'
-                f'Left alone, the ladder is tried in order: {ladder}.'),
+                f'Left alone, the ladder is tried in order: {ladder}.\n\n'
+                'Context controls go before a Gemini selector: '
+                '`;llm +context messages=10 3.5f question`. For Grok, put '
+                'the provider first: `;llm +grok +context question`.'),
             color=discord_common._ALERT_AMBER))
 
     @llm.command(brief='Add Gemini API keys (bot owner only)')
@@ -62,11 +68,84 @@ class LlmCommandsMixin:
         if not await self._require_global_owner(ctx):
             return
         description = llm_format.format_pool_status(self._get_pool().status())
-        top = self._llm_db().llm_top_users(ctx.guild.id, llm_ask.today())
-        description += '\n\n' + llm_format.format_usage(top)
+        summary = self._llm_db().llm_provider_summary(
+            'gemini', llm_ask.today())
+        top = self._llm_db().llm_provider_top_users(
+            'gemini', llm_ask.today())
+        description += '\n\n' + llm_status.format_provider_summary(
+            summary, top)
         await ctx.send(embed=discord.Embed(
             title='Gemini key pool', description=description,
             color=discord_common._ALERT_AMBER))
+
+    @llm.command(brief='Show Grok health and spend (bot owner only)')
+    async def grokstatus(self, ctx):
+        if not await self._require_global_owner(ctx):
+            return
+        database = self._llm_db()
+        health = llm_format.format_pool_status(
+            self._get_xai_pool().status(), add_hint='XAI_API_KEY')
+        summary = database.llm_provider_summary('xai', llm_ask.today())
+        top = database.llm_provider_top_users('xai', llm_ask.today())
+        report = llm_status.format_provider_summary(
+            summary, top, show_cost=True)
+        ledger = llm_status.format_xai_ledger(
+            database.llm_xai_daily_summary())
+        await ctx.send(embed=discord.Embed(
+            title='Grok provider health',
+            description=f'{health}\n\n{report}\n{ledger}',
+            color=discord_common._ALERT_AMBER))
+
+    @llm.command(brief='Reset provider health circuits (bot owner only)')
+    async def healthreset(self, ctx, provider: str, key_id: int = None,
+                          model: str = None):
+        if not await self._require_global_owner(ctx):
+            return
+        provider = provider.casefold()
+        if provider in ('grok', 'xai'):
+            pool, label = self._get_xai_pool(), 'Grok'
+        elif provider == 'gemini':
+            pool, label = self._get_pool(), 'Gemini'
+        else:
+            await ctx.send(embed=discord_common.embed_alert(
+                'Provider must be `gemini` or `grok`.'))
+            return
+        cleared = pool.reset_health(key_id=key_id, model=model)
+        note = (' Persisted daily Gemini quota state was left intact.'
+                if provider == 'gemini' else '')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Reset {cleared} reversible {label} health state entries.' + note))
+
+    @llm.command(brief='Show or set LLM context privacy')
+    async def privacy(self, ctx, mode: str = None, scope: str = 'guild'):
+        """Use ``;llm privacy <auto|explicit|off> [guild|channel]``."""
+        if mode is None:
+            policy, source = self._context_policy(ctx, with_source=True)
+            await ctx.send(embed=discord_common.embed_neutral(
+                f'Context policy: `{policy}` ({source}).\n'
+                '`auto` may select recent chat, `explicit` requires '
+                '`+context` or a reply, and `off` sends no surrounding chat.'))
+            return
+        mode, scope = mode.casefold(), scope.casefold()
+        if mode not in ('auto', 'explicit', 'off', 'inherit'):
+            await ctx.send(embed=discord_common.embed_alert(
+                'Mode must be `auto`, `explicit`, `off`, or `inherit`.'))
+            return
+        if scope not in ('guild', 'channel'):
+            await ctx.send(embed=discord_common.embed_alert(
+                'Scope must be `guild` or `channel`.'))
+            return
+        if mode == 'inherit' and scope != 'channel':
+            await ctx.send(embed=discord_common.embed_alert(
+                '`inherit` only applies to a channel override.'))
+            return
+        if not self._is_privileged(ctx.author):
+            await ctx.send(embed=discord_common.embed_alert(
+                'Only this guild’s admins or moderators can change privacy.'))
+            return
+        self._set_context_policy(ctx, mode, scope=scope)
+        await ctx.send(embed=discord_common.embed_success(
+            f'LLM context policy for this {scope} is now `{mode}`.'))
 
     @llm.command(brief='Add xAI API keys (bot owner only)',
                  aliases=('xkeys', 'xaikeys'))
@@ -138,8 +217,12 @@ class LlmCommandsMixin:
             if len(api_key) < _MIN_KEY_LENGTH:
                 counts['rejected'] += 1
                 continue
-            if _is_xai_key(api_key) != (provider == 'xai'):
-                counts['wrong_provider'] += 1
+            valid = (_is_xai_key(api_key) if provider == 'xai'
+                     else _is_gemini_key(api_key))
+            if not valid:
+                other = (_is_gemini_key(api_key) if provider == 'xai'
+                         else _is_xai_key(api_key))
+                counts['wrong_provider' if other else 'rejected'] += 1
                 continue
             label = (f'{provider}-owner-{ctx.author.id}-'
                      f'{datetime.now(timezone.utc):%Y%m%d}')
@@ -152,12 +235,15 @@ class LlmCommandsMixin:
         pool.reload()
         noun = 'xAI key(s)' if provider == 'xai' else 'key(s)'
         parts = [f"{counts['added']} {noun} added"]
+        wrong_provider = ('not shaped like an xAI key'
+                          if provider == 'xai'
+                          else 'shaped for xAI; use `;llm grokkeys`')
         labels = (
             ('reactivated', 'reactivated'),
             ('duplicate', 'already stored'),
             ('provider_conflict', 'assigned to the other provider; rotate it'),
-            ('wrong_provider', 'shaped for the other provider'),
-            ('rejected', 'rejected as too short'),
+            ('wrong_provider', wrong_provider),
+            ('rejected', 'rejected as too short or invalid'),
         )
         parts.extend(f'{counts[field]} {label}' for field, label in labels
                      if counts[field])
@@ -174,7 +260,8 @@ class LlmCommandsMixin:
             pool = self._get_xai_pool() if provider == 'xai' else self._get_pool()
             pool.reload()
             await ctx.send(embed=discord_common.embed_success(
-                f'{provider} key #{key_id} securely removed from the pool.'))
+                f'{provider} key #{key_id} removed from the active pool. '
+                'Revoke it at the provider too; older backups may retain it.'))
         else:
             label = 'xAI key' if provider == 'xai' else 'key'
             await ctx.send(embed=discord_common.embed_alert(
@@ -187,6 +274,10 @@ def _strip_wrapping(token):
 
 def _is_xai_key(token):
     return (token or '').startswith('xai-')
+
+
+def _is_gemini_key(token):
+    return (token or '').startswith('AIza')
 
 
 def looks_like_api_key(token):

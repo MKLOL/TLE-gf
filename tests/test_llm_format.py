@@ -88,6 +88,13 @@ class TestBuildAnswerEmbeds:
         embeds = llm_format.build_answer_embeds('hi', 'model-a', author=author)
         assert embeds[0].author_data['name'] == 'Asked by nife'
 
+    def test_provider_credentials_in_model_output_are_redacted(self):
+        secret = 'xai-abcdefghijklmnopqrstuv-secret'
+        embeds = llm_format.build_answer_embeds(
+            f'Never echo {secret}', 'grok-test')
+        assert secret not in embeds[0].description
+        assert '[REDACTED]' in embeds[0].description
+
 
 class TestFormatKeyRows:
     def test_no_keys(self):
@@ -100,7 +107,8 @@ class TestFormatKeyRows:
         rendered = llm_format.format_key_rows(db.llm_get_keys())
         assert '#1' in rendered
         assert 'proj-a' in rendered
-        assert 'AIzaSy…1234' in rendered
+        assert 'sha256:' in rendered
+        assert 'AIzaSy' not in rendered
         assert '<@42>' in rendered
 
     def test_raw_key_never_appears(self):

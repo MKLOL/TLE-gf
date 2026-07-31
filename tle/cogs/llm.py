@@ -2,6 +2,9 @@
 import asyncio
 import logging
 import re
+import time
+from collections import namedtuple
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import discord
@@ -12,12 +15,15 @@ from tle.util import discord_common, xai_api
 from tle.util.llm_keypool import KeyPool
 from tle.cogs import _llm_ask as llm_ask
 from tle.cogs._llm_commands import (
-    LlmCommandsMixin, _delete_quietly, _is_xai_key, looks_like_api_key,
+    LlmCommandsMixin, _delete_quietly, _is_gemini_key, _is_xai_key,
+    looks_like_api_key,
 )
+from tle.cogs._llm_runtime import RequestRuntime
 
 logger = logging.getLogger(__name__)
 _GROK_TRIGGER = re.compile(r'^\s*@grok(?:\s+|$)', re.IGNORECASE)
 _MIN_KEY_LENGTH = 20
+_EnvironmentKey = namedtuple('EnvironmentKey', 'id api_key label')
 
 # Compatibility exports used by extensions/tests.
 LlmNotReadyError = llm_ask.LlmNotReadyError
@@ -34,8 +40,12 @@ class Llm(LlmCommandsMixin, commands.Cog):
         self._pool = None
         self._xai_pool = None
         self._session = None
-        self._bootstrapped = False
-        self._xai_bootstrapped = False
+        self._maintained_db = None
+        self._runtime = RequestRuntime(
+            {'gemini': constants.LLM_GEMINI_CONCURRENCY,
+             'xai': constants.LLM_XAI_CONCURRENCY},
+            queue_timeout=constants.LLM_QUEUE_TIMEOUT_SECONDS,
+            request_timeout=constants.LLM_REQUEST_TIMEOUT_SECONDS)
 
     def cog_unload(self):
         if self._session is None or self._session.closed:
@@ -46,54 +56,112 @@ class Llm(LlmCommandsMixin, commands.Cog):
             logger.warning('No running loop at cog_unload; aiohttp session '
                            'left for interpreter shutdown to reap')
 
+    async def cog_check(self, ctx):
+        """Keep global provider credentials unavailable in direct messages."""
+        if getattr(ctx, 'guild', None) is None:
+            error = getattr(commands, 'NoPrivateMessage',
+                            commands.CheckFailure)
+            raise error()
+        return True
+
     def _get_pool(self):
         database = _db()
         if self._pool is None or self._pool.db is not database:
-            self._pool = KeyPool(database, constants.LLM_MODELS)
-            self._bootstrap_env_keys()
-            self._pool.reload()
+            environment = self._environment_keys(
+                constants.GEMINI_API_KEYS, provider='gemini')
+            self._erase_persisted_environment_keys(
+                database, environment, provider='gemini')
+            self._pool = KeyPool(
+                database, constants.LLM_MODELS,
+                ephemeral_keys=environment)
+            self._maintain_llm_state(database)
         return self._pool
 
     def _get_xai_pool(self):
         database = _db()
         if (self._xai_pool is None or self._xai_pool.db is not database
-                or self._xai_pool.model != constants.XAI_MODEL):
-            self._xai_pool = xai_api.XaiKeyPool(database, constants.XAI_MODEL)
-            self._bootstrap_xai_env_keys()
-            self._xai_pool.reload()
+                or self._xai_pool.models != list(constants.XAI_MODELS)):
+            environment = self._environment_keys(
+                constants.XAI_API_KEYS, provider='xai')
+            self._erase_persisted_environment_keys(
+                database, environment, provider='xai')
+            self._xai_pool = xai_api.XaiKeyPool(
+                database, constants.XAI_MODELS,
+                ephemeral_keys=environment)
+            self._maintain_llm_state(database)
         return self._xai_pool
 
-    def _bootstrap_env_keys(self):
-        """Import environment Gemini keys once (made memory-only later)."""
-        if self._bootstrapped:
-            return
-        self._bootstrapped = True
-        added = 0
+    @staticmethod
+    def _environment_keys(raw, *, provider):
+        """Build stable process-only rows without persisting secret material."""
+        rows = []
+        base = -2000 if provider == 'xai' else -1000
         for index, key in enumerate(
-                part.strip() for part in constants.GEMINI_API_KEYS.split(',')):
-            if len(key) < _MIN_KEY_LENGTH or _is_xai_key(key):
+                part.strip() for part in (raw or '').split(',')):
+            valid_provider = (_is_xai_key(key) if provider == 'xai'
+                              else _is_gemini_key(key))
+            if len(key) < _MIN_KEY_LENGTH or not valid_provider:
                 continue
-            result = _db().llm_add_key(
-                key, label=f'env-{index + 1}', provider='gemini')
-            added += result in ('added', 'reactivated')
-        if added:
-            logger.info('Loaded %d Gemini key(s) from GEMINI_API_KEYS', added)
+            rows.append(_EnvironmentKey(
+                base - index, key, f'{provider}-environment-{index + 1}'))
+        if rows:
+            logger.info('Loaded %d process-only %s key(s)', len(rows), provider)
+        return rows
 
-    def _bootstrap_xai_env_keys(self):
-        """Import environment xAI keys once (made memory-only later)."""
-        if self._xai_bootstrapped:
+    @staticmethod
+    def _erase_persisted_environment_keys(database, environment, *, provider):
+        """Remove copies written by older releases before keys became ephemeral."""
+        material = {row.api_key for row in environment}
+        if not material:
             return
-        self._xai_bootstrapped = True
-        added = 0
-        for index, key in enumerate(
-                part.strip() for part in constants.XAI_API_KEYS.split(',')):
-            if len(key) < _MIN_KEY_LENGTH or not _is_xai_key(key):
-                continue
-            result = _db().llm_add_key(
-                key, label=f'xai-env-{index + 1}', provider='xai')
-            added += result in ('added', 'reactivated')
-        if added:
-            logger.info('Loaded %d xAI key(s) from XAI_API_KEY(S)', added)
+        for row in database.llm_get_keys(active_only=True, provider=provider):
+            if row.api_key in material:
+                database.llm_forget_key(row.id, provider=provider)
+                logger.info('Erased legacy persisted copy of an environment '
+                            '%s key id=%s', provider, row.id)
+
+    def _maintain_llm_state(self, database):
+        if self._maintained_db is database:
+            return
+        self._maintained_db = database
+        database.llm_purge_expired_buckets(now=time.time())
+        cutoff = time.time() - constants.LLM_TELEMETRY_RETENTION_DAYS * 86400
+        database.llm_purge_request_usage(cutoff)
+        before_day = (datetime.now(timezone.utc) - timedelta(
+            days=constants.LLM_TELEMETRY_RETENTION_DAYS)).strftime('%Y-%m-%d')
+        database.llm_purge_old_usage(before_day)
+
+    @staticmethod
+    def _context_config_key(ctx, scope):
+        if scope == 'channel':
+            return f'llm_context_channel:{ctx.channel.id}'
+        return 'llm_context'
+
+    def _context_policy(self, ctx, *, with_source=False):
+        """Resolve channel override, guild policy, then environment default."""
+        database = _db()
+        getter = getattr(database, 'get_guild_config', None)
+        channel_id = getattr(getattr(ctx, 'channel', None), 'id', None)
+        candidates = []
+        if channel_id is not None:
+            candidates.append((f'llm_context_channel:{channel_id}',
+                               'channel override'))
+        candidates.append((self._context_config_key(ctx, 'guild'),
+                           'guild setting'))
+        if getter is not None:
+            for key, source in candidates:
+                value = getter(ctx.guild.id, key)
+                if value in ('auto', 'explicit', 'off'):
+                    return (value, source) if with_source else value
+        default = 'auto' if constants.LLM_CONTEXT_ENABLED else 'off'
+        return (default, 'environment default') if with_source else default
+
+    def _set_context_policy(self, ctx, mode, *, scope):
+        key = self._context_config_key(ctx, scope)
+        if mode == 'inherit':
+            _db().delete_guild_config(ctx.guild.id, key)
+        else:
+            _db().set_guild_config(ctx.guild.id, key, mode)
 
     def _get_session(self):
         if self._session is None or self._session.closed:
@@ -144,7 +212,14 @@ class Llm(LlmCommandsMixin, commands.Cog):
         ctx = await self.bot.get_context(message)
         question = message.content[match.end():].strip() or None
         try:
+            can_run = getattr(self.bot, 'can_run', None)
+            if can_run is not None and not await can_run(ctx):
+                return
             await llm_ask.ask_grok(self, ctx, question)
+        except discord_common.FeatureDisabledSilent:
+            return
+        except commands.CheckFailure:
+            return
         except LlmNotReadyError as err:
             await ctx.send(embed=discord_common.embed_alert(str(err)))
         except Exception:  # noqa: BLE001 - listeners have no command handler

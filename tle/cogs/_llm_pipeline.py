@@ -8,6 +8,7 @@ the cog leaves the cog to commands and Discord I/O.
 When needed, Gemini routing is charged to the *cheapest* model in the ladder;
 Grok routes through xAI with reasoning disabled and a tiny output cap.
 """
+import asyncio
 import logging
 
 from tle import constants
@@ -65,23 +66,25 @@ async def classify(pool, question, is_reply, session=None, stats=None,
     # model — which billed every routing call at the top rate.)
     cheapest = pool.models[:1] if pool.models else None
     try:
-        raw, _ = await gemini_api.complete(
-            pool,
-            llm_context.build_classifier_prompt(
-                question, is_reply, author_name=author_name,
-                author_id=author_id, sent_at=sent_at,
-                has_current_images=has_current_images),
-            system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
-            max_output_tokens=_CLASSIFIER_MAX_TOKENS,
-            temperature=0,
-            session=session,
-            models=cheapest,
-            stats=stats,
-            max_attempts=2,
-            tier=llm_models.LEAST,
-            response_mime_type='application/json',
-            response_schema=_CLASSIFIER_SCHEMA)
-    except gemini_api.GeminiError as err:
+        raw, _ = await asyncio.wait_for(
+            gemini_api.complete(
+                pool,
+                llm_context.build_classifier_prompt(
+                    question, is_reply, author_name=author_name,
+                    author_id=author_id, sent_at=sent_at,
+                    has_current_images=has_current_images),
+                system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
+                max_output_tokens=_CLASSIFIER_MAX_TOKENS,
+                temperature=0,
+                session=session,
+                models=cheapest,
+                stats=stats,
+                max_attempts=2,
+                tier=llm_models.LEAST,
+                response_mime_type='application/json',
+                response_schema=_CLASSIFIER_SCHEMA),
+            timeout=constants.LLM_ROUTER_TIMEOUT_SECONDS)
+    except (gemini_api.GeminiError, TimeoutError) as err:
         # Logged at WARNING, not INFO: a router that always fails looks exactly
         # like a bot that never uses context, and the previous INFO line was
         # invisible at the default log level.
@@ -103,20 +106,22 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
         logger.info('@grok routed locally to %s (is_reply=%s)', local, is_reply)
         return local
     try:
-        raw, _ = await xai_api.complete(
-            pool,
-            llm_context.build_classifier_prompt(
-                question, is_reply, author_name=author_name,
-                author_id=author_id, sent_at=sent_at,
-                has_current_images=has_current_images),
-            system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
-            max_output_tokens=_GROK_CLASSIFIER_MAX_TOKENS,
-            temperature=0,
-            reasoning_effort='none',
-            session=session,
-            stats=stats,
-            max_attempts=2)
-    except xai_api.XaiError as err:
+        raw, _ = await asyncio.wait_for(
+            xai_api.complete(
+                pool,
+                llm_context.build_classifier_prompt(
+                    question, is_reply, author_name=author_name,
+                    author_id=author_id, sent_at=sent_at,
+                    has_current_images=has_current_images),
+                system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
+                max_output_tokens=_GROK_CLASSIFIER_MAX_TOKENS,
+                temperature=0,
+                reasoning_effort='none',
+                session=session,
+                stats=stats,
+                max_attempts=2),
+            timeout=constants.LLM_ROUTER_TIMEOUT_SECONDS)
+    except (xai_api.XaiError, TimeoutError) as err:
         logger.warning('@grok router failed (%s) — answering without context',
                        err)
         return llm_context.MODE_DIRECT
@@ -126,26 +131,34 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
     return mode
 
 
-async def gather(ctx, mode, referenced, bot_user_id=None):
+async def gather(ctx, mode, referenced, bot_user_id=None, message_limit=None,
+                 force_direct=False):
     """Collect the message window a mode calls for.
 
     A reply is selected structurally before provider routing and always gets
     its surrounding exchange. Reading history costs Discord I/O and bounded
     input tokens, not another inference call.
     """
+    if force_direct:
+        return []
+
     if referenced is not None:
+        before_count, after_count = _reply_counts(message_limit)
         window = await llm_history.collect_reply_window(
             ctx.channel, referenced,
-            before_count=constants.LLM_REPLY_BEFORE,
-            after_count=constants.LLM_REPLY_AFTER,
+            before_count=before_count,
+            after_count=after_count,
             window_seconds=constants.LLM_CONTEXT_WINDOW_SECONDS,
-            bot_user_id=bot_user_id, until=ctx.message)
+            bot_user_id=bot_user_id, until=ctx.message,
+            include_other_bots=True)
     elif mode == llm_context.MODE_CONTEXT:
+        recent_limit = _bounded_message_limit(
+            message_limit, constants.LLM_CONTEXT_MESSAGES)
         window = await llm_history.collect_recent(
             ctx.channel, before=ctx.message,
-            limit=constants.LLM_CONTEXT_MESSAGES,
+            limit=recent_limit,
             window_seconds=constants.LLM_CONTEXT_WINDOW_SECONDS,
-            bot_user_id=bot_user_id)
+            bot_user_id=bot_user_id, include_other_bots=False)
     else:
         return []
 
@@ -160,32 +173,62 @@ async def gather(ctx, mode, referenced, bot_user_id=None):
     return window
 
 
+def _bounded_message_limit(requested, default):
+    if requested is None:
+        return max(1, int(default))
+    try:
+        return min(max(1, int(requested)), max(1, int(default)))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+def _reply_counts(message_limit):
+    """Split an optional total budget around the focused message."""
+    if message_limit is None:
+        return constants.LLM_REPLY_BEFORE, constants.LLM_REPLY_AFTER
+    maximum = constants.LLM_REPLY_BEFORE + constants.LLM_REPLY_AFTER + 1
+    total = _bounded_message_limit(message_limit, maximum)
+    neighbors = total - 1
+    before = min(constants.LLM_REPLY_BEFORE, (neighbors + 1) // 2)
+    after = min(constants.LLM_REPLY_AFTER, neighbors - before)
+    remainder = neighbors - before - after
+    if remainder:
+        before += min(constants.LLM_REPLY_BEFORE - before, remainder)
+    return before, after
+
+
 def build_prompt(question, referenced, window):
     """Final prompt for the answer call.
 
     Three shapes, cheapest context first: a bare question, a quoted single
     message, or a transcript window.
     """
-    ref_author = getattr(getattr(referenced, 'author', None), 'display_name', None)
-    ref_content = getattr(referenced, 'content', None)
+    if referenced is not None:
+        messages = list(window)
+        if not any(message is referenced for message in messages):
+            messages.append(referenced)
+        transcript = llm_history.format_transcript(
+            messages, focus=referenced, structured=True)
+        return llm_context.build_context_prompt(
+            question, transcript, is_reply=True)
 
     if window:
-        transcript = llm_history.format_transcript(window, focus=referenced)
+        transcript = llm_history.format_transcript(
+            window, structured=True)
         if transcript.strip():
-            return llm_context.build_context_prompt(
-                question, transcript, is_reply=referenced is not None,
-                ref_author=ref_author, ref_content=ref_content)
-
-    if referenced is not None:
-        return llm_context.build_reply_prompt(
-            question, ref_author=ref_author, ref_content=ref_content,
-            ref_has_attachments=bool(getattr(referenced, 'attachments', None)))
+            return llm_context.build_context_prompt(question, transcript)
 
     return llm_context.build_question_prompt(question)
 
 
-def describe_mode(mode, window):
+def describe_mode(mode, window, explicit=False, has_reference=False):
     """Short footer note about what context was used, or None."""
     if not window:
-        return None
+        if has_reference:
+            return 'replied message only'
+        return 'no channel context' if explicit else None
+    if explicit:
+        source = ('reply chain' if mode == llm_context.MODE_REPLY_CHAIN
+                  else 'recent chat')
+        return f'{source} · {len(window)} messages'
     return f'{len(window)} messages of context'

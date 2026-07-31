@@ -78,6 +78,8 @@ def split_for_embed(text, limit=_EMBED_DESC_LIMIT, max_pages=_MAX_EMBED_PAGES):
 
 def build_answer_embeds(answer, model, author=None, footer_extra=None):
     """Build the embed(s) carrying an answer back to the channel."""
+    from tle.cogs._llm_history import redact_secrets
+    answer = redact_secrets(answer)
     chunks = split_for_embed(answer)
     embeds = []
     for index, chunk in enumerate(chunks):
@@ -99,15 +101,21 @@ def build_answer_embeds(answer, model, author=None, footer_extra=None):
 
 
 def format_key_rows(keys):
-    """Render stored keys for ``;llm keylist`` — redacted, never raw."""
+    """Render key fingerprints without exposing any credential characters."""
     if not keys:
         return '*No API keys stored.*'
     lines = []
     for row in keys:
-        label = f' `{row.label}`' if getattr(row, 'label', None) else ''
+        raw_label = getattr(row, 'label', None)
+        safe_label = (' '.join(str(raw_label).split())[:60]
+                      .replace('`', "'").replace('@', '@\N{ZERO WIDTH SPACE}')) \
+            if raw_label else None
+        label = f' `{safe_label}`' if safe_label else ''
         added_by = getattr(row, 'added_by', None)
         who = f' — added by <@{added_by}>' if added_by else ''
-        lines.append(f'**#{row.id}**{label} `{redact_key(row.api_key)}`{who}')
+        fingerprint = str(getattr(row, 'fingerprint', '') or '')[:12]
+        identity = f'sha256:{fingerprint}' if fingerprint else 'fingerprint n/a'
+        lines.append(f'**#{row.id}**{label} `{identity}`{who}')
     return '\n'.join(lines)
 
 
@@ -121,10 +129,10 @@ def format_usage(top):
     return '\n'.join(lines)
 
 
-def format_pool_status(status_rows):
+def format_pool_status(status_rows, add_hint=';llm keys'):
     """Render per-bucket pool state for ``;llm keystatus``."""
     if not status_rows:
-        return '*No API keys stored — add some with `;llm keys <key> ...`.*'
+        return f'*No API keys available — configure `{add_hint}`.*'
     by_key = {}
     for row in status_rows:
         by_key.setdefault(row['key_id'], []).append(row)
@@ -140,8 +148,13 @@ def format_pool_status(status_rows):
             elif row['state'] == 'daily quota spent':
                 mark = '\N{LARGE RED CIRCLE}'
                 detail = f"daily quota spent, back in {format_duration(row['wait'])}"
+            elif row['state'] == 'invalid environment key':
+                mark = '\N{LARGE RED CIRCLE}'
+                detail = row['state']
             else:
                 mark = '\N{LARGE YELLOW CIRCLE}'
-                detail = f"cooling down, {format_duration(row['wait'])}"
+                detail = row['state']
+                if row.get('wait') is not None:
+                    detail += f", {format_duration(row['wait'])}"
             lines.append(f'{mark} `{row["model"]}` — {detail}')
     return '\n'.join(lines)

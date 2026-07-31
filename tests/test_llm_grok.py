@@ -217,11 +217,11 @@ class TestGrokKeys:
         assert db.llm_get_keys(provider='xai') == []
         assert len(db.llm_get_keys(provider='gemini')) == 1
 
-    def test_environment_key_is_imported_once(self, cog, db, monkeypatch):
+    def test_environment_key_remains_process_only(self, cog, db, monkeypatch):
         monkeypatch.setattr(constants, 'XAI_API_KEYS', self.KEY)
         assert cog._get_xai_pool().key_count() == 1
         cog._get_xai_pool()
-        assert len(db.llm_get_keys(provider='xai')) == 1
+        assert db.llm_get_keys(provider='xai') == []
 
     def test_xai_key_pasted_into_gemini_command_is_redirected(self, cog, db):
         ctx = FakeCtx(roles=('Moderator',))

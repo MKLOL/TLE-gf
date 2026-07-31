@@ -1,22 +1,39 @@
-"""Shared request flow for the public ``;llm`` ask command."""
+"""Shared, guarded request flow for ``;llm`` and literal ``@grok``."""
 from datetime import datetime, timezone
+import logging
+import secrets
+import time
 
 from discord.ext import commands
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, gemini_api, llm_models, xai_api
+from tle.cogs import _llm_accounting as accounting
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_format as llm_format
+from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_pipeline as llm_pipeline
+from tle.cogs._llm_runtime import (
+    ProviderQueueError, RequestBusyError, RequestDeadlineError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class LlmNotReadyError(commands.CommandError):
     """Raised while the bot database is not connected yet."""
 
 
+class _ContextDisabledError(Exception):
+    pass
+
+
+class _GrokGuardError(Exception):
+    pass
+
+
 def db():
-    """Return the live user database, or name the startup race clearly."""
     database = cf_common.user_db
     if database is None:
         raise LlmNotReadyError(
@@ -30,7 +47,7 @@ def today():
 
 
 def split_provider(question):
-    """Return ``(provider, question)`` for an exact leading ``+grok`` token."""
+    """Return ``(provider, question)`` for an exact leading ``+grok``."""
     if question is None:
         return 'gemini', None
     parts = question.strip().split(maxsplit=1)
@@ -40,7 +57,10 @@ def split_provider(question):
 
 
 async def ask(cog, ctx, question):
-    """Dispatch the public ``;llm`` ask path to its selected provider."""
+    if getattr(ctx, 'guild', None) is None:
+        await ctx.send(embed=discord_common.embed_alert(
+            'LLM requests are only available inside a server.'))
+        return
     provider, question = split_provider(question)
     if provider == 'grok':
         await ask_grok(cog, ctx, question)
@@ -49,9 +69,15 @@ async def ask(cog, ctx, question):
 
 
 async def ask_gemini(cog, ctx, question):
-    """Run the existing Gemini request path for one Discord context."""
     referenced = await cog._resolve_reference(ctx)
-    if question is None and referenced is None:
+    controls = llm_context.parse_context_controls(
+        question, max_messages=constants.LLM_CONTEXT_MESSAGES)
+    if controls.error:
+        await ctx.send(embed=discord_common.embed_alert(controls.error))
+        return
+    question = controls.question
+    if (question is None and referenced is None
+            and controls.mode != llm_context.MODE_CONTEXT):
         await ctx.send_help(ctx.command)
         return
 
@@ -64,197 +90,368 @@ async def ask_gemini(cog, ctx, question):
         await ctx.send(embed=discord_common.embed_alert(
             f'`{spec.aliases[0]}` selected, but no question followed it.'))
         return
-
-    if question and len(question) > constants.LLM_MAX_PROMPT_CHARS:
-        await ctx.send(embed=discord_common.embed_alert(
-            f'Question too long (max {constants.LLM_MAX_PROMPT_CHARS} characters).'))
+    if not await _valid_question(question, ctx):
         return
+    question = llm_history.redact_secrets(question) if question else None
 
     pool = cog._get_pool()
     if pool.key_count() == 0:
         await ctx.send(embed=discord_common.embed_alert(
-            'No Gemini API keys are configured. A moderator can add some '
-            'with `;llm keys <key> [key ...]`.'))
+            'No Gemini API keys are configured. The bot owner should set '
+            '`GEMINI_API_KEYS` and restart, or use `;llm keys` in a private '
+            'owner-only channel.'))
+        return
+    configured_models = list(constants.LLM_MODELS)
+    models = [spec.model_id] if spec else None
+    if not configured_models and spec is None:
+        await ctx.send(embed=discord_common.embed_alert(
+            'No Gemini models are enabled in `LLM_MODELS`.'))
+        return
+    if _context_forbidden(cog, ctx, controls):
+        await _send_context_disabled(ctx)
         return
 
-    models = [spec.model_id] if spec is not None else None
     attachments = llm_context.select_image_attachments(
-        [referenced, ctx.message],
-        constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
+        [referenced, ctx.message], constants.LLM_MAX_IMAGES,
+        constants.LLM_MAX_IMAGE_BYTES,
         max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
+    router_stats, answer_stats = (
+        accounting.new_stage_stats(), accounting.new_stage_stats())
+    started = time.monotonic()
+    mode, window, lease = llm_context.MODE_DIRECT, [], None
 
-    stats, failure, mode, window = {}, None, llm_context.MODE_DIRECT, []
+    async def operation():
+        nonlocal mode, window, lease
+        mode, window, explicit = await _prepare_context(
+            cog, ctx, 'gemini', pool, question, referenced, attachments,
+            controls, router_stats)
+        prompt = llm_pipeline.build_prompt(question, referenced, window)
+        images = await llm_context.read_images(attachments)
+        answer, lease = await gemini_api.complete(
+            pool, prompt, images=images,
+            system_instruction=llm_context.SYSTEM_INSTRUCTION,
+            max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
+            session=cog._get_session(), stats=answer_stats,
+            models=models, tier=tier)
+        return answer, explicit
+
     try:
         async with ctx.typing():
-            mode = await llm_pipeline.classify(
-                pool, question, referenced is not None,
-                session=cog._get_session(), stats=stats,
-                author_name=getattr(ctx.author, 'display_name', None),
-                author_id=getattr(ctx.author, 'id', None),
-                sent_at=getattr(ctx.message, 'created_at', None),
-                has_current_images=bool(attachments))
-            window = await llm_pipeline.gather(
-                ctx, mode, referenced, bot_user_id=cog._bot_user_id())
-            prompt = llm_pipeline.build_prompt(question, referenced, window)
-            images = await llm_context.read_images(attachments)
-            answer, lease = await gemini_api.complete(
-                pool, prompt, images=images,
-                system_instruction=llm_context.SYSTEM_INSTRUCTION,
-                max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
-                session=cog._get_session(), stats=stats,
-                models=models, tier=tier)
+            answer, explicit = await cog._runtime.run(
+                'gemini', ctx.author.id, operation)
+    except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
+        _record(cog, ctx, 'gemini', _runtime_outcome(err), started,
+                _primary_model(models, configured_models), router_stats,
+                answer_stats, mode, window)
+        await _handle_runtime_error(ctx, err)
+        return
     except gemini_api.GeminiError as err:
-        failure = err
-
-    if failure is not None:
-        if stats.get('attempts'):
-            db().llm_bump_usage(ctx.guild.id, ctx.author.id, today())
-        if isinstance(failure, gemini_api.ModelUnavailableError):
-            cog.logger.error('Gemini model misconfigured: %s', failure)
-        elif not isinstance(failure, (gemini_api.NoCapacityError,
-                                      gemini_api.BlockedError,
-                                      gemini_api.NoKeysError)):
-            cog.logger.exception('Gemini request failed', exc_info=failure)
+        _record(cog, ctx, 'gemini', 'failed', started,
+                _primary_model(models, configured_models),
+                router_stats, answer_stats, mode, window)
+        if isinstance(err, gemini_api.ModelUnavailableError):
+            cog.logger.error('Gemini model ladder unavailable: %s', err)
+        elif not isinstance(err, (gemini_api.NoCapacityError,
+                                  gemini_api.BlockedError,
+                                  gemini_api.NoKeysError)):
+            cog.logger.error('Gemini request failed', exc_info=True)
         await ctx.send(embed=discord_common.embed_alert(
-            describe_gemini_failure(failure)))
+            describe_gemini_failure(err)))
+        return
+    except Exception:  # noqa: BLE001 - guarantee a user-visible failure
+        await _unexpected(cog, ctx, 'gemini', started, router_stats,
+                          answer_stats, mode, window,
+                          _primary_model(models, configured_models))
         return
 
-    db().llm_bump_usage(ctx.guild.id, ctx.author.id, today())
+    _record(cog, ctx, 'gemini', 'success', started, lease.model,
+            router_stats, answer_stats, mode, window)
     tier_note = f'{lease.model} ({tier})' if tier else lease.model
+    footer = llm_pipeline.describe_mode(
+        mode, window, explicit=explicit,
+        has_reference=referenced is not None)
     for embed in llm_format.build_answer_embeds(
-            answer, tier_note, author=ctx.author,
-            footer_extra=llm_pipeline.describe_mode(mode, window)):
+            answer, tier_note, author=ctx.author, footer_extra=footer):
         await ctx.send(embed=embed)
 
 
 async def ask_grok(cog, ctx, question):
-    """Run one Grok request with the same Discord context path as Gemini."""
     referenced = await cog._resolve_reference(ctx)
-    if question is None and referenced is None:
+    controls = llm_context.parse_context_controls(
+        question, max_messages=constants.LLM_CONTEXT_MESSAGES)
+    if controls.error:
+        await ctx.send(embed=discord_common.embed_alert(controls.error))
+        return
+    question = controls.question
+    if (question is None and referenced is None
+            and controls.mode != llm_context.MODE_CONTEXT):
         await ctx.send(embed=discord_common.embed_alert(
             'Usage: `@grok <question>` or `;llm +grok <question>`.'))
         return
-    if question and len(question) > constants.LLM_MAX_PROMPT_CHARS:
-        await ctx.send(embed=discord_common.embed_alert(
-            f'Question too long (max {constants.LLM_MAX_PROMPT_CHARS} characters).'))
+    if not await _valid_question(question, ctx):
+        return
+    question = llm_history.redact_secrets(question) if question else None
+    if _context_forbidden(cog, ctx, controls):
+        await _send_context_disabled(ctx)
         return
 
     pool = cog._get_xai_pool()
     if pool.key_count() == 0:
         await ctx.send(embed=discord_common.embed_alert(
-            'No xAI API keys are configured. A moderator can add one with '
-            '`;llm grokkeys <key>`, or set `XAI_API_KEY`.'))
+            'No xAI API keys are configured. The bot owner should set '
+            '`XAI_API_KEY` and restart, or use `;llm grokkeys` in a private '
+            'owner-only channel.'))
         return
+    attachments = llm_context.select_image_attachments(
+        [referenced, ctx.message], constants.LLM_MAX_IMAGES,
+        constants.LLM_MAX_IMAGE_BYTES,
+        max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES,
+        mime_check=xai_api.is_supported_image)
+    router_stats, answer_stats = (
+        accounting.new_stage_stats(), accounting.new_stage_stats())
+    started = time.monotonic()
+    mode, window, lease = llm_context.MODE_DIRECT, [], None
+    reservation_id = None
 
-    limit_reason = db().llm_reserve_xai_request(
-        ctx.author.id,
-        user_limit=constants.XAI_USER_RATE_LIMIT,
-        window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
-        daily_limit=constants.XAI_DAILY_REQUEST_LIMIT)
-    if limit_reason is not None:
+    async def operation():
+        nonlocal mode, window, lease, reservation_id
+        reservation_id = db().llm_reserve_xai_request(
+            ctx.author.id, user_limit=constants.XAI_USER_RATE_LIMIT,
+            window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
+            daily_limit=constants.XAI_DAILY_REQUEST_LIMIT,
+            guild_id=ctx.guild.id, model=constants.XAI_MODELS[0],
+            reserved_microusd=accounting.xai_reservation_microusd(),
+            daily_budget_microusd=accounting.daily_budget_microusd(),
+            return_id=True)
+        if isinstance(reservation_id, str):
+            raise _GrokGuardError
+        mode, window, explicit = await _prepare_context(
+            cog, ctx, 'xai', pool, question, referenced, attachments,
+            controls, router_stats)
+        prompt = llm_pipeline.build_prompt(question, referenced, window)
+        images = await llm_context.read_images(attachments)
+        answer, lease = await xai_api.complete(
+            pool, prompt, images=images,
+            system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
+            max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
+            reasoning_effort='none', session=cog._get_session(),
+            stats=answer_stats, models=constants.XAI_MODELS)
+        return answer, explicit
+
+    try:
+        async with ctx.typing():
+            answer, explicit = await cog._runtime.run(
+                'xai', ctx.author.id, operation)
+    except _GrokGuardError:
+        _record(cog, ctx, 'xai', 'guarded', started,
+                constants.XAI_MODELS[0], router_stats, answer_stats,
+                mode, window)
         await ctx.send(embed=discord_common.embed_alert(
             'Grok is taking a breather right now. Try again later.'))
         return
-
-    attachments = llm_context.select_image_attachments(
-        [referenced, ctx.message],
-        constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
-        max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES,
-        mime_check=xai_api.is_supported_image)
-
-    stats, failure, mode, window = {}, None, llm_context.MODE_DIRECT, []
-    try:
-        async with ctx.typing():
-            mode = await llm_pipeline.classify_grok(
-                pool, question, referenced is not None,
-                session=cog._get_session(), stats=stats,
-                author_name=getattr(ctx.author, 'display_name', None),
-                author_id=getattr(ctx.author, 'id', None),
-                sent_at=getattr(ctx.message, 'created_at', None),
-                has_current_images=bool(attachments))
-            window = await llm_pipeline.gather(
-                ctx, mode, referenced, bot_user_id=cog._bot_user_id())
-            prompt = llm_pipeline.build_prompt(question, referenced, window)
-            images = await llm_context.read_images(attachments)
-            answer, lease = await xai_api.complete(
-                pool, prompt, images=images,
-                system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
-                max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
-                reasoning_effort='none',
-                session=cog._get_session(), stats=stats)
+    except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
+        await _finalize_xai(reservation_id, router_stats, answer_stats,
+                            outcome='timeout')
+        cost = accounting.xai_cost_microusd(router_stats, answer_stats)
+        _record(cog, ctx, 'xai', _runtime_outcome(err), started,
+                getattr(lease, 'model', None) or constants.XAI_MODELS[0],
+                router_stats, answer_stats, mode, window, cost=cost)
+        await _handle_runtime_error(ctx, err)
+        return
     except xai_api.XaiError as err:
-        failure = err
-
-    if failure is not None:
-        if stats.get('attempts'):
-            db().llm_bump_usage(ctx.guild.id, ctx.author.id, today())
-        if isinstance(failure, xai_api.ModelUnavailableError):
-            cog.logger.error('xAI model misconfigured: %s', failure)
-        elif not isinstance(failure, (xai_api.NoKeysError,
-                                      xai_api.RateLimitError,
-                                      xai_api.AccessDeniedError,
-                                      xai_api.AuthenticationError,
-                                      xai_api.NoCapacityError,
-                                      xai_api.BlockedError)):
-            cog.logger.exception('xAI request failed', exc_info=failure)
+        cost = accounting.xai_cost_microusd(router_stats, answer_stats)
+        await _finalize_xai(reservation_id, router_stats, answer_stats,
+                            outcome='failed', model=getattr(lease, 'model', None))
+        _record(cog, ctx, 'xai', 'failed', started,
+                getattr(lease, 'model', None) or constants.XAI_MODELS[0],
+                router_stats, answer_stats, mode, window, cost=cost)
+        if isinstance(err, xai_api.ModelUnavailableError):
+            cog.logger.error('xAI model ladder unavailable: %s', err)
+        elif not isinstance(err, (xai_api.NoKeysError, xai_api.RateLimitError,
+                                  xai_api.AccessDeniedError,
+                                  xai_api.AuthenticationError,
+                                  xai_api.NoCapacityError,
+                                  xai_api.BlockedError)):
+            cog.logger.error('xAI request failed', exc_info=True)
         await ctx.send(embed=discord_common.embed_alert(
-            describe_xai_failure(failure)))
+            describe_xai_failure(err)))
+        return
+    except Exception:  # noqa: BLE001 - guarantee a user-visible failure
+        await _finalize_xai(reservation_id, router_stats, answer_stats,
+                            outcome='unexpected')
+        await _unexpected(cog, ctx, 'xai', started, router_stats,
+                          answer_stats, mode, window,
+                          constants.XAI_MODELS[0])
         return
 
-    db().llm_bump_usage(ctx.guild.id, ctx.author.id, today())
+    cost = accounting.xai_cost_microusd(router_stats, answer_stats)
+    await _finalize_xai(reservation_id, router_stats, answer_stats,
+                        outcome='success', model=lease.model)
+    _record(cog, ctx, 'xai', 'success', started, lease.model,
+            router_stats, answer_stats, mode, window, cost=cost)
+    footer = llm_pipeline.describe_mode(
+        mode, window, explicit=explicit,
+        has_reference=referenced is not None)
     for embed in llm_format.build_answer_embeds(
-            answer, lease.model, author=ctx.author,
-            footer_extra=llm_pipeline.describe_mode(mode, window)):
+            answer, lease.model, author=ctx.author, footer_extra=footer):
         await ctx.send(embed=embed)
 
 
+async def _prepare_context(cog, ctx, provider, pool, question, referenced,
+                           attachments, controls, router_stats):
+    policy = cog._context_policy(ctx)
+    explicit = controls.mode is not None or policy != 'auto'
+    if policy == 'off':
+        mode, force_direct = llm_context.MODE_DIRECT, True
+    elif controls.mode is not None:
+        mode = llm_context.apply_mode_override(
+            llm_context.MODE_DIRECT, controls, is_reply=referenced is not None)
+        force_direct = controls.mode == llm_context.MODE_DIRECT
+    elif policy == 'explicit':
+        mode = (llm_context.MODE_REPLY_CHAIN if referenced is not None
+                else llm_context.MODE_DIRECT)
+        force_direct = referenced is None
+    else:
+        classifier = (llm_pipeline.classify_grok if provider == 'xai'
+                      else llm_pipeline.classify)
+        mode = await classifier(
+            pool, question, referenced is not None,
+            session=cog._get_session(), stats=router_stats,
+            author_name=getattr(ctx.author, 'display_name', None),
+            sent_at=getattr(ctx.message, 'created_at', None),
+            has_current_images=bool(attachments))
+        force_direct = False
+    window = await llm_pipeline.gather(
+        ctx, mode, referenced, bot_user_id=cog._bot_user_id(),
+        message_limit=controls.message_limit, force_direct=force_direct)
+    return mode, window, explicit
+
+
+def _context_forbidden(cog, ctx, controls):
+    return (cog._context_policy(ctx) == 'off'
+            and controls.mode == llm_context.MODE_CONTEXT)
+
+
+def _primary_model(models, configured):
+    candidates = models if models is not None else configured
+    return candidates[0] if candidates else None
+
+
+async def _send_context_disabled(ctx):
+    await ctx.send(embed=discord_common.embed_alert(
+        'Channel-history forwarding is disabled here. Ask without `+context` '
+        'or have a guild moderator change `;llm privacy`.'))
+
+
+async def _valid_question(question, ctx):
+    if question and len(question) > constants.LLM_MAX_PROMPT_CHARS:
+        await ctx.send(embed=discord_common.embed_alert(
+            f'Question too long (max '
+            f'{constants.LLM_MAX_PROMPT_CHARS} characters).'))
+        return False
+    return True
+
+
+async def _handle_runtime_error(ctx, error):
+    if isinstance(error, RequestBusyError):
+        text = 'You already have an LLM request running. Let it finish first.'
+    elif isinstance(error, ProviderQueueError):
+        text = 'The LLM queue is busy right now. Try again shortly.'
+    else:
+        text = 'The LLM request timed out before it could finish. Try again.'
+    await ctx.send(embed=discord_common.embed_alert(text))
+
+
+async def _finalize_xai(reservation_id, router_stats, answer_stats, *,
+                        outcome, model=None):
+    if not isinstance(reservation_id, int):
+        return
+    cost = accounting.xai_cost_microusd(router_stats, answer_stats)
+    try:
+        db().llm_finalize_xai_request(
+            reservation_id, actual_microusd=cost or None,
+            outcome=outcome, model=model)
+    except Exception:
+        logger.exception('Could not finalize xAI reservation id=%s',
+                         reservation_id)
+
+
+def _runtime_outcome(error):
+    if isinstance(error, RequestBusyError):
+        return 'busy'
+    if isinstance(error, ProviderQueueError):
+        return 'queue_timeout'
+    return 'deadline'
+
+
+def _record(cog, ctx, provider, outcome, started, model, router_stats,
+            answer_stats, mode, window, *, cost=0):
+    try:
+        accounting.record(
+            db(), ctx, provider, outcome, started, model=model,
+            router_stats=router_stats, answer_stats=answer_stats,
+            mode=mode, window=window, cost_microusd=cost)
+    except Exception:
+        cog.logger.exception('Could not record %s LLM telemetry', provider)
+
+
+async def _unexpected(cog, ctx, provider, started, router_stats,
+                      answer_stats, mode, window, model):
+    trace_id = secrets.token_hex(4)
+    _record(cog, ctx, provider, 'unexpected', started, model,
+            router_stats, answer_stats, mode, window)
+    cog.logger.exception('Unexpected %s LLM failure (reference %s)',
+                         provider, trace_id)
+    await ctx.send(embed=discord_common.embed_alert(
+        f'The LLM hit an unexpected error. Reference `{trace_id}`.'))
+
+
 def describe_gemini_failure(err):
-    """User-facing text for a failed request; never raw upstream HTML."""
     if isinstance(err, gemini_api.NoCapacityError):
         if err.attempts_exhausted:
-            return ('Gemini failed on every key I tried. Give it a moment '
-                    'and ask again.')
+            return ('Gemini failed on every fallback I tried. Try again in '
+                    'a moment.')
         if err.retry_after:
-            return (f'All Gemini keys are out of quota right now. Try again '
-                    f'in {llm_format.format_duration(err.retry_after)}.')
-        return 'All Gemini keys are out of quota right now. Try again later.'
+            return (f'All Gemini keys are out of quota or cooling down. '
+                    f'Try again in '
+                    f'{llm_format.format_duration(err.retry_after)}.')
+        return 'All Gemini capacity is unavailable right now. Try again later.'
     if isinstance(err, gemini_api.BlockedError):
         return str(err)
     if isinstance(err, gemini_api.ModelUnavailableError):
-        return ('The configured Gemini model is unavailable. A moderator '
-                'should check `LLM_MODELS`.')
+        return ('Every configured Gemini fallback is unavailable. The bot '
+                'owner should check `LLM_MODELS`.')
     if isinstance(err, gemini_api.NoKeysError):
-        return ('No Gemini API keys are configured. A moderator can add '
-                'some with `;llm keys <key> [key ...]`.')
-    return f'Gemini request failed: {gemini_api.truncate_error(err)}'
+        return 'No Gemini API keys are configured.'
+    return 'Gemini request failed unexpectedly. Try again shortly.'
 
 
 def describe_xai_failure(err):
-    """User-facing xAI failure text without leaking raw upstream pages."""
     if isinstance(err, xai_api.NoKeysError):
-        return ('No xAI API keys are configured. A moderator can add one with '
-                '`;llm grokkeys <key>`, or set `XAI_API_KEY`.')
+        return 'No xAI API keys are configured.'
     if isinstance(err, xai_api.AuthenticationError):
-        return ('xAI rejected every configured key as invalid or revoked. '
-                'A moderator should upload a fresh key with `;llm grokkeys`.')
+        return ('xAI rejected the configured credentials. The bot owner '
+                'should replace the environment key.')
     if isinstance(err, xai_api.AccessDeniedError):
-        return ('xAI denied model access. The owning team may be blocked, '
-                'unfunded, or missing a required model license; check its '
-                'billing and permissions in the xAI Console.')
+        return ('xAI denied access. The team may be unfunded; check credits, '
+                'billing, and model permissions in the xAI Console.')
     if isinstance(err, xai_api.RateLimitError):
         if err.retry_after is not None:
             return (f'xAI is rate-limited. Try again in '
                     f'{llm_format.format_duration(err.retry_after)}.')
         return 'xAI is rate-limited. Try again shortly.'
     if isinstance(err, xai_api.ModelUnavailableError):
-        return ('The configured Grok model is unavailable. A moderator '
-                'should check `XAI_MODEL`.')
+        return ('Every configured Grok fallback is unavailable. The bot '
+                'owner should check `XAI_MODELS`.')
     if isinstance(err, xai_api.BlockedError):
         return str(err)
     if isinstance(err, xai_api.ServiceUnavailableError):
         return 'xAI is temporarily unavailable. Try again shortly.'
     if isinstance(err, xai_api.NoCapacityError):
-        return ('No configured xAI key could answer. Check `;llm grokkeylist` '
-                'and the xAI Console for invalid keys, team access, credits, '
-                'or rate limits.')
-    return f'xAI request failed: {xai_api.truncate_error(err)}'
+        if err.retry_after is not None:
+            return (f'Grok capacity is cooling down. Try again in '
+                    f'{llm_format.format_duration(err.retry_after)}.')
+        return ('No configured xAI key/model fallback can answer right now. '
+                'The bot owner can inspect `;llm grokstatus` and '
+                '`;llm grokkeylist`.')
+    return 'xAI request failed unexpectedly. Try again shortly.'
