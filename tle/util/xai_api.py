@@ -1,4 +1,5 @@
 """Small async client and key rotator for xAI Chat Completions."""
+import asyncio
 import base64
 import logging
 
@@ -292,6 +293,13 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         try:
             status, body, headers = await generate_once(
                 lease.api_key, payload, session=session)
+        except asyncio.CancelledError:
+            # A deadline can cancel this coroutine after the provider has the
+            # request. Count that attempt and avoid immediately reusing the
+            # same key/model bucket for the answer stage.
+            record()
+            pool.report_transient(lease, message='request cancelled')
+            raise
         except _TRANSPORT_ERRORS as err:
             logger.warning('xAI transport error on key=%s model=%s: %s',
                            lease.key_id, lease.model, err)

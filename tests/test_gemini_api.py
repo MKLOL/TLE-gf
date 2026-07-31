@@ -226,13 +226,13 @@ class TestComplete:
         assert answer == 'recovered'
         assert len(attempts) == 2
 
-    def test_unknown_model_fails_fast_without_burning_the_pool(
+    def test_one_model_selector_fails_fast_without_burning_the_pool(
             self, pool, monkeypatch):
         calls = _responder(monkeypatch, [
             (404, {'error': {'message': 'models/model-a is not found'}}),
         ])
         with pytest.raises(gemini_api.ModelUnavailableError):
-            run(gemini_api.complete(pool, 'question'))
+            run(gemini_api.complete(pool, 'question', models=['model-a']))
         assert len(calls) == 1
 
     def test_malformed_request_is_not_retried_across_keys(self, pool, monkeypatch):

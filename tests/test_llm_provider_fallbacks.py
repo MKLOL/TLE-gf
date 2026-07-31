@@ -1,4 +1,5 @@
 """Focused tests for provider fallback, health, and process-only keys."""
+import asyncio
 from collections import namedtuple
 
 import pytest
@@ -77,6 +78,36 @@ class TestGeminiReliability:
         assert answer == 'weaker answer'
         assert lease.model == 'weak'
         assert [model for _, model in calls] == ['strong', 'weak']
+
+    def test_configured_ladder_falls_back_when_first_model_is_unavailable(
+            self, monkeypatch):
+        pool, _ = _gemini_pool(keys=2)
+        calls = []
+
+        async def generate(api_key, model, payload, session=None):
+            calls.append(model)
+            if model == 'strong':
+                return 404, {'error': {'message': 'model strong not found'}}
+            return 200, text_response('configured fallback')
+
+        monkeypatch.setattr(gemini_api, 'generate_once', generate)
+        answer, lease = run(gemini_api.complete(pool, 'hello'))
+        assert answer == 'configured fallback'
+        assert lease.model == 'weak'
+        assert calls == ['strong', 'weak']
+
+    def test_cancellation_counts_attempt_and_cools_lease(self, monkeypatch):
+        pool, _ = _gemini_pool(models=('strong',), keys=1)
+
+        async def cancelled(*args, **kwargs):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(gemini_api, 'generate_once', cancelled)
+        stats = {'attempts': 4}
+        with pytest.raises(asyncio.CancelledError):
+            run(gemini_api.complete(pool, 'hello', stats=stats))
+        assert stats['attempts'] == 5
+        assert pool.status()[0]['state'] == 'cooling down'
 
     def test_usage_is_added_to_shared_stats(self, monkeypatch):
         pool, _ = _gemini_pool(models=('strong',), keys=1)
@@ -220,3 +251,16 @@ class TestXaiReliability:
             'attempts': 5, 'input_tokens': 13,
             'output_tokens': 5, 'total_tokens': 20,
         }
+
+    def test_cancellation_counts_attempt_and_cools_lease(self, monkeypatch):
+        pool, _ = _xai_pool(models=('grok-strong',))
+
+        async def cancelled(*args, **kwargs):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(xai_api, 'generate_once', cancelled)
+        stats = {'attempts': 2}
+        with pytest.raises(asyncio.CancelledError):
+            run(xai_api.complete(pool, 'hello', stats=stats))
+        assert stats['attempts'] == 3
+        assert pool.status()[0]['state'] == 'provider/network cooldown'

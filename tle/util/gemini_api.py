@@ -10,6 +10,7 @@ Network I/O lives in ``generate_once``; payload shaping and response parsing
 are pure functions so they can be tested without a key or a socket. The
 retry-across-buckets loop is ``complete``.
 """
+import asyncio
 import base64
 import logging
 
@@ -278,7 +279,9 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         raise NoKeysError('No Gemini API keys are configured.')
 
     ladder = _model_ladder(models if models is not None else pool.models)
-    allow_model_fallback = models is not None and len(ladder) > 1
+    # A configured ladder and an explicit multi-model ladder both fall back.
+    # An explicit one-model selector remains pinned.
+    allow_model_fallback = len(ladder) > 1
     if not ladder:
         _record_stats(stats, 0)
         raise ModelUnavailableError('No Gemini models are configured.')
@@ -330,6 +333,13 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         try:
             status, body = await generate_once(lease.api_key, lease.model,
                                                payload, session=session)
+        except asyncio.CancelledError:
+            # The request was already put on the wire. Preserve truthful
+            # accounting and briefly cool the bucket before the outer request
+            # deadline propagates cancellation to its caller.
+            _record()
+            pool.report_transient(lease)
+            raise
         except _TRANSPORT_ERRORS as err:
             logger.warning('Gemini transport error on key=%s model=%s: %s',
                            lease.key_id, lease.model, err)
