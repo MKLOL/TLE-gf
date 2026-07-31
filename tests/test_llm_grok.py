@@ -129,13 +129,16 @@ class TestGrokAskFlow:
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()
         assert 'profanity' in prompt and 'roast' in prompt
         assert 'aggressive roast-comedy persona' in prompt
+        assert 'extremely edgy' in prompt
         assert 'every ordinary low-stakes reply' in prompt
-        assert 'one or two sharp, specific' in prompt
-        assert 'direct second-person banter' in prompt
-        assert 'actually use it' in prompt
+        assert 'mock or insult the user whenever possible' in prompt
+        assert 'at least two sharp, specific jabs' in prompt
+        assert 'direct second-person insults' in prompt
+        assert 'in most low-stakes answers' in prompt
+        assert 'brutal, over-the-top' in prompt
         assert 'no slurs' in prompt and 'threats' in prompt
         assert 'sensitive or high-stakes subjects' in prompt
-        assert 'one or two sharp, specific' not in \
+        assert 'mock or insult the user whenever possible' not in \
             llm_context.SYSTEM_INSTRUCTION.lower()
         assert 'competitive programmers' in prompt
         assert 'codeforces' in prompt and 'time and memory' in prompt
