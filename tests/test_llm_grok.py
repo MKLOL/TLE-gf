@@ -151,6 +151,8 @@ class TestGrokAskFlow:
         ctx = FakeCtx()
         _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok hello')
         assert ctx.sent[-1].footer['text'] == 'grok-4.5'
+        assert ctx.send_kwargs[0]['reference'] is ctx.message
+        assert ctx.send_kwargs[0]['mention_author'] is False
 
     def test_reply_text_and_image_follow_the_existing_pipeline(
             self, cog, monkeypatch):
@@ -293,9 +295,12 @@ class TestLiteralTrigger:
         ctx = FakeCtx()
         bot = _FakeBot(ctx)
         cog = llm_cog.Llm(bot)
-        run(cog.on_message(_listener_message('@grok hello there')))
+        message = _listener_message('@grok hello there')
+        run(cog.on_message(message))
         assert seen[-1]['prompt'] == 'hello there'
         assert 'Grok answer' in ctx.text
+        assert ctx.send_kwargs[0]['reference'] is message
+        assert ctx.send_kwargs[0]['mention_author'] is False
 
     def test_trigger_is_case_insensitive_and_allows_leading_space(
             self, db, monkeypatch):

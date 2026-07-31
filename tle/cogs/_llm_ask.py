@@ -199,9 +199,9 @@ async def ask_gemini(cog, ctx, question):
     footer = llm_pipeline.describe_mode(
         mode, window, explicit=explicit,
         has_reference=referenced is not None)
-    for embed in llm_format.build_answer_embeds(
-            answer, tier_note, author=ctx.author, footer_extra=footer):
-        await ctx.send(embed=embed)
+    embeds = llm_format.build_answer_embeds(
+        answer, tier_note, author=ctx.author, footer_extra=footer)
+    await _send_answer_embeds(ctx, embeds)
 
 
 async def ask_grok(cog, ctx, question):
@@ -330,9 +330,19 @@ async def ask_grok(cog, ctx, question):
     footer = llm_pipeline.describe_mode(
         mode, window, explicit=explicit,
         has_reference=referenced is not None)
-    for embed in llm_format.build_answer_embeds(
-            answer, lease.model, author=ctx.author, footer_extra=footer):
-        await ctx.send(embed=embed)
+    embeds = llm_format.build_answer_embeds(
+        answer, lease.model, author=ctx.author, footer_extra=footer)
+    await _send_answer_embeds(ctx, embeds)
+
+
+async def _send_answer_embeds(ctx, embeds):
+    """Reply with the first answer page; send later pages without references."""
+    for index, embed in enumerate(embeds):
+        if index == 0:
+            await ctx.send(
+                embed=embed, reference=ctx.message, mention_author=False)
+        else:
+            await ctx.send(embed=embed)
 
 
 async def _prepare_context(cog, ctx, provider, pool, question, referenced,

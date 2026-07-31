@@ -52,10 +52,12 @@ class FakeCtx:
         self.channel = channel or FakeChannel()
         self.command = object()
         self.sent = []
+        self.send_kwargs = []
         self.helped = False
 
     async def send(self, embed=None, **kwargs):
         self.sent.append(embed)
+        self.send_kwargs.append(kwargs)
 
     async def send_help(self, command):
         self.helped = True
@@ -150,6 +152,18 @@ class TestAsk:
         assert seen['prompt'] == 'what is a segment tree?'
         assert seen['kwargs']['tools'] == [{'url_context': {}}]
         assert 'segment trees are...' in ctx.text
+        assert ctx.send_kwargs[0] == {
+            'reference': ctx.message, 'mention_author': False}
+
+    def test_only_first_page_replies_to_the_prompt(self, cog, monkeypatch):
+        _answers(monkeypatch, 'x' * 5000)
+        ctx = FakeCtx()
+        _invoke(llm_cog.Llm.llm, cog, ctx, question='write a lot')
+
+        assert len(ctx.sent) == 2
+        assert ctx.send_kwargs[0]['reference'] is ctx.message
+        assert ctx.send_kwargs[0]['mention_author'] is False
+        assert ctx.send_kwargs[1] == {}
 
     def test_the_router_is_told_who_asked_and_when(self, cog, monkeypatch):
         seen = _answers(monkeypatch)
