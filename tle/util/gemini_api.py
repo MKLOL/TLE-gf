@@ -288,9 +288,21 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             continue
 
         if status == 200:
+            try:
+                answer = extract_text(body)
+            except (BlockedError, EmptyOutputBudgetError):
+                _record()
+                raise
+            except GeminiError as err:
+                logger.warning(
+                    'Gemini unusable 200 on key=%s model=%s: %s',
+                    lease.key_id, lease.model, err)
+                pool.report_transient(lease)
+                last_error = str(err)
+                continue
             pool.report_success(lease)
             _record()
-            return extract_text(body), lease
+            return answer, lease
 
         message = truncate_error(
             ((body or {}).get('error') or {}).get('message')) or f'HTTP {status}'

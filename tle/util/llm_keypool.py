@@ -162,6 +162,10 @@ class KeyPool:
 
     def reload(self):
         """Re-read keys and persisted daily exhaustion from the database."""
+        self._cooldown.clear()
+        self._unknown_strikes.clear()
+        self._invalid_strikes.clear()
+        self._last_used.clear()
         self._keys = list(self._db.llm_get_keys(active_only=True))
         now = self._now()
         self._exhausted = {

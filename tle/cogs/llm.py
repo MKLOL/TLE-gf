@@ -258,7 +258,7 @@ class Llm(commands.Cog):
                     max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
                     session=self._get_session(), stats=stats,
                     models=models, tier=tier,
-                    tools=[{'url_context': {}}, {'google_search': {}}])
+                    tools=[{'url_context': {}}])
         except gemini_api.GeminiError as err:
             failure = err
 

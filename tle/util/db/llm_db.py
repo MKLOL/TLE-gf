@@ -93,6 +93,8 @@ class LlmDbMixin:
                     'UPDATE llm_api_key SET active = 1, api_key = ?, label = ?, '
                     'added_at = ?, added_by = ?, guild_id = ? WHERE id = ?',
                     (api_key, label, time.time(), _s(added_by), _s(guild_id), row.id))
+                self.conn.execute(
+                    'DELETE FROM llm_bucket WHERE key_id = ?', (row.id,))
             return 'reactivated'
         with self.conn:
             self.conn.execute(
