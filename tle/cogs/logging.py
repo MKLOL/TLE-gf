@@ -40,11 +40,15 @@ class Logging(commands.Cog, logging.Handler):
                 self.logger.warning('Logging channel not available, disabling Discord log handler.')
                 break
             try:
-                msg = self.format(record)
+                # Defense in depth: records may originate outside the command
+                # error handler, so sanitize both traceback text and UI extras.
+                msg = discord_common.redact_credentials(self.format(record))
                 # Not all errors will have message_contents or jump urls.
                 try:
+                    command = discord_common.redact_credentials(
+                        record.message_content)
                     embed = discord.Embed(
-                        description=f'**Original Command:** {record.message_content}\n'
+                        description=f'**Original Command:** {command}\n'
                                     f'**Jump URL:** {record.jump_url}',
                     )
                     await channel.send(embed=embed)
