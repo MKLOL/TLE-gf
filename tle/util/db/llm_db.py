@@ -32,6 +32,8 @@ import hashlib
 import logging
 import time
 
+from tle.util.db.llm_telemetry_db import LlmTelemetryDbMixin
+
 logger = logging.getLogger(__name__)
 
 _KEY_PROVIDERS = frozenset(('gemini', 'xai'))
@@ -42,10 +44,11 @@ def key_fingerprint(api_key):
     return hashlib.sha256(api_key.strip().encode('utf-8')).hexdigest()
 
 
-class LlmDbMixin:
+class LlmDbMixin(LlmTelemetryDbMixin):
     """Mixin providing LLM key-pool and quota DB methods."""
 
     def _create_llm_tables(self):
+        self._create_llm_telemetry_tables()
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS llm_api_key (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +85,12 @@ class LlmDbMixin:
             CREATE TABLE IF NOT EXISTS llm_xai_request (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id      TEXT NOT NULL,
-                requested_at REAL NOT NULL
+                requested_at REAL NOT NULL,
+                guild_id     TEXT,
+                model        TEXT,
+                reserved_microusd INTEGER NOT NULL DEFAULT 0,
+                actual_microusd   INTEGER,
+                outcome      TEXT
             )
         ''')
         self.conn.execute('''
@@ -156,12 +164,15 @@ class LlmDbMixin:
         return self.conn.execute(query, params).fetchall()
 
     def llm_forget_key(self, key_id, provider='gemini'):
-        """Deactivate a provider key by id. Returns True if a row changed."""
+        """Crypto-erase a key while retaining its fingerprint audit record."""
         with self.conn:
             cur = self.conn.execute(
-                'UPDATE llm_api_key SET active = 0 '
+                "UPDATE llm_api_key SET active = 0, api_key = '' "
                 'WHERE id = ? AND provider = ? AND active = 1',
                 (key_id, _provider(provider)))
+            if cur.rowcount:
+                self.conn.execute(
+                    'DELETE FROM llm_bucket WHERE key_id = ?', (key_id,))
         return cur.rowcount > 0
 
     # ── Bucket (per key × model) quota state ────────────────────────────
@@ -204,16 +215,20 @@ class LlmDbMixin:
     # ── Grok credit guard ───────────────────────────────────────────────
 
     def llm_reserve_xai_request(self, user_id, user_limit, window_seconds,
-                                daily_limit, now=None):
+                                daily_limit, now=None, *, guild_id=None,
+                                model=None, reserved_microusd=0,
+                                daily_budget_microusd=0, return_id=False):
         """Atomically reserve one Grok invocation.
 
-        Returns ``None`` when accepted, ``'user'`` for the rolling per-user
-        guard, or ``'daily'`` for the bot-wide UTC-day guard. A reservation is
-        kept even if the upstream call fails because it still consumed shared
-        provider capacity and could otherwise be abused as a free retry loop.
+        Returns ``None`` when accepted (or the row id with ``return_id=True``),
+        ``'user'``/``'daily'`` for count guards, or ``'budget'`` for the
+        operator's private estimated-spend guard. A reservation is kept on
+        failure so repeated failing calls cannot bypass credit protection.
         """
         now = time.time() if now is None else float(now)
         user_id = str(user_id)
+        reserved_microusd = max(0, int(reserved_microusd or 0))
+        daily_budget_microusd = max(0, int(daily_budget_microusd or 0))
         window_cutoff = now - max(0, window_seconds)
         day_start = int(now // 86400) * 86400
         retain_after = min(window_cutoff, day_start)
@@ -237,10 +252,47 @@ class LlmDbMixin:
             if daily_count >= daily_limit:
                 return 'daily'
 
-            self.conn.execute(
-                'INSERT INTO llm_xai_request (user_id, requested_at) '
-                'VALUES (?, ?)', (user_id, now))
-        return None
+            if daily_budget_microusd:
+                spent = self.conn.execute(
+                    'SELECT COALESCE(SUM(COALESCE(actual_microusd, '
+                    'reserved_microusd)), 0) AS spent FROM llm_xai_request '
+                    'WHERE requested_at >= ?', (day_start,)).fetchone().spent
+                if spent + reserved_microusd > daily_budget_microusd:
+                    return 'budget'
+
+            cur = self.conn.execute(
+                'INSERT INTO llm_xai_request '
+                '(user_id, requested_at, guild_id, model, reserved_microusd) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (user_id, now, _s(guild_id), model, reserved_microusd))
+        return cur.lastrowid if return_id else None
+
+    def llm_finalize_xai_request(self, reservation_id, *, actual_microusd=None,
+                                 outcome=None, model=None):
+        """Reconcile a Grok reservation after the provider path finishes."""
+        actual = (None if actual_microusd is None
+                  else max(0, int(actual_microusd)))
+        with self.conn:
+            cur = self.conn.execute(
+                'UPDATE llm_xai_request SET actual_microusd = ?, '
+                'outcome = ?, model = COALESCE(?, model) WHERE id = ?',
+                (actual, _bounded(outcome, 40), _bounded(model, 100),
+                 int(reservation_id)))
+        return cur.rowcount > 0
+
+    def llm_xai_daily_summary(self, now=None):
+        """Private daily count/spend view for the bot owner."""
+        now = time.time() if now is None else float(now)
+        day_start = int(now // 86400) * 86400
+        return self.conn.execute('''
+            SELECT COUNT(*) AS calls,
+                   COALESCE(SUM(reserved_microusd), 0) AS reserved_microusd,
+                   COALESCE(SUM(actual_microusd), 0) AS actual_microusd,
+                   COALESCE(SUM(COALESCE(actual_microusd,
+                                        reserved_microusd)), 0)
+                       AS guarded_microusd
+            FROM llm_xai_request WHERE requested_at >= ?
+        ''', (day_start,)).fetchone()
 
     # ── Per-user daily usage ────────────────────────────────────────────
 
@@ -294,3 +346,9 @@ def _provider(value):
     if provider not in _KEY_PROVIDERS:
         raise ValueError(f'Unsupported LLM key provider: {provider}')
     return provider
+
+
+def _bounded(value, limit):
+    if value is None:
+        return None
+    return ' '.join(str(value).split())[:limit]

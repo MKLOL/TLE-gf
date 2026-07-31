@@ -1,0 +1,111 @@
+"""Security, telemetry, and budget DB behavior for LLM requests."""
+import sqlite3
+
+from tle.util.db.llm_db import key_fingerprint
+from tle.util.db.user_db_conn import namedtuple_factory
+from tle.util.db.user_db_upgrades import (
+    upgrade_1_45_0, upgrade_1_46_0, upgrade_1_47_0, upgrade_1_48_0,
+)
+from tests.llm_test_utils import FakeLlmDb
+
+
+def test_forget_erases_secret_and_bucket_but_keeps_fingerprint():
+    db = FakeLlmDb()
+    key = 'xai-SecretValueThatMustDisappear123'
+    db.llm_add_key(key, provider='xai')
+    row = db.llm_get_keys(provider='xai')[0]
+    db.llm_set_bucket_exhausted(row.id, 'model-a', 999)
+
+    assert db.llm_forget_key(row.id, provider='xai') is True
+    erased = db.llm_get_keys(active_only=False, provider='xai')[0]
+    assert erased.api_key == ''
+    assert erased.fingerprint == key_fingerprint(key)
+    assert db.llm_get_buckets(now=0) == []
+
+
+def test_erased_key_can_be_readded_from_fingerprint_tombstone():
+    db = FakeLlmDb()
+    key = 'AIzaSySecretValueThatMustDisappear123'
+    db.llm_add_key(key)
+    key_id = db.llm_get_keys()[0].id
+    db.llm_forget_key(key_id)
+
+    assert db.llm_add_key(key, label='restored') == 'reactivated'
+    restored = db.llm_get_keys()[0]
+    assert restored.id == key_id
+    assert restored.api_key == key
+
+
+def test_provider_telemetry_is_separate_and_prompt_free():
+    db = FakeLlmDb()
+    db.llm_record_request(
+        1, 2, 'xai', '2026-07-31', 'success', model='grok-test',
+        router_attempts=1, answer_attempts=2, input_tokens=30,
+        output_tokens=10, total_tokens=40, latency_ms=125,
+        cost_microusd=99, context_mode='recent', context_messages=5,
+        now=100)
+    db.llm_record_request(
+        1, 3, 'gemini', '2026-07-31', 'failed', model='gemini-test',
+        answer_attempts=1, now=101)
+
+    xai = db.llm_provider_summary('xai', '2026-07-31')
+    gemini = db.llm_provider_summary('gemini', '2026-07-31')
+    assert (xai.calls, xai.successes, xai.total_tokens,
+            xai.cost_microusd) == (1, 1, 40, 99)
+    assert (gemini.calls, gemini.successes) == (1, 0)
+    columns = {row[1] for row in db.conn.execute(
+        'PRAGMA table_info(llm_request_usage)').fetchall()}
+    assert not {'prompt', 'answer', 'api_key'} & columns
+
+
+def test_xai_budget_reservation_is_atomic_and_reconcilable():
+    db = FakeLlmDb()
+    kwargs = dict(user_limit=10, window_seconds=1800, daily_limit=100,
+                  now=100, reserved_microusd=600,
+                  daily_budget_microusd=1000, return_id=True)
+    reservation_id = db.llm_reserve_xai_request(7, **kwargs)
+    assert isinstance(reservation_id, int)
+    assert db.llm_reserve_xai_request(8, **kwargs) == 'budget'
+
+    assert db.llm_finalize_xai_request(
+        reservation_id, actual_microusd=100, outcome='success',
+        model='grok-test')
+    second = db.llm_reserve_xai_request(8, **kwargs)
+    assert isinstance(second, int)
+    summary = db.llm_xai_daily_summary(now=100)
+    assert (summary.calls, summary.actual_microusd,
+            summary.guarded_microusd) == (2, 100, 700)
+
+
+def test_telemetry_retention_is_bounded():
+    db = FakeLlmDb()
+    for timestamp in (10, 20):
+        db.llm_record_request(
+            1, 2, 'xai', '2026-07-31', 'success', now=timestamp)
+    assert db.llm_purge_request_usage(15) == 1
+    assert db.llm_provider_summary('xai', '2026-07-31').calls == 1
+
+
+def test_1_48_migration_is_idempotent_and_preserves_old_ledger_rows():
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = namedtuple_factory
+    upgrade_1_45_0(conn)
+    upgrade_1_46_0(conn)
+    upgrade_1_47_0(conn)
+    conn.execute(
+        'INSERT INTO llm_xai_request (user_id, requested_at) VALUES (?, ?)',
+        ('7', 123.0))
+    upgrade_1_48_0(conn)
+    upgrade_1_48_0(conn)
+
+    columns = {row[1] for row in conn.execute(
+        'PRAGMA table_info(llm_xai_request)').fetchall()}
+    assert {'guild_id', 'model', 'reserved_microusd',
+            'actual_microusd', 'outcome'} <= columns
+    row = conn.execute('SELECT * FROM llm_xai_request').fetchone()
+    assert row.user_id == '7'
+    assert row.reserved_microusd == 0
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='llm_request_usage'").fetchone() is not None
+    conn.close()
