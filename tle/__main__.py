@@ -2,13 +2,12 @@ import argparse
 import asyncio
 import distutils.util
 import logging
-import os
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from os import environ
 from pathlib import Path
 
-from tle.util import font_config
+from tle.util import file_permissions, font_config
 
 # Must run before any fontconfig/Pango use. This keeps direct `python -m tle`
 # launches safe and lets run.sh request color emoji only when its Cairo
@@ -27,17 +26,23 @@ from tle.util import discord_common, font_downloader
 
 
 def setup():
-    # Make required directories.
+    # user.db contains API keys and Discord data. A process-wide private umask
+    # also protects SQLite journals, rotating logs, and temporary artifacts
+    # created later by libraries.
+    file_permissions.set_private_umask()
     for path in constants.ALL_DIRS:
-        os.makedirs(path, exist_ok=True)
+        file_permissions.ensure_private_directory(path)
 
     # logging to console and file on daily interval
+    file_handler = TimedRotatingFileHandler(
+        constants.LOG_FILE_PATH, when='D', backupCount=3, utc=True,
+        encoding='utf-8')
+    file_permissions.ensure_private_file(constants.LOG_FILE_PATH)
     logging.basicConfig(format='{asctime}:{levelname}:{name}:{message}', style='{',
                         datefmt='%d-%m-%Y %H:%M:%S', level=logging.INFO,
                         handlers=[logging.StreamHandler(
                                       open(sys.stdout.fileno(), 'w', encoding='utf-8', closefd=False)),
-                                  TimedRotatingFileHandler(constants.LOG_FILE_PATH, when='D',
-                                                           backupCount=3, utc=True, encoding='utf-8')])
+                                  file_handler])
     font_config.log_status()
 
     # matplotlib and seaborn

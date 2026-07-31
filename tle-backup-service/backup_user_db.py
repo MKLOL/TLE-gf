@@ -189,9 +189,12 @@ def do_backup():
     LOG.info("connecting to %s@%s:%d", SRC_USER, SRC_HOST, SRC_PORT)
     client = connect()
     try:
-        # 1) consistent snapshot on the source
-        run_remote(client, f"rm -f {snap}")
-        rc, out, err = run_remote(client, f'sqlite3 {src} ".timeout 15000" ".backup {snap}"')
+        # 1) consistent snapshot on the source. The umask applies before
+        # sqlite creates the file, avoiding a readable window before chmod.
+        rc, out, err = run_remote(
+            client,
+            f'rm -f {snap} && umask 077 && '
+            f'sqlite3 {src} ".timeout 15000" ".backup {snap}"')
         if rc != 0:
             raise RuntimeError(
                 f"remote snapshot failed (rc={rc}): {safe_error(err or out)}")
@@ -235,10 +238,19 @@ def do_backup():
             LOG.warning("could not stamp backup time (non-fatal, rc=%d): %s",
                         rc, safe_error(err or out))
 
-        # 5) clean up remote snapshot
-        run_remote(client, f"rm -f {snap}")
     finally:
-        client.close()
+        # Attempt cleanup even when snapshot creation, transfer, or validation
+        # fails. A stale remote copy is still a complete credential-bearing DB.
+        try:
+            rc, out, err = run_remote(client, f"rm -f {snap}")
+            if rc != 0:
+                LOG.warning("could not remove remote snapshot (rc=%d): %s",
+                            rc, safe_error(err or out))
+        except Exception as cleanup_error:  # noqa: BLE001 - preserve root cause
+            LOG.warning("could not remove remote snapshot: %s",
+                        safe_error(cleanup_error))
+        finally:
+            client.close()
 
     # 6) prune (only reached on a successful backup)
     prune()

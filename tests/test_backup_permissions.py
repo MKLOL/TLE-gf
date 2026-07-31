@@ -4,6 +4,8 @@ import stat
 import sys
 import types
 
+import pytest
+
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -95,6 +97,38 @@ def test_backup_directory_partial_and_final_database_are_private(
     assert _mode(databases[0]) == 0o600
     assert not list(backup_dir.glob('*.part'))
     assert any('chmod 600' in command for command in commands)
+    snapshot = next(command for command in commands if '.backup' in command)
+    assert 'umask 077' in snapshot
+    assert commands[-1].startswith('rm -f ')
+
+
+def test_remote_snapshot_is_cleaned_when_creation_fails(monkeypatch, tmp_path):
+    backup, _ = _load_backup(monkeypatch, tmp_path)
+    commands = []
+
+    class Client:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    client = Client()
+
+    def run_remote(unused_client, command, timeout=180):
+        commands.append(command)
+        if '.backup' in command:
+            return 1, '', 'snapshot failed'
+        return 0, '', ''
+
+    monkeypatch.setattr(backup, 'connect', lambda: client)
+    monkeypatch.setattr(backup, 'run_remote', run_remote)
+
+    with pytest.raises(RuntimeError, match='snapshot failed'):
+        backup.do_backup()
+
+    assert 'umask 077' in commands[0]
+    assert commands[-1].startswith('rm -f ')
+    assert client.closed is True
 
 
 def test_lockfile_and_created_parent_are_private(monkeypatch, tmp_path):

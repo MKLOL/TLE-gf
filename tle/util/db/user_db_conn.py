@@ -30,6 +30,7 @@ from tle.util.db.betting_market_db import BettingMarketDbMixin
 from tle.util.db.betting_wager_db import BettingWagerDbMixin
 from tle.util.db.command_gate_db import CommandGateDbMixin
 from tle.util.db.llm_db import LlmDbMixin
+from tle.util import file_permissions
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,17 @@ class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
                  CommandGateDbMixin, LlmDbMixin,
                  MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def __init__(self, dbfile):
+        # Pre-creation avoids a world-readable window before chmod. The private
+        # umask also covers rollback journals created during schema upgrades;
+        # normal bot startup keeps the same umask for all later transactions.
+        with file_permissions.private_umask():
+            file_permissions.prepare_sqlite_database(dbfile)
+            try:
+                self._initialize_database(dbfile)
+            finally:
+                file_permissions.harden_sqlite_files(dbfile)
+
+    def _initialize_database(self, dbfile):
         logger.info(f'Opening user database: {dbfile}')
         self.conn = sqlite3.connect(dbfile)
         self.conn.row_factory = namedtuple_factory
