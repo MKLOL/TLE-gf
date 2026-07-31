@@ -103,14 +103,15 @@ BET_SETTLE_BUFFER_SECONDS = 3 * 3600
 # is metered per project per model ("Rate limits are applied per project, not
 # per API key" — ai.google.dev/gemini-api/docs/rate-limits), so each entry here
 # is a genuinely separate allowance on the same key, not the same bucket
-# renamed. Three models x N projects is the real size of the pool.
+# renamed. Each model x N projects is the real size of the pool.
 #
-# Verified against ai.google.dev/gemini-api/docs/models (July 2026): all three
-# are current and free-tier eligible. Note gemini-2.0-flash and
+# Verified against ai.google.dev/gemini-api/docs/models (July 2026): all listed
+# models are current and free-tier eligible. Note gemini-2.0-flash and
 # gemini-2.0-flash-lite are SHUT DOWN — do not fall back to them.
 LLM_MODELS = tuple(m.strip() for m in os.environ.get(
     'LLM_MODELS',
-    'gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash'
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite,'
+    'gemini-2.5-flash'
 ).split(',') if m.strip())
 # Optional bootstrap keys, comma-separated, for provisioning without typing
 # secrets into Discord. Keys added via `;llm keys` are stored in user.db and

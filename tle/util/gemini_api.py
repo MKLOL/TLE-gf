@@ -93,7 +93,7 @@ def build_parts(prompt, images=None):
 
 def build_payload(parts, system_instruction=None, max_output_tokens=None,
                   temperature=None, thinking=None, response_mime_type=None,
-                  response_schema=None):
+                  response_schema=None, tools=None):
     """Assemble a ``generateContent`` request body.
 
     ``thinking`` is the encoded reasoning config from ``llm_models`` — either
@@ -101,6 +101,8 @@ def build_payload(parts, system_instruction=None, max_output_tokens=None,
     under ``generationConfig.thinkingConfig``.
     """
     payload = {'contents': [{'role': 'user', 'parts': parts}]}
+    if tools:
+        payload['tools'] = [dict(tool) for tool in tools]
     if system_instruction:
         payload['systemInstruction'] = {'parts': [{'text': system_instruction}]}
     generation_config = {}
@@ -218,7 +220,7 @@ async def generate_once(api_key, model, payload, session=None):
 async def complete(pool, prompt, images=None, system_instruction=None,
                    max_output_tokens=None, temperature=None, session=None,
                    max_attempts=None, stats=None, models=None, tier=None,
-                   response_mime_type=None, response_schema=None):
+                   response_mime_type=None, response_schema=None, tools=None):
     """Run one prompt against the pool, rotating buckets until one answers.
 
     Walks ``(key, model)`` buckets — cheapest model across every key first,
@@ -272,7 +274,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             max_output_tokens=max_output_tokens, temperature=temperature,
             thinking=llm_models.thinking_config(lease.model, tier),
             response_mime_type=response_mime_type,
-            response_schema=response_schema)
+            response_schema=response_schema, tools=tools)
 
         attempts += 1
         try:

@@ -228,10 +228,6 @@ class Llm(commands.Cog):
             return
 
         models = [spec.model_id] if spec is not None else None
-        attachments = llm_context.select_image_attachments(
-            [referenced, ctx.message],
-            constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
-            max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
 
         stats, failure, mode, window = {}, None, llm_context.MODE_DIRECT, []
         try:
@@ -244,14 +240,25 @@ class Llm(commands.Cog):
                     sent_at=getattr(ctx.message, 'created_at', None))
                 window = await llm_pipeline.gather(
                     ctx, mode, referenced, bot_user_id=self._bot_user_id())
-                prompt = llm_pipeline.build_prompt(question, referenced, window)
+                prompt = llm_pipeline.build_prompt(
+                    question, referenced, window, mode=mode)
+                image_messages = [referenced]
+                image_messages += [message for message in window
+                                   if message is not referenced and
+                                   message is not ctx.message]
+                image_messages.append(ctx.message)
+                attachments = llm_context.select_image_attachments(
+                    image_messages,
+                    constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
+                    max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
                 images = await llm_context.read_images(attachments)
                 answer, lease = await gemini_api.complete(
                     pool, prompt, images=images,
                     system_instruction=llm_context.SYSTEM_INSTRUCTION,
                     max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
                     session=self._get_session(), stats=stats,
-                    models=models, tier=tier)
+                    models=models, tier=tier,
+                    tools=[{'url_context': {}}, {'google_search': {}}])
         except gemini_api.GeminiError as err:
             failure = err
 
