@@ -299,9 +299,9 @@ class Llm(commands.Cog):
                 return ('Gemini failed on every key I tried. Give it a moment '
                         'and ask again.')
             if err.retry_after:
-                return (f'All Gemini keys are out of quota right now. Try again '
+                return (f'Gemini has temporarily rate-limited the configured project/model. Try again '
                         f'in {llm_format.format_duration(err.retry_after)}.')
-            return 'All Gemini keys are out of quota right now. Try again later.'
+            return 'Gemini has temporarily rate-limited the configured project/model. Try again later.'
         if isinstance(err, gemini_api.BlockedError):
             return str(err)
         if isinstance(err, gemini_api.ModelUnavailableError):

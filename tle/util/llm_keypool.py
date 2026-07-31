@@ -267,16 +267,13 @@ class KeyPool:
         now = self._now()
 
         if scope == QUOTA_UNKNOWN:
-            strikes = self._unknown_strikes.get(bucket, 0) + 1
-            self._unknown_strikes[bucket] = strikes
-            if strikes >= _UNKNOWN_STRIKES_TO_DAILY:
-                logger.warning(
-                    'LLM bucket key=%s model=%s: %d unclassified 429s, '
-                    'treating as daily exhaustion', lease.key_id, lease.model, strikes)
-                scope = QUOTA_DAY
-            else:
-                self._cooldown[bucket] = now + (retry_after or _UNKNOWN_COOLDOWN)
-                return
+            delay = retry_after or _UNKNOWN_COOLDOWN
+            self._cooldown[bucket] = now + delay
+            logger.warning(
+                'LLM bucket key=%s model=%s received an unclassified 429; '
+                'temporary cooldown %.0fs, not persisted as daily quota',
+                lease.key_id, lease.model, delay)
+            return
 
         if scope == QUOTA_DAY:
             until = now + retry_after if (retry_after or 0) >= _MIN_DAILY_WAIT \

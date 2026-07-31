@@ -11,6 +11,7 @@ are pure functions so they can be tested without a key or a socket. The
 retry-across-buckets loop is ``complete``.
 """
 import base64
+import json
 import logging
 
 import aiohttp
@@ -211,6 +212,36 @@ async def generate_once(api_key, model, payload, session=None):
                 body = await resp.json(content_type=None)
             except Exception:  # noqa: BLE001 — non-JSON error pages happen
                 body = {'error': {'message': truncate_error(await resp.text())}}
+            if resp.status != 200:
+                debug_headers = {
+                    name: resp.headers.get(name)
+                    for name in (
+                        'Retry-After',
+                        'X-Request-Id',
+                        'X-GUploader-UploadID',
+                        'Date',
+                    )
+                    if resp.headers.get(name)
+                }
+                logger.warning(
+                    'Gemini HTTP error model=%s status=%s headers=%s body=%s',
+                    model, resp.status, debug_headers,
+                    truncate_error(
+                        json.dumps(body, ensure_ascii=False, sort_keys=True),
+                        limit=4000))
+            elif payload.get('tools'):
+                usage = (body or {}).get('usageMetadata') or {}
+                tool_names = ','.join(
+                    next(iter(tool), '?')
+                    for tool in payload.get('tools') or [])
+                logger.info(
+                    'Gemini tool usage model=%s tools=%s prompt_tokens=%s '
+                    'tool_tokens=%s output_tokens=%s total_tokens=%s',
+                    model, tool_names,
+                    usage.get('promptTokenCount'),
+                    usage.get('toolUsePromptTokenCount'),
+                    usage.get('candidatesTokenCount'),
+                    usage.get('totalTokenCount'))
             return resp.status, body
     finally:
         if close_session:
