@@ -155,7 +155,7 @@ class TestAsk:
         message = FakeMessage()
         message.created_at = datetime(2026, 7, 30, 23, 4, tzinfo=timezone.utc)
         _invoke(llm_cog.Llm.llm, cog, FakeCtx(message=message),
-                question='what were the last 3 messages?')
+                question='does their reasoning hold?')
         routing = seen['prompts'][0]
         assert 'author: nife (id 1)' in routing
         assert 'sent_at: 2026-07-30 23:04 UTC' in routing

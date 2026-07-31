@@ -1,13 +1,12 @@
 """Two-stage request pipeline for ``;llm``: route, then answer.
 
-Stage one asks a cheap model whether the question needs the surrounding
-conversation. Stage two collects that conversation if so, and builds the final
-prompt. Keeping this out of the cog leaves the cog to commands and Discord I/O.
+Stage one resolves replies and obvious history requests locally, then asks a
+cheap model only for genuinely ambiguous questions. Stage two collects the
+chosen conversation window and builds the final prompt. Keeping this out of
+the cog leaves the cog to commands and Discord I/O.
 
-The routing call is charged to the *cheapest* model in the ladder regardless of
-which model the user picked for the answer, and capped to a handful of output
-tokens — the shared free-tier quota should not be spent twice at the same rate
-just to decide whether history is needed.
+When needed, Gemini routing is charged to the *cheapest* model in the ladder;
+Grok routes through xAI with reasoning disabled and a tiny output cap.
 """
 import logging
 
@@ -25,26 +24,41 @@ logger = logging.getLogger(__name__)
 # Thinking is set to the model's lowest tier as well, so the cap is slack
 # rather than load-bearing.
 _CLASSIFIER_MAX_TOKENS = 512
+_GROK_CLASSIFIER_MAX_TOKENS = 32
 
 # Force a valid label instead of hoping for one bare word. Same approach as
 # MKLOL/TLE-gf#10, which uses responseSchema on its classifier.
 _CLASSIFIER_SCHEMA = {
     'type': 'STRING',
-    'enum': [llm_context.MODE_DIRECT, llm_context.MODE_CONTEXT,
-             llm_context.MODE_REPLY_CHAIN],
+    'enum': [llm_context.MODE_DIRECT, llm_context.MODE_CONTEXT],
 }
 
 
+def _local_choice(question, is_reply, has_current_images):
+    """Resolve structural/high-confidence routes before paying a provider."""
+    hint = llm_context.local_mode_hint(
+        question, is_reply=is_reply,
+        has_current_images=has_current_images)
+    if hint == llm_context.MODE_REPLY_CHAIN:
+        return hint
+    if not constants.LLM_CONTEXT_ENABLED:
+        return llm_context.MODE_DIRECT
+    return hint
+
+
 async def classify(pool, question, is_reply, session=None, stats=None,
-                   author_name=None, author_id=None, sent_at=None):
+                   author_name=None, author_id=None, sent_at=None,
+                   has_current_images=False):
     """Decide whether this question needs channel history.
 
     Falls back to ``direct`` on any failure: routing is an optimisation, and
     losing it should degrade the answer, not block it. A quota failure here is
     deliberately swallowed so the answer call still gets its chance.
     """
-    if not constants.LLM_CONTEXT_ENABLED:
-        return llm_context.MODE_DIRECT
+    local = _local_choice(question, is_reply, has_current_images)
+    if local is not None:
+        logger.info(';llm routed locally to %s (is_reply=%s)', local, is_reply)
+        return local
 
     # LLM_MODELS is ordered cheapest-first, so the router takes the head of the
     # ladder. (This read `[-1:]` — the last entry, i.e. the most expensive
@@ -55,7 +69,8 @@ async def classify(pool, question, is_reply, session=None, stats=None,
             pool,
             llm_context.build_classifier_prompt(
                 question, is_reply, author_name=author_name,
-                author_id=author_id, sent_at=sent_at),
+                author_id=author_id, sent_at=sent_at,
+                has_current_images=has_current_images),
             system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
             max_output_tokens=_CLASSIFIER_MAX_TOKENS,
             temperature=0,
@@ -80,18 +95,22 @@ async def classify(pool, question, is_reply, session=None, stats=None,
 
 
 async def classify_grok(pool, question, is_reply, session=None, stats=None,
-                        author_name=None, author_id=None, sent_at=None):
+                        author_name=None, author_id=None, sent_at=None,
+                        has_current_images=False):
     """xAI-backed equivalent of :func:`classify` for the Grok route."""
-    if not constants.LLM_CONTEXT_ENABLED:
-        return llm_context.MODE_DIRECT
+    local = _local_choice(question, is_reply, has_current_images)
+    if local is not None:
+        logger.info('@grok routed locally to %s (is_reply=%s)', local, is_reply)
+        return local
     try:
         raw, _ = await xai_api.complete(
             pool,
             llm_context.build_classifier_prompt(
                 question, is_reply, author_name=author_name,
-                author_id=author_id, sent_at=sent_at),
+                author_id=author_id, sent_at=sent_at,
+                has_current_images=has_current_images),
             system_instruction=llm_context.CLASSIFIER_INSTRUCTION,
-            max_output_tokens=_CLASSIFIER_MAX_TOKENS,
+            max_output_tokens=_GROK_CLASSIFIER_MAX_TOKENS,
             temperature=0,
             reasoning_effort='none',
             session=session,
@@ -110,10 +129,9 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
 async def gather(ctx, mode, referenced, bot_user_id=None):
     """Collect the message window a mode calls for.
 
-    A reply always gets its surrounding exchange, whatever the router decided.
-    Someone who took the trouble to reply to a message wants that message's
-    context, and reading channel history costs a Discord call, not an API one —
-    so there is nothing to save by trusting the router here.
+    A reply is selected structurally before provider routing and always gets
+    its surrounding exchange. Reading history costs Discord I/O and bounded
+    input tokens, not another inference call.
     """
     if referenced is not None:
         window = await llm_history.collect_reply_window(
@@ -121,7 +139,7 @@ async def gather(ctx, mode, referenced, bot_user_id=None):
             before_count=constants.LLM_REPLY_BEFORE,
             after_count=constants.LLM_REPLY_AFTER,
             window_seconds=constants.LLM_CONTEXT_WINDOW_SECONDS,
-            bot_user_id=bot_user_id)
+            bot_user_id=bot_user_id, until=ctx.message)
     elif mode == llm_context.MODE_CONTEXT:
         window = await llm_history.collect_recent(
             ctx.channel, before=ctx.message,
@@ -168,6 +186,6 @@ def build_prompt(question, referenced, window):
 
 def describe_mode(mode, window):
     """Short footer note about what context was used, or None."""
-    if mode == llm_context.MODE_DIRECT or not window:
+    if not window:
         return None
     return f'{len(window)} messages of context'

@@ -91,7 +91,8 @@ async def ask_gemini(cog, ctx, question):
                 session=cog._get_session(), stats=stats,
                 author_name=getattr(ctx.author, 'display_name', None),
                 author_id=getattr(ctx.author, 'id', None),
-                sent_at=getattr(ctx.message, 'created_at', None))
+                sent_at=getattr(ctx.message, 'created_at', None),
+                has_current_images=bool(attachments))
             window = await llm_pipeline.gather(
                 ctx, mode, referenced, bot_user_id=cog._bot_user_id())
             prompt = llm_pipeline.build_prompt(question, referenced, window)
@@ -169,7 +170,8 @@ async def ask_grok(cog, ctx, question):
                 session=cog._get_session(), stats=stats,
                 author_name=getattr(ctx.author, 'display_name', None),
                 author_id=getattr(ctx.author, 'id', None),
-                sent_at=getattr(ctx.message, 'created_at', None))
+                sent_at=getattr(ctx.message, 'created_at', None),
+                has_current_images=bool(attachments))
             window = await llm_pipeline.gather(
                 ctx, mode, referenced, bot_user_id=cog._bot_user_id())
             prompt = llm_pipeline.build_prompt(question, referenced, window)

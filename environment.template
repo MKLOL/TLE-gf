@@ -48,14 +48,12 @@ export XAI_DAILY_REQUEST_LIMIT="100"
 # per-model free limits in the docs — check your actual quota in AI Studio.
 # gemini-2.0-flash and gemini-2.0-flash-lite are shut down; don't use them.
 export LLM_MODELS="gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
-# There is deliberately no per-user cap or cooldown — the shared free-tier
-# allowance is the only limit. Calls are still counted per user so moderators
-# can see consumption via `;llm keystatus`.
+# Gemini deliberately has no per-user cap or cooldown. Calls are still counted
+# per user so moderators can see consumption via `;llm keystatus`.
 #
-# Questions about the ongoing conversation pull in channel history. A cheap
-# routing call decides whether that is needed, which costs a second request
-# per question; set LLM_CONTEXT_ENABLED=0 to skip routing and halve the
-# request count (at the cost of answers that cannot see the conversation).
+# Replies and unmistakable channel-history requests are routed locally;
+# ambiguous questions use one cheap provider routing call. Set
+# LLM_CONTEXT_ENABLED=0 to skip non-reply history and provider routing.
 export LLM_CONTEXT_ENABLED="1"
 export LLM_CONTEXT_MESSAGES="50"
 export LLM_CONTEXT_WINDOW_SECONDS="600"

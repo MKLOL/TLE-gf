@@ -48,7 +48,8 @@ class FakeHistoryChannel:
                     raise RuntimeError('missing Read Message History')
                 picked = list(channel.messages)  # ascending by created_at
                 if before is not None:
-                    picked = [m for m in picked if m.created_at < before.created_at]
+                    anchor = getattr(before, 'created_at', before)
+                    picked = [m for m in picked if m.created_at < anchor]
                 if after is not None:
                     anchor = getattr(after, 'created_at', after)
                     picked = [m for m in picked if m.created_at > anchor]
@@ -271,7 +272,7 @@ def _classifier(monkeypatch, verdict):
 class TestClassify:
     def test_routes_on_the_models_answer(self, pool, monkeypatch):
         _classifier(monkeypatch, 'requires_context')
-        assert run(llm_pipeline.classify(pool, 'what are they arguing about?',
+        assert run(llm_pipeline.classify(pool, 'does their reasoning hold?',
                                          False)) == llm_context.MODE_CONTEXT
 
     def test_routing_uses_the_cheapest_model(self, pool, monkeypatch):
@@ -300,13 +301,12 @@ class TestClassify:
         run(llm_pipeline.classify(pool, 'hi', False))
         assert seen['response_mime_type'] == 'application/json'
         assert set(seen['response_schema']['enum']) == {
-            llm_context.MODE_DIRECT, llm_context.MODE_CONTEXT,
-            llm_context.MODE_REPLY_CHAIN}
+            llm_context.MODE_DIRECT, llm_context.MODE_CONTEXT}
 
     def test_metadata_reaches_the_router(self, pool, monkeypatch):
         seen = _classifier(monkeypatch, 'direct')
         run(llm_pipeline.classify(
-            pool, 'what were the last few messages?', False,
+            pool, 'does their reasoning hold?', False,
             author_name='nife', author_id=4242,
             sent_at=datetime(2026, 7, 30, 23, 4, tzinfo=timezone.utc)))
         assert 'author: nife (id 4242)' in seen['prompt']
