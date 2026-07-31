@@ -54,6 +54,24 @@ _VIDEO_EXTENSIONS = ('mp4', 'mov', 'webm')
 # Audio extensions that need to be re-uploaded as files for the player
 _AUDIO_EXTENSIONS = ('mp3', 'ogg', 'wav', 'flac', 'm4a', 'aac', 'wma')
 
+# Discord's API represents forwarded references as type 1.  The named enum was
+# added after the reference payload itself, so deployments on older discord.py
+# releases can receive ordinary replies without exposing MessageReferenceType.
+_FORWARD_REFERENCE_VALUE = 1
+
+
+def _is_forward_reference(reference):
+    """Recognize forwards without requiring a recent discord.py enum."""
+    if reference is None:
+        return False
+    reference_type = getattr(reference, 'type', None)
+    enum = getattr(discord, 'MessageReferenceType', None)
+    forward = getattr(enum, 'forward', None)
+    if forward is not None:
+        return reference_type == forward
+    return getattr(reference_type, 'value', reference_type) == \
+        _FORWARD_REFERENCE_VALUE
+
 
 def _starboard_content(emoji_str, count, jump_url):
     """Build the header line for a starboard message.
@@ -164,14 +182,7 @@ async def build_starboard_message(message, emoji_str, count, color):
     snapshot = snapshots[0] if snapshots else None
     rendered = snapshot or message
     reference = getattr(message, 'reference', None)
-    is_forward = (
-        snapshot is not None
-        or (
-            reference is not None
-            and getattr(reference, 'type', None)
-            == discord.MessageReferenceType.forward
-        )
-    )
+    is_forward = snapshot is not None or _is_forward_reference(reference)
     forwarder_label = (
         f'Forwarded by {message.author.display_name}'
         if is_forward else message.author.display_name

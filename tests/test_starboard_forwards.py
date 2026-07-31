@@ -196,6 +196,36 @@ def test_forward_reference_never_renders_as_reply_context():
     assert embeds[0].author_data['name'] == 'Forwarded by TestUser'
 
 
+def test_reply_renders_when_discord_lacks_message_reference_type(monkeypatch):
+    """discord.py 2.4 has reply references but not the forward-type enum."""
+    monkeypatch.delattr(discord, 'MessageReferenceType')
+    replied_to = _FakeMessage(content='The replied-to message')
+    reference = _FakeReference(message_id=123, resolved=replied_to)
+    reference.type = 0
+    message = _FakeMessage(content='A normal reply', reference=reference)
+
+    _content, embeds, _files = _run(
+        Starboard.build_starboard_message(message, PILL, 2, 0x55AA77))
+
+    assert embeds[0].description == 'The replied-to message'
+    assert embeds[1].description == 'A normal reply'
+
+
+def test_forward_value_is_recognized_without_named_enum(monkeypatch):
+    monkeypatch.delattr(discord, 'MessageReferenceType')
+    replied_to = _FakeMessage(content='Must not become reply context')
+    reference = _FakeReference(message_id=123, resolved=replied_to)
+    reference.type = 1
+    message = _FakeMessage(content='Forward fallback', reference=reference)
+
+    _content, embeds, _files = _run(
+        Starboard.build_starboard_message(message, PILL, 2, 0x55AA77))
+
+    assert len(embeds) == 1
+    assert embeds[0].description == 'Forward fallback'
+    assert embeds[0].author_data['name'] == 'Forwarded by TestUser'
+
+
 def test_snapshot_only_forward_can_be_added_by_pill_reaction(
         db, monkeypatch):
     from tle.util import codeforces_common as cf_common
