@@ -285,18 +285,22 @@ async def complete(pool, prompt, images=None, system_instruction=None,
     parts = build_parts(prompt, images)
 
     last_error = None
+    last_non_capacity_error = None
     attempts = 0
     pool_drained = False
+    attempted_buckets = set()
 
     def _record():
         if stats is not None:
             stats['attempts'] = attempts
 
     for _ in range(max_attempts):
-        lease = await pool.acquire(models=models)
+        lease = await pool.acquire(
+            models=models, exclude=attempted_buckets)
         if lease is None:
             pool_drained = True
             break
+        attempted_buckets.add((lease.key_id, lease.model))
 
         # Built per attempt: a fallback can cross model families, and "off"
         # means thinkingBudget on 2.5 but has no thinkingLevel equivalent.
@@ -316,6 +320,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                            lease.key_id, lease.model, err)
             pool.report_transient(lease)
             last_error = f'network error: {err}'
+            last_non_capacity_error = last_error
             continue
 
         if status == 200:
@@ -326,10 +331,18 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                 raise
             except GeminiError as err:
                 logger.warning(
-                    'Gemini unusable 200 on key=%s model=%s: %s',
-                    lease.key_id, lease.model, err)
-                pool.report_transient(lease)
+                    'Gemini HTTP 200 without usable text on key=%s model=%s '
+                    'tools=%s body=%s',
+                    lease.key_id, lease.model,
+                    [next(iter(tool), '?') for tool in (tools or [])],
+                    truncate_error(
+                        json.dumps(body, ensure_ascii=False, sort_keys=True),
+                        limit=4000))
+                # The endpoint and bucket responded successfully. Keep the
+                # bucket globally healthy, but do not retry it in this command.
+                pool.report_success(lease)
                 last_error = str(err)
+                last_non_capacity_error = last_error
                 continue
             pool.report_success(lease)
             _record()
@@ -349,6 +362,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         if is_invalid_key_error(status, body):
             pool.report_invalid(lease, message=message)
             last_error = message
+            last_non_capacity_error = last_error
             continue
 
         if status == 404:
@@ -363,6 +377,7 @@ async def complete(pool, prompt, images=None, system_instruction=None,
                            status, lease.key_id, lease.model, message)
             pool.report_transient(lease)
             last_error = message
+            last_non_capacity_error = last_error
             continue
 
         # Anything else (a genuinely malformed request) will fail identically
@@ -371,12 +386,15 @@ async def complete(pool, prompt, images=None, system_instruction=None,
         raise GeminiError(message)
 
     _record()
+
+    if last_non_capacity_error is not None:
+        raise GeminiError(last_non_capacity_error)
+
     if pool_drained:
         raise NoCapacityError(
-            last_error or 'All Gemini keys are rate-limited or out of quota.',
+            last_error or 'All Gemini model buckets are quota-limited.',
             retry_after=pool.retry_after_hint(models=models))
-    # The ceiling stopped us, not the quota — buckets may still be healthy, so
-    # do not quote a wait derived only from the blocked ones.
+
     raise NoCapacityError(
-        last_error or f'Gave up after {attempts} failed attempts.',
+        last_error or f'Gave up after {attempts} quota-limited attempts.',
         attempts_exhausted=True)

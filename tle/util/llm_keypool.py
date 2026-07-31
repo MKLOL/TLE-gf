@@ -208,7 +208,7 @@ class KeyPool:
                     self._exhausted.get((key_id, model), 0))
         return until if until > now else None
 
-    async def acquire(self, models=None):
+    async def acquire(self, models=None, exclude=None):
         """Lease an available bucket, or None if every bucket is blocked.
 
         Models are tried in configured order, so the cheap/high-quota model is
@@ -221,11 +221,15 @@ class KeyPool:
         outside the ladder simply starts with no recorded history, which is
         exactly right.
         """
+        exclude = set(exclude or ())
         async with self._lock:
             self._ensure_loaded()
             for model in (models or self._models):
-                available = [row for row in self._keys
-                             if self._blocked_until(row.id, model) is None]
+                available = [
+                    row for row in self._keys
+                    if (row.id, model) not in exclude
+                    and self._blocked_until(row.id, model) is None
+                ]
                 if not available:
                     continue
                 row = min(available, key=lambda r: self._last_used.get(r.id, 0))
