@@ -123,7 +123,7 @@ class TestGrokAskFlow:
             llm_context.GROK_SYSTEM_INSTRUCTION
         assert seen[1]['kwargs']['max_output_tokens'] == \
             constants.XAI_MAX_OUTPUT_TOKENS == 1536
-        assert seen[1]['kwargs']['reasoning_effort'] == 'medium'
+        assert seen[1]['kwargs']['reasoning_effort'] == 'low'
 
     def test_prompt_has_requested_voice_without_losing_base_rules(self):
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()

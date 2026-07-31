@@ -67,7 +67,8 @@ def test_xai_budget_reservation_is_atomic_and_reconcilable():
                   daily_budget_microusd=1000, return_id=True)
     reservation_id = db.llm_reserve_xai_request(7, **kwargs)
     assert isinstance(reservation_id, int)
-    assert db.llm_reserve_xai_request(8, **kwargs) == 'budget'
+    denial = db.llm_reserve_xai_request(8, **kwargs)
+    assert denial == 'budget' and denial.retry_at == 86_400
 
     assert db.llm_finalize_xai_request(
         reservation_id, actual_microusd=100, outcome='success',
@@ -109,7 +110,7 @@ def test_xai_default_reservation_stays_inside_private_daily_budget():
            + constants.XAI_ROUTER_MAX_OUTPUT_TOKENS)
         * constants.XAI_OUTPUT_USD_PER_MILLION)
     assert accounting.xai_reservation_microusd() == int(expected)
-    assert accounting.daily_budget_microusd() == 300_000
+    assert accounting.daily_budget_microusd() == 500_000
     assert accounting.xai_reservation_microusd() < \
         accounting.daily_budget_microusd()
 

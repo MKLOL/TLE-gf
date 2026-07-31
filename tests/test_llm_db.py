@@ -157,9 +157,9 @@ class TestUsage:
 
 
 class TestXaiRequestLimits:
-    USER_LIMIT = 10
-    WINDOW = 30 * 60
-    DAILY_LIMIT = 100
+    USER_LIMIT = 20
+    WINDOW = 60 * 60
+    DAILY_LIMIT = 200
 
     def reserve(self, db, user_id, now):
         return db.llm_reserve_xai_request(
@@ -171,12 +171,24 @@ class TestXaiRequestLimits:
             'SELECT COUNT(*) AS count FROM llm_xai_request'
         ).fetchone().count
 
-    def test_tenth_request_is_accepted_and_eleventh_is_rejected(self, db):
+    def test_twentieth_request_is_accepted_and_next_is_rejected(self, db):
         for _ in range(self.USER_LIMIT):
             assert self.reserve(db, 7, now=1_000) is None
 
-        assert self.reserve(db, 7, now=1_000) == 'user'
+        denial = self.reserve(db, 7, now=1_000)
+        assert isinstance(denial, str) and denial == 'user'
+        assert denial.retry_at == 1_000 + self.WINDOW
         assert self.event_count(db) == self.USER_LIMIT
+
+    def test_retry_handles_more_active_rows_than_the_new_limit(self, db):
+        for offset in range(25):
+            assert db.llm_reserve_xai_request(
+                7, 100, self.WINDOW, self.DAILY_LIMIT,
+                now=1_000 + offset) is None
+
+        denial = self.reserve(db, 7, now=1_025)
+        assert denial == 'user'
+        assert denial.retry_at == 1_005 + self.WINDOW
 
     def test_user_limit_is_global_across_discord_id_representations(self, db):
         for _ in range(self.USER_LIMIT):
@@ -196,8 +208,21 @@ class TestXaiRequestLimits:
         for user_id in range(self.DAILY_LIMIT):
             assert self.reserve(db, user_id, now=now) is None
 
-        assert self.reserve(db, 999, now=now) == 'daily'
+        denial = self.reserve(db, 999, now=now)
+        assert denial == 'daily'
+        assert denial.retry_at == 3 * 86_400
         assert self.event_count(db) == self.DAILY_LIMIT
+
+    def test_retry_waits_for_a_later_simultaneous_daily_guard(self, db):
+        now = 1_000
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=now) is None
+        for user_id in range(self.DAILY_LIMIT - self.USER_LIMIT):
+            assert self.reserve(db, 100 + user_id, now=now) is None
+
+        denial = self.reserve(db, 7, now=now)
+        assert denial == 'daily'
+        assert denial.retry_at == 86_400
 
     def test_utc_day_resets_but_rolling_user_window_spans_midnight(self, db):
         before_midnight = 86_400 - 10

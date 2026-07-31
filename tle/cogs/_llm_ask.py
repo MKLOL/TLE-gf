@@ -1,6 +1,7 @@
 """Shared, guarded request flow for ``;llm`` and literal ``@grok``."""
 from datetime import datetime, timezone
 import logging
+import math
 import secrets
 import time
 
@@ -34,7 +35,22 @@ class _ContextDisabledError(Exception):
 
 
 class _GrokGuardError(Exception):
-    pass
+    def __init__(self, reason, retry_at=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.retry_at = retry_at
+
+
+def _grok_guard_message(error):
+    when = 'later'
+    if error.retry_at is not None:
+        stamp = max(0, int(math.ceil(error.retry_at)))
+        when = f'<t:{stamp}:R> (<t:{stamp}:F>)'
+    if error.reason == 'user':
+        return (
+            f'You have used all {constants.XAI_USER_RATE_LIMIT} Grok requests '
+            f'available to you in the last hour. Try again {when}.')
+    return f'Grok\'s shared daily allowance is used up. Try again {when}.'
 
 
 def db():
@@ -240,7 +256,8 @@ async def ask_grok(cog, ctx, question):
             daily_budget_microusd=accounting.daily_budget_microusd(),
             return_id=True)
         if isinstance(reservation_id, str):
-            raise _GrokGuardError
+            raise _GrokGuardError(
+                str(reservation_id), getattr(reservation_id, 'retry_at', None))
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'xai', pool, question, referenced, attachments,
             controls, router_stats)
@@ -251,7 +268,7 @@ async def ask_grok(cog, ctx, question):
             pool, prompt, images=images,
             system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
             max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
-            reasoning_effort='medium', session=cog._get_session(),
+            reasoning_effort='low', session=cog._get_session(),
             stats=answer_stats, models=constants.XAI_MODELS)
         return answer, explicit
 
@@ -262,12 +279,12 @@ async def ask_grok(cog, ctx, question):
     except llm_access.LlmAccessDeniedError as err:
         await ctx.send(embed=discord_common.embed_alert(str(err)))
         return
-    except _GrokGuardError:
+    except _GrokGuardError as err:
         _record(cog, ctx, 'xai', 'guarded', started,
                 constants.XAI_MODELS[0], router_stats, answer_stats,
                 mode, window)
         await ctx.send(embed=discord_common.embed_alert(
-            'Grok is taking a breather right now. Try again later.'))
+            _grok_guard_message(err)))
         return
     except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
         await _finalize_xai(reservation_id, router_stats, answer_stats,
