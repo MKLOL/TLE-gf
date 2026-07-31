@@ -367,9 +367,11 @@ async def _finalize_xai(reservation_id, router_stats, answer_stats, *,
     if not isinstance(reservation_id, int):
         return
     cost = accounting.xai_cost_microusd(router_stats, answer_stats)
+    actual = (cost if accounting.has_xai_cost_observation(
+        router_stats, answer_stats) else None)
     try:
         db().llm_finalize_xai_request(
-            reservation_id, actual_microusd=cost or None,
+            reservation_id, actual_microusd=actual,
             outcome=outcome, model=model)
     except Exception:
         logger.exception('Could not finalize xAI reservation id=%s',

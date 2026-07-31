@@ -210,6 +210,15 @@ def _record_stats(stats, attempts, payload=None):
         value = usage.get(source)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             stats[target] = stats.get(target, 0) + value
+    raw_cost = usage.get('cost_in_usd_ticks')
+    try:
+        ticks = int(raw_cost)
+    except (TypeError, ValueError):
+        ticks = None
+    if ticks is not None and ticks >= 0:
+        # xAI defines 1 USD as 10^10 ticks; one micro-USD is 10^4 ticks.
+        microusd = (ticks + 9_999) // 10_000
+        stats['cost_microusd'] = stats.get('cost_microusd', 0) + microusd
 
 
 def _retry_after(headers, payload):

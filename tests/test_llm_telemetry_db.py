@@ -7,6 +7,7 @@ from tle.util.db.user_db_upgrades import (
     upgrade_1_45_0, upgrade_1_46_0, upgrade_1_47_0, upgrade_1_48_0,
 )
 from tests.llm_test_utils import FakeLlmDb
+from tle.cogs import _llm_accounting as accounting
 
 
 def test_forget_erases_secret_and_bucket_but_keeps_fingerprint():
@@ -84,6 +85,17 @@ def test_telemetry_retention_is_bounded():
             1, 2, 'xai', '2026-07-31', 'success', now=timestamp)
     assert db.llm_purge_request_usage(15) == 1
     assert db.llm_provider_summary('xai', '2026-07-31').calls == 1
+
+
+def test_xai_cost_prefers_exact_stage_cost_and_estimates_missing_stage():
+    exact = {'cost_microusd': 7, 'input_tokens': 9999,
+             'output_tokens': 9999}
+    estimated = {'input_tokens': 4, 'output_tokens': 2}
+    expected_estimate = 4 * 1.25 + 2 * 2.50
+    assert accounting.xai_cost_microusd(exact, estimated) == \
+        7 + int(expected_estimate)
+    assert accounting.has_xai_cost_observation({'cost_microusd': 0})
+    assert not accounting.has_xai_cost_observation({'attempts': 1})
 
 
 def test_1_48_migration_is_idempotent_and_preserves_old_ledger_rows():

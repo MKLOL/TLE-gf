@@ -252,6 +252,22 @@ class TestXaiReliability:
             'output_tokens': 5, 'total_tokens': 20,
         }
 
+    def test_exact_billed_cost_ticks_are_converted_to_microusd(
+            self, monkeypatch):
+        pool, _ = _xai_pool(models=('grok-strong',))
+        body = _xai_response(usage={
+            'prompt_tokens': 1, 'completion_tokens': 1,
+            'total_tokens': 2, 'cost_in_usd_ticks': '123450',
+        })
+
+        async def generate(*args, **kwargs):
+            return 200, body, {}
+
+        monkeypatch.setattr(xai_api, 'generate_once', generate)
+        stats = {}
+        run(xai_api.complete(pool, 'hello', stats=stats))
+        assert stats['cost_microusd'] == 13
+
     def test_cancellation_counts_attempt_and_cools_lease(self, monkeypatch):
         pool, _ = _xai_pool(models=('grok-strong',))
 

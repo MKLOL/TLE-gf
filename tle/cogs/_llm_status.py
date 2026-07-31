@@ -23,7 +23,7 @@ def format_provider_summary(summary, top_users, *, show_cost=False):
     ]
     if show_cost:
         lines.append(
-            f'**Recorded estimated cost:** '
+            f'**Recorded request cost:** '
             f'{format_microusd(_value(summary, "cost_microusd"))}')
     if top_users:
         lines.append('**Top users:** ' + ', '.join(

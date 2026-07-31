@@ -11,12 +11,18 @@ def new_stage_stats():
 
 
 def xai_cost_microusd(*stats_groups):
-    """Estimate actual text cost from provider-returned usage metadata."""
-    input_tokens = sum(_integer(group, 'input_tokens') for group in stats_groups)
-    output_tokens = sum(_integer(group, 'output_tokens') for group in stats_groups)
-    return int(math.ceil(
-        input_tokens * constants.XAI_INPUT_USD_PER_MILLION
-        + output_tokens * constants.XAI_OUTPUT_USD_PER_MILLION))
+    """Use xAI's billed cost when returned, with token-price fallback."""
+    total = 0
+    for group in stats_groups:
+        if isinstance(group, dict) and 'cost_microusd' in group:
+            total += _integer(group, 'cost_microusd')
+            continue
+        total += int(math.ceil(
+            _integer(group, 'input_tokens')
+            * constants.XAI_INPUT_USD_PER_MILLION
+            + _integer(group, 'output_tokens')
+            * constants.XAI_OUTPUT_USD_PER_MILLION))
+    return total
 
 
 def xai_reservation_microusd():
@@ -30,6 +36,16 @@ def xai_reservation_microusd():
 
 def daily_budget_microusd():
     return int(math.floor(constants.XAI_DAILY_BUDGET_USD * 1_000_000))
+
+
+def has_xai_cost_observation(*stats_groups):
+    """True when exact cost or enough token usage exists to reconcile."""
+    return any(
+        isinstance(group, dict) and (
+            'cost_microusd' in group
+            or _integer(group, 'input_tokens')
+            or _integer(group, 'output_tokens'))
+        for group in stats_groups)
 
 
 def record(database, ctx, provider, outcome, started_at, *, model=None,
