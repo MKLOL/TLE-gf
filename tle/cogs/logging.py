@@ -82,7 +82,8 @@ async def setup(bot):
 
     logging_cog = Logging(bot, int(logging_cog_channel_id))
     logging_cog.setLevel(logging.WARNING)
-    logging_cog.setFormatter(logging.Formatter(fmt='{asctime}:{levelname}:{name}:{message}',
-                                               style='{', datefmt='%d-%m-%Y %H:%M:%S'))
+    logging_cog.setFormatter(discord_common.RedactingFormatter(
+        fmt='{asctime}:{levelname}:{name}:{message}', style='{',
+        datefmt='%d-%m-%Y %H:%M:%S'))
     root_logger.addHandler(logging_cog)
     await bot.add_cog(logging_cog)

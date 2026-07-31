@@ -32,6 +32,7 @@ _NOTICE_DELETE_AFTER = 15    # seconds — the notice auto-deletes so it doesn't
 # ``rpoll`` is exempt so rating-weighted polls can be run in any channel,
 # including ones where bot commands are otherwise blocked.
 _EXEMPT_COMMANDS = frozenset({'disallow', 'allow', 'rpoll'})
+_SECRET_COMMANDS = frozenset({'keys', 'grokkeys', 'xkeys', 'xaikeys'})
 
 
 class ChannelGate(commands.Cog):
@@ -66,6 +67,11 @@ class ChannelGate(commands.Cog):
         allowed, allowed_thread_id = gate_decision(gate, current_thread_id)
         if allowed:
             return True
+        if _is_llm_secret_command(command):
+            try:
+                await ctx.message.delete()
+            except Exception:  # noqa: BLE001 - best-effort leak containment
+                logger.warning('Could not delete blocked LLM key command')
         await self._notify_blocked(ctx, allowed_thread_id)
         raise discord_common.FeatureDisabledSilent()
 
@@ -168,3 +174,10 @@ class ChannelGate(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(ChannelGate(bot))
+
+
+def _is_llm_secret_command(command):
+    if command is None or getattr(command, 'name', None) not in _SECRET_COMMANDS:
+        return False
+    parent = getattr(command, 'root_parent', None)
+    return getattr(parent, 'name', None) == 'llm'

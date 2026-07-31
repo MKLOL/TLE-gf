@@ -38,11 +38,15 @@ def setup():
         constants.LOG_FILE_PATH, when='D', backupCount=3, utc=True,
         encoding='utf-8')
     file_permissions.ensure_private_file(constants.LOG_FILE_PATH)
-    logging.basicConfig(format='{asctime}:{levelname}:{name}:{message}', style='{',
-                        datefmt='%d-%m-%Y %H:%M:%S', level=logging.INFO,
-                        handlers=[logging.StreamHandler(
-                                      open(sys.stdout.fileno(), 'w', encoding='utf-8', closefd=False)),
-                                  file_handler])
+    stream_handler = logging.StreamHandler(
+        open(sys.stdout.fileno(), 'w', encoding='utf-8', closefd=False))
+    formatter = discord_common.RedactingFormatter(
+        fmt='{asctime}:{levelname}:{name}:{message}', style='{',
+        datefmt='%d-%m-%Y %H:%M:%S')
+    stream_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO,
+                        handlers=[stream_handler, file_handler])
     font_config.log_status()
 
     # matplotlib and seaborn

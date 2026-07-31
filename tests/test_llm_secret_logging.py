@@ -80,6 +80,30 @@ def test_provider_keys_are_redacted_without_censoring_ordinary_text(monkeypatch)
     assert common.redact_credentials(ordinary) == ordinary
 
 
+def test_mention_prefix_key_command_redacts_the_entire_tail(monkeypatch):
+    common = _load_discord_common(monkeypatch)
+    raw = '<@!123456789> llm grokkeys unfamiliar-format\nsecond-line'
+    safe = common.redact_credentials(raw)
+    assert safe.endswith('[credentials redacted]')
+    assert 'unfamiliar-format' not in safe
+    assert 'second-line' not in safe
+
+
+def test_redacting_formatter_covers_message_and_exception(monkeypatch):
+    common = _load_discord_common(monkeypatch)
+    key = 'xai-' + 'sensitive' * 4
+    try:
+        raise RuntimeError(f'provider echoed {key}')
+    except RuntimeError as error:
+        record = logging.LogRecord(
+            'provider', logging.ERROR, __file__, 1,
+            'request failed for %s', (key,),
+            (type(error), error, error.__traceback__))
+    rendered = common.RedactingFormatter('%(message)s').format(record)
+    assert key not in rendered
+    assert rendered.count('[credentials redacted]') >= 2
+
+
 def test_command_error_log_record_never_contains_raw_command(monkeypatch):
     common = _load_discord_common(monkeypatch)
     key = 'xai-' + 'sensitive' * 4

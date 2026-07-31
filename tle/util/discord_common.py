@@ -23,11 +23,15 @@ _REDACTED_CREDENTIAL = '[credentials redacted]'
 # Provider keys have stable prefixes, but allow only credential-like lengths so
 # ordinary prose such as "xai-api" or "an AIza prefix" is left untouched.
 _PROVIDER_CREDENTIAL_RE = re.compile(
-    r'(?<![A-Za-z0-9_-])(?:xai-|AIza)[A-Za-z0-9_-]{20,}'
+    r'(?<![A-Za-z0-9_-])(?:'
+    r'(?:xai-|AIza)[A-Za-z0-9_-]{20,}|'
+    r'(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|'
+    r'AKIA[A-Z0-9]{16}|'
+    r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
     r'(?![A-Za-z0-9_-])',
 )
 _LLM_KEY_COMMAND_RE = re.compile(
-    r'\A(?P<command>\s*;llm\s+'
+    r'\A(?P<command>\s*(?:;|<@!?\d+>\s*)llm\s+'
     r'(?:keys|grokkeys|xkeys|xaikeys))(?=\s|\Z)[\s\S]*\Z',
     re.IGNORECASE,
 )
@@ -45,6 +49,13 @@ def redact_credentials(value):
     if command is not None:
         text = f'{command.group("command")} {_REDACTED_CREDENTIAL}'
     return _PROVIDER_CREDENTIAL_RE.sub(_REDACTED_CREDENTIAL, text)
+
+
+class RedactingFormatter(logging.Formatter):
+    """Sanitize the fully rendered record, including exception traceback."""
+
+    def format(self, record):
+        return redact_credentials(super().format(record))
 
 
 def embed_neutral(desc, color=None):
