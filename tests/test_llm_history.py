@@ -312,14 +312,15 @@ class TestClassify:
         assert 'author: nife (id 4242)' in seen['prompt']
         assert 'sent_at: 2026-07-30 23:04 UTC' in seen['prompt']
 
-    def test_a_failed_classifier_falls_back_to_direct(self, pool, monkeypatch):
+    def test_a_failed_classifier_falls_back_to_context(self, pool, monkeypatch):
         async def boom(pool_, prompt, **kwargs):
             raise gemini_api.NoCapacityError('spent')
 
         monkeypatch.setattr(gemini_api, 'complete', boom)
-        # Routing is an optimisation; losing it must not block the answer.
+        # Routing is an optimisation; when it fails, context is the safer
+        # fallback than answering an ambiguous question without history.
         assert run(llm_pipeline.classify(pool, 'hi', False)) == \
-            llm_context.MODE_DIRECT
+            llm_context.MODE_CONTEXT
 
     def test_disabling_context_skips_the_call_entirely(self, pool, monkeypatch):
         called = []

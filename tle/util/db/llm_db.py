@@ -135,6 +135,8 @@ class LlmDbMixin:
                     'WHERE id = ?',
                     (api_key, label, time.time(), _s(added_by), _s(guild_id),
                      row.id))
+                self.conn.execute(
+                    'DELETE FROM llm_bucket WHERE key_id = ?', (row.id,))
             return 'reactivated'
         with self.conn:
             self.conn.execute(

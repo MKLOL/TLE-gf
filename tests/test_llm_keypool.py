@@ -288,3 +288,40 @@ class TestStatus:
 
     def test_status_never_contains_key_material(self, pool):
         assert 'AIzaSy' not in str(pool.status())
+
+
+class TestExcludingAttemptedBuckets:
+    def test_an_excluded_bucket_is_skipped(self, pool):
+        first = run(pool.acquire())
+        second = run(pool.acquire(exclude={(first.key_id, first.model)}))
+        assert (second.key_id, second.model) != (first.key_id, first.model)
+
+    def test_excluding_everything_drains_the_pool(self, pool):
+        every = {(row['key_id'], row['model']) for row in pool.status()}
+        assert run(pool.acquire(exclude=every)) is None
+
+    def test_no_exclusion_behaves_as_before(self, pool):
+        assert run(pool.acquire(exclude=None)) is not None
+
+
+class TestReloadKeepsStrikes:
+    def test_reload_frees_cooling_buckets(self, pool, clock):
+        # A moderator re-adding a key should not have to wait out a cooldown
+        # recorded against the old one.
+        cooling = run(pool.acquire())
+        pool.report_quota(cooling, QUOTA_MINUTE, retry_after=60)
+        pool.reload()
+        states = {(row['key_id'], row['model']): row['state']
+                  for row in pool.status()}
+        assert states[(cooling.key_id, cooling.model)] == 'ready'
+
+    def test_reload_does_not_forget_a_rejected_key(self, pool):
+        # Two rejections retire a key. If reload cleared the strike counter,
+        # any `;llm keys` edit would reset the count and a revoked key would
+        # bench-and-return forever instead of being retired.
+        lease = run(pool.acquire())
+        pool.report_invalid(lease, message='API key not valid')
+        pool.reload()
+        pool.report_invalid(lease, message='API key not valid')
+        assert all(row.id != lease.key_id
+                   for row in pool._db.llm_get_keys(active_only=True))

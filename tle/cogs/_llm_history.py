@@ -35,16 +35,66 @@ _OLDER_OMITTED = '… (older messages omitted)'
 _LATER_OMITTED = '… (later messages omitted)'
 
 
-def _is_usable(message, bot_user_id=None):
-    """Skip the bot's own output and empty messages."""
+def _embed_text(embed):
+    """Extract the human-readable parts of a Discord embed."""
+    pieces = []
+    author = getattr(getattr(embed, 'author', None), 'name', None)
+    if author:
+        pieces.append(f'Embed author: {author}')
+    title = getattr(embed, 'title', None)
+    if title:
+        pieces.append(f'Embed title: {title}')
+    description = getattr(embed, 'description', None)
+    if description:
+        pieces.append(description)
+    for field in getattr(embed, 'fields', None) or []:
+        name = getattr(field, 'name', None)
+        value = getattr(field, 'value', None)
+        if name and value:
+            pieces.append(f'{name}: {value}')
+        elif value:
+            pieces.append(value)
+        elif name:
+            pieces.append(name)
+    footer = getattr(getattr(embed, 'footer', None), 'text', None)
+    if footer:
+        pieces.append(f'Embed footer: {footer}')
+    url = getattr(embed, 'url', None)
+    if url and not pieces:
+        pieces.append(f'Embed URL: {url}')
+    return '\n'.join(str(piece).strip() for piece in pieces if str(piece).strip())
+
+
+def message_text(message):
+    """Return text visible in a Discord message, including rich embeds."""
+    pieces = []
+    content = (getattr(message, 'content', '') or '').strip()
+    if content:
+        pieces.append(content)
+    for embed in getattr(message, 'embeds', None) or []:
+        text = _embed_text(embed)
+        if text:
+            pieces.append(text)
+    attachments = getattr(message, 'attachments', None) or []
+    names = [getattr(attachment, 'filename', None)
+             for attachment in attachments]
+    names = [name for name in names if name]
+    if attachments:
+        if not names:
+            names = ['file']
+        pieces.append(f'[attached: {", ".join(names)}]')
+    return '\n'.join(pieces)
+
+
+def _is_usable(message, bot_user_id=None, include_bot=False):
+    """Skip bot output and empty messages, except an explicitly focused reply."""
     author = getattr(message, 'author', None)
-    if author is not None and bot_user_id is not None:
+    if not include_bot and author is not None and bot_user_id is not None:
         if getattr(author, 'id', None) == bot_user_id:
             return False
-    if getattr(author, 'bot', False):
+    if not include_bot and getattr(author, 'bot', False):
         return False
-    return bool(getattr(message, 'content', '') or
-                getattr(message, 'attachments', None))
+    return bool(message_text(message))
 
 
 async def collect_recent(channel, before=None, limit=50, window_seconds=600,
@@ -134,10 +184,12 @@ async def collect_reply_window(channel, target, before_count=25,
         later.sort(key=lambda m: getattr(m, 'created_at', 0) or 0)
     except Exception:  # noqa: BLE001
         logger.exception('Could not read reply context for ;llm')
-        return [target] if _is_usable(target, bot_user_id) else []
+        return [target] if _is_usable(target, bot_user_id,
+                                      include_bot=True) else []
 
     window = earlier
-    if _is_usable(target, bot_user_id):
+    # The direct reply target is context even when it is the bot's own output.
+    if _is_usable(target, bot_user_id, include_bot=True):
         window = window + [target]
     return window + later
 
@@ -224,22 +276,15 @@ def _render_message(message, focus):
     author = getattr(getattr(message, 'author', None), 'display_name', None) \
         or 'unknown'
     author = _one_line(author, _MAX_AUTHOR_CHARS)
-    body = (getattr(message, 'content', '') or '').strip()
-
-    attachments = getattr(message, 'attachments', None) or []
-    names = [_one_line(getattr(item, 'filename', ''), 100)
-             for item in attachments]
-    names = [name for name in names if name]
-    if attachments:
-        detail = ', '.join(names[:5]) if names else 'attachment'
-        body = (body + ' ' if body else '') + f'[attached: {detail}]'
+    body = message_text(message).strip()
     if not body:
         return None
     if len(body) > _MAX_MESSAGE_CHARS:
         body = body[:_MAX_MESSAGE_CHARS - 1] + '…'
 
     marker = (' \N{LEFTWARDS ARROW}\N{VARIATION SELECTOR-16} (the message '
-              'being asked about)' if message is focus else '')
+              'being replied to — the one being asked about)'
+              if message is focus else '')
     return f'{author}: {body}{marker}'
 
 

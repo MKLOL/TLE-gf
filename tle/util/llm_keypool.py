@@ -161,7 +161,15 @@ class KeyPool:
     # ── Loading ─────────────────────────────────────────────────────────
 
     def reload(self):
-        """Re-read keys and persisted daily exhaustion from the database."""
+        """Re-read keys and persisted daily exhaustion from the database.
+
+        In-memory cooldowns are dropped so a key a moderator has just re-added
+        is usable immediately — ``llm_add_key`` clears its persisted buckets
+        for the same reason. Strike counters deliberately survive: they are
+        what retires a revoked key, and resetting them on every ``;llm keys``
+        edit would let a dead key bench-and-return forever.
+        """
+        self._cooldown.clear()
         self._keys = list(self._db.llm_get_keys(
             active_only=True, provider='gemini'))
         now = self._now()
@@ -205,7 +213,7 @@ class KeyPool:
                     self._exhausted.get((key_id, model), 0))
         return until if until > now else None
 
-    async def acquire(self, models=None):
+    async def acquire(self, models=None, exclude=None):
         """Lease an available bucket, or None if every bucket is blocked.
 
         Models are tried in configured order, so the cheap/high-quota model is
@@ -218,11 +226,15 @@ class KeyPool:
         outside the ladder simply starts with no recorded history, which is
         exactly right.
         """
+        exclude = set(exclude or ())
         async with self._lock:
             self._ensure_loaded()
             for model in (models or self._models):
-                available = [row for row in self._keys
-                             if self._blocked_until(row.id, model) is None]
+                available = [
+                    row for row in self._keys
+                    if (row.id, model) not in exclude
+                    and self._blocked_until(row.id, model) is None
+                ]
                 if not available:
                     continue
                 row = min(available, key=lambda r: self._last_used.get(r.id, 0))
@@ -267,12 +279,23 @@ class KeyPool:
             strikes = self._unknown_strikes.get(bucket, 0) + 1
             self._unknown_strikes[bucket] = strikes
             if strikes >= _UNKNOWN_STRIKES_TO_DAILY:
+                # A bucket that keeps 429ing without ever naming a window is
+                # spent for the day in all but the label. Without this it is
+                # retried every minute forever and rediscovered on every
+                # restart, because only daily exhaustion is persisted.
                 logger.warning(
                     'LLM bucket key=%s model=%s: %d unclassified 429s, '
-                    'treating as daily exhaustion', lease.key_id, lease.model, strikes)
+                    'treating as daily exhaustion',
+                    lease.key_id, lease.model, strikes)
                 scope = QUOTA_DAY
             else:
-                self._cooldown[bucket] = now + (retry_after or _UNKNOWN_COOLDOWN)
+                delay = retry_after or _UNKNOWN_COOLDOWN
+                self._cooldown[bucket] = now + delay
+                logger.warning(
+                    'LLM bucket key=%s model=%s received an unclassified 429 '
+                    '(strike %d of %d); cooling down %.0fs',
+                    lease.key_id, lease.model, strikes,
+                    _UNKNOWN_STRIKES_TO_DAILY, delay)
                 return
 
         if scope == QUOTA_DAY:

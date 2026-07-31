@@ -46,9 +46,13 @@ xAI keys are provider-isolated in `llm_api_key` (migration 1.46.0); never put th
 
 Grok's answer call is capped separately by `XAI_MAX_OUTPUT_TOKENS` (default 512), disables model reasoning to avoid spending paid tokens on hidden thought, and asks for answers under roughly 150 words unless code or correctness requires more. Gemini keeps `LLM_MAX_OUTPUT_TOKENS` unchanged.
 
-**Hybrid context pipeline** (`_llm_pipeline.py`): resolved replies become `requires_reply_chain` locally, and unmistakable requests such as “what did I miss?” or “summarize the recent messages” become `requires_context` locally. Only ambiguous non-replies pay for a provider routing call between `direct` and `requires_context`. Gemini routing uses `LLM_MODELS[0]` with a strict structured enum; Grok routing uses xAI with reasoning disabled and a 32-token cap. Malformed or failed routing falls back to `direct`; `LLM_CONTEXT_ENABLED=0` disables non-reply routing/history while replies retain their structural context.
+**Hybrid two-stage context pipeline** (`_llm_pipeline.py`), adapted from [MKLOL/TLE-gf#10](https://github.com/MKLOL/TLE-gf/pull/10): resolved replies become `requires_reply_chain` locally, and unmistakable requests such as “what did I miss?” or “summarize the recent messages” become `requires_context` locally. Only ambiguous non-replies pay for a provider routing call between `direct` and `requires_context`. Gemini routing uses `LLM_MODELS[0]` with a strict structured enum; an API routing failure falls back to `requires_context`. Grok routing uses xAI with reasoning disabled and a 32-token cap; an xAI routing failure falls back to `direct`. Malformed classifier output also becomes `direct`. `LLM_CONTEXT_ENABLED=0` disables non-reply routing/history while replies retain their structural context.
 
 History selection is relevance-first (`_llm_history.py`): recent transcripts retain the newest usable human messages, reply transcripts always retain the focused message and expand to its nearest neighbours, and truthful older/later omission markers fit inside the 12k transcript budget. Reply collection is bounded on both sides by `LLM_CONTEXT_WINDOW_SECONDS` and stops before the invoking command, so quiet channels cannot pull in unrelated messages from days later.
+
+Context prompts must stay honest about what was gathered. `build_context_prompt` only describes a marked replied-to message when one actually exists. If routing requested history but `gather` returned nothing (quiet channel, aged-out window, or missing Read Message History), `build_question_prompt(context_requested=True)` says that no transcript was retrieved instead of silently pretending the question was self-contained.
+
+**Transcripts are embed-aware** (`llm_history.message_text`). The cog answers in embeds, so `message.content` is empty for its own output; reply quoting and transcript rendering therefore include embed title, description, fields, and footer. Ordinary history still filters bot output, while the direct reply target remains usable even when the bot wrote it.
 
 **`maxOutputTokens` includes reasoning tokens.** This is the trap that broke context entirely once: the router had a 16-token cap, which the model spent thinking, returning a 200 with no text — `extract_text` raised, `classify` caught it, and every question in the server silently routed to `direct`. Any call with a tight budget must also pin thinking low (`llm_models.LEAST` resolves to `off` on 2.5, `minimal` on 3.x). An empty `MAX_TOKENS` response now raises `EmptyOutputBudgetError`, which names the setting instead of reading as a model quirk.
 
@@ -67,6 +71,13 @@ Three asymmetries drive the rest of the design, and all three are deliberate:
 `;llm keys` has a `cog_command_error`: a failed role check fires *before* the command body, so without it a non-moderator's pasted key would never be deleted and `MissingAnyRole` would only be logged. Messages containing a key-shaped token get deleted and flagged; ones that don't (`;llm keys are overrated`) get an explanation.
 
 This uses the **native** Gemini endpoint, not Google's OpenAI-compatibility shim — the shim flattens away the error details the classifier depends on.
+
+**The ladder must survive one bad rung.** Both failures that are specific to a model rather than to a key or the quota fall through instead of killing the command, because a ladder whose first entry is wrong is otherwise a total outage:
+
+- A **404** retires that model for the rest of the call and tries the next one. Only a ladder where *every* entry 404s raises `ModelUnavailableError` — that is `LLM_MODELS` being wrong, which no retry can fix. Note the discovery is per-call, not persisted, so a bad entry costs one wasted request per `;llm` until a moderator fixes it; the `WARNING` names the model.
+- A **400 naming a tool** drops `tools` and retries the *same* bucket (it is not the bucket's fault, and a one-key pool has nothing else to try). `;llm` sends `url_context` so the model can read a URL in the question, and tool support is per-model — an older rung rejecting it must degrade to an answer without URL reading, not to no answer. `is_tool_unsupported_error` keeps this narrow: any other 400 is still a malformed request that fails fast.
+
+The system instruction advertises **only** URL reading, never web search. Told it can search, the model narrates searches it never ran — which is exactly the fabrication the "never claim to have read a page" rule exists to prevent. If `google_search` is ever added to `tools`, that paragraph has to change with it.
 
 ## Key files
 

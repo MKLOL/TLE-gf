@@ -43,13 +43,12 @@ export XAI_USER_RATE_WINDOW_SECONDS="1800"
 export XAI_DAILY_REQUEST_LIMIT="100"
 # Model ladder, tried in order. Each entry is a separate quota bucket on the
 # same key, not the same allowance renamed — so this multiplies capacity.
-# Verified July 2026: all three are current and free-tier eligible. Roughly
-# 1500 / 1000 / 500 requests per day each, 15 RPM. Google no longer publishes
-# per-model free limits in the docs — check your actual quota in AI Studio.
+# Verified July 2026: all listed models are current and free-tier eligible.
 # gemini-2.0-flash and gemini-2.0-flash-lite are shut down; don't use them.
-export LLM_MODELS="gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
-# Gemini deliberately has no per-user cap or cooldown. Calls are still counted
-# per user so moderators can see consumption via `;llm keystatus`.
+export LLM_MODELS="gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash"
+# Gemini deliberately has no per-user cap or cooldown; the shared free-tier
+# allowance is its only limit. Calls are still counted per user so moderators
+# can see consumption via `;llm keystatus`.
 #
 # Replies and unmistakable channel-history requests are routed locally;
 # ambiguous questions use one cheap provider routing call. Set

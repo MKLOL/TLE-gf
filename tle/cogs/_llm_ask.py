@@ -95,14 +95,24 @@ async def ask_gemini(cog, ctx, question):
                 has_current_images=bool(attachments))
             window = await llm_pipeline.gather(
                 ctx, mode, referenced, bot_user_id=cog._bot_user_id())
-            prompt = llm_pipeline.build_prompt(question, referenced, window)
+            prompt = llm_pipeline.build_prompt(
+                question, referenced, window, mode=mode)
+            image_messages = [referenced, ctx.message]
+            image_messages += [message for message in window
+                               if message is not referenced and
+                               message is not ctx.message]
+            attachments = llm_context.select_image_attachments(
+                image_messages,
+                constants.LLM_MAX_IMAGES, constants.LLM_MAX_IMAGE_BYTES,
+                max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES)
             images = await llm_context.read_images(attachments)
             answer, lease = await gemini_api.complete(
                 pool, prompt, images=images,
                 system_instruction=llm_context.SYSTEM_INSTRUCTION,
                 max_output_tokens=constants.LLM_MAX_OUTPUT_TOKENS,
                 session=cog._get_session(), stats=stats,
-                models=models, tier=tier)
+                models=models, tier=tier,
+                tools=[{'url_context': {}}])
     except gemini_api.GeminiError as err:
         failure = err
 
@@ -174,7 +184,8 @@ async def ask_grok(cog, ctx, question):
                 has_current_images=bool(attachments))
             window = await llm_pipeline.gather(
                 ctx, mode, referenced, bot_user_id=cog._bot_user_id())
-            prompt = llm_pipeline.build_prompt(question, referenced, window)
+            prompt = llm_pipeline.build_prompt(
+                question, referenced, window, mode=mode)
             images = await llm_context.read_images(attachments)
             answer, lease = await xai_api.complete(
                 pool, prompt, images=images,
@@ -215,9 +226,10 @@ def describe_gemini_failure(err):
             return ('Gemini failed on every key I tried. Give it a moment '
                     'and ask again.')
         if err.retry_after:
-            return (f'All Gemini keys are out of quota right now. Try again '
-                    f'in {llm_format.format_duration(err.retry_after)}.')
-        return 'All Gemini keys are out of quota right now. Try again later.'
+            return ('Gemini has rate-limited every key and model I can use. '
+                    f'Try again in {llm_format.format_duration(err.retry_after)}.')
+        return ('Gemini has rate-limited every key and model I can use. '
+                'Try again later.')
     if isinstance(err, gemini_api.BlockedError):
         return str(err)
     if isinstance(err, gemini_api.ModelUnavailableError):

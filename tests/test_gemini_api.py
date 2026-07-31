@@ -226,14 +226,28 @@ class TestComplete:
         assert answer == 'recovered'
         assert len(attempts) == 2
 
-    def test_unknown_model_fails_fast_without_burning_the_pool(
+    def test_an_unknown_model_is_dropped_not_retried_across_keys(
             self, pool, monkeypatch):
+        # Every key fails a bad model id identically, so one 404 is enough to
+        # retire that rung — but the next rung still gets its turn.
         calls = _responder(monkeypatch, [
             (404, {'error': {'message': 'models/model-a is not found'}}),
+            (200, text_response('from the fallback')),
+        ])
+        answer, _ = run(gemini_api.complete(pool, 'question'))
+        assert answer == 'from the fallback'
+        assert [call['model'] for call in calls] == ['model-a', 'model-b']
+
+    def test_a_ladder_of_unknown_models_fails_loudly(self, pool, monkeypatch):
+        # LLM_MODELS is simply wrong; only a moderator can fix that, so it
+        # must not be reported as a passing quota problem.
+        calls = _responder(monkeypatch, [
+            (404, {'error': {'message': 'models/model-a is not found'}}),
+            (404, {'error': {'message': 'models/model-b is not found'}}),
         ])
         with pytest.raises(gemini_api.ModelUnavailableError):
             run(gemini_api.complete(pool, 'question'))
-        assert len(calls) == 1
+        assert len(calls) == 2  # one probe per model, not per bucket
 
     def test_malformed_request_is_not_retried_across_keys(self, pool, monkeypatch):
         calls = _responder(monkeypatch, [
@@ -335,3 +349,71 @@ class TestGivingUp:
         assert len(calls) == gemini_api._MAX_ATTEMPTS_CEILING
         assert excinfo.value.attempts_exhausted is True
         assert excinfo.value.retry_after is None
+
+
+class TestToolFallback:
+    """A tool one model family accepts can be a 400 on an older fallback.
+
+    Before this, a plain 400 was treated as a malformed request and stopped
+    the loop outright — one unsupported tool turned every ``;llm`` into a hard
+    failure instead of an answer without URL reading.
+    """
+
+    _REJECTION = (400, {'error': {
+        'status': 'INVALID_ARGUMENT',
+        'message': 'Tool use with function calling is unsupported'}})
+
+    def test_a_rejected_tool_is_dropped_and_the_call_retried(self, pool,
+                                                             monkeypatch):
+        calls = _responder(monkeypatch,
+                           [self._REJECTION, (200, text_response('answer'))])
+        answer, _ = run(gemini_api.complete(pool, 'question',
+                                            tools=[{'url_context': {}}]))
+        assert answer == 'answer'
+        assert 'tools' in calls[0]['payload']
+        assert 'tools' not in calls[1]['payload']
+
+    def test_the_rejected_bucket_is_not_burned(self, monkeypatch):
+        # A one-bucket pool has nothing to fall back to, so the retry has to
+        # reuse the bucket the tool was rejected on. Excluding it — the normal
+        # treatment for a failed attempt — would drain the pool instead.
+        db = FakeLlmDb()
+        db.llm_add_key('AIzaSyOnlyKeyInThePool000')
+        solo = KeyPool(db, ['model-a'], now_fn=FakeClock())
+        calls = _responder(monkeypatch,
+                           [self._REJECTION, (200, text_response('answer'))])
+        answer, _ = run(gemini_api.complete(solo, 'question',
+                                            tools=[{'url_context': {}}]))
+        assert answer == 'answer'
+        assert [call['model'] for call in calls] == ['model-a', 'model-a']
+
+    def test_tools_stay_off_for_the_rest_of_the_call(self, pool, monkeypatch):
+        calls = _responder(monkeypatch, [
+            self._REJECTION,
+            (503, {'error': {'message': 'overloaded'}}),
+            (200, text_response('answer')),
+        ])
+        run(gemini_api.complete(pool, 'question', tools=[{'url_context': {}}]))
+        assert all('tools' not in call['payload'] for call in calls[1:])
+
+    def test_a_real_bad_request_still_fails_fast(self, pool, monkeypatch):
+        calls = _responder(monkeypatch, [
+            (400, {'error': {'status': 'INVALID_ARGUMENT',
+                             'message': 'contents is required'}})])
+        with pytest.raises(gemini_api.GeminiError):
+            run(gemini_api.complete(pool, 'question',
+                                    tools=[{'url_context': {}}]))
+        assert len(calls) == 1
+
+
+class TestBucketsAreNotRetried:
+    def test_a_failing_bucket_is_not_leased_twice(self, pool, monkeypatch):
+        # report_transient leaves the bucket unblocked, so without exclude the
+        # loop could lease the same one again and burn the attempt ceiling on
+        # a single sick bucket instead of walking the pool.
+        calls = _responder(
+            monkeypatch, [(503, {'error': {'message': 'overloaded'}})] * 10)
+        with pytest.raises(gemini_api.NoCapacityError):
+            run(gemini_api.complete(pool, 'question'))
+        seen = [(call['api_key'], call['model']) for call in calls]
+        assert len(seen) == len(set(seen)) == 4  # 2 keys x 2 models

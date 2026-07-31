@@ -191,7 +191,7 @@ class TestAsk:
         _raises(monkeypatch, gemini_api.NoCapacityError('spent', retry_after=7200))
         ctx = FakeCtx()
         _invoke(llm_cog.Llm.llm, cog, ctx, question='hi?')
-        assert 'out of quota' in ctx.text
+        assert 'rate-limited' in ctx.text
         assert '2h' in ctx.text
 
     def test_blocked_prompt_is_reported_verbatim(self, cog, monkeypatch):

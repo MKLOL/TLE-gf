@@ -51,9 +51,9 @@ async def classify(pool, question, is_reply, session=None, stats=None,
                    has_current_images=False):
     """Decide whether this question needs channel history.
 
-    Falls back to ``direct`` on any failure: routing is an optimisation, and
-    losing it should degrade the answer, not block it. A quota failure here is
-    deliberately swallowed so the answer call still gets its chance.
+    Falls back to ``requires_context`` on any failure: if the router cannot
+    decide, collecting context is the safer answer path. A quota failure here
+    is deliberately swallowed so the answer call still gets its chance.
     """
     local = _local_choice(question, is_reply, has_current_images)
     if local is not None:
@@ -85,9 +85,9 @@ async def classify(pool, question, is_reply, session=None, stats=None,
         # Logged at WARNING, not INFO: a router that always fails looks exactly
         # like a bot that never uses context, and the previous INFO line was
         # invisible at the default log level.
-        logger.warning(';llm router failed (%s) — answering without context',
+        logger.warning(';llm router failed (%s) — answering with context',
                        err)
-        return llm_context.MODE_DIRECT
+        return llm_context.MODE_CONTEXT
 
     mode = llm_context.parse_mode(raw, is_reply)
     logger.info(';llm routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
@@ -160,14 +160,17 @@ async def gather(ctx, mode, referenced, bot_user_id=None):
     return window
 
 
-def build_prompt(question, referenced, window):
+def build_prompt(question, referenced, window, mode=llm_context.MODE_DIRECT):
     """Final prompt for the answer call.
 
     Three shapes, cheapest context first: a bare question, a quoted single
     message, or a transcript window.
     """
     ref_author = getattr(getattr(referenced, 'author', None), 'display_name', None)
-    ref_content = getattr(referenced, 'content', None)
+    # Discord stores embed output separately from message.content. The LLM
+    # cog sends answers in embeds, so a reply to one must quote the rendered
+    # embed text as well as ordinary message content.
+    ref_content = llm_history.message_text(referenced)
 
     if window:
         transcript = llm_history.format_transcript(window, focus=referenced)
@@ -181,7 +184,8 @@ def build_prompt(question, referenced, window):
             question, ref_author=ref_author, ref_content=ref_content,
             ref_has_attachments=bool(getattr(referenced, 'attachments', None)))
 
-    return llm_context.build_question_prompt(question)
+    return llm_context.build_question_prompt(
+        question, context_requested=mode == llm_context.MODE_CONTEXT)
 
 
 def describe_mode(mode, window):
