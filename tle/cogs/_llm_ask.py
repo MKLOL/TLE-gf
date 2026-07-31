@@ -16,6 +16,7 @@ from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_pipeline as llm_pipeline
+from tle.cogs import _llm_profiles as llm_profiles
 from tle.cogs._llm_failures import (
     describe_gemini_failure, describe_xai_failure,
 )
@@ -262,8 +263,10 @@ async def ask_grok(cog, ctx, question):
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'xai', pool, question, referenced, attachments,
             controls, router_stats)
+        profiles = llm_profiles.build_profiles(
+            db(), ctx.guild.id, ctx.author, [referenced, *window])
         prompt = llm_pipeline.build_prompt(
-            question, referenced, window, mode=mode)
+            question, referenced, window, mode=mode, profiles=profiles)
         images = await llm_context.read_images(attachments)
         answer, lease = await xai_api.complete(
             pool, prompt, images=images,

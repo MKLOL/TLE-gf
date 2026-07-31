@@ -129,22 +129,47 @@ class TestGrokAskFlow:
         prompt = llm_context.GROK_SYSTEM_INSTRUCTION.lower()
         assert 'profanity' in prompt and 'roast' in prompt
         assert 'aggressive roast-comedy persona' in prompt
-        assert 'extremely edgy' in prompt
+        assert 'extremely aggressive roast-comedy persona' in prompt
         assert 'every ordinary low-stakes reply' in prompt
-        assert 'mock or insult the user whenever possible' in prompt
-        assert 'at least two sharp, specific jabs' in prompt
-        assert 'direct second-person insults' in prompt
+        assert 'at least two sharp, specific roasts' in prompt
+        assert 'direct personal insults are only allowed' in prompt
+        assert 'directly insulted you first' in prompt
+        assert 'do not repeat a personal angle' in prompt
+        assert 'rating may fuel one occasional personal jab' in prompt
+        assert 'too bad to reach the next rank' in prompt
+        assert 'lgm-or-higher or unrated' in prompt
+        assert 'country and nationality are neutral context only' in prompt
+        assert 'never insult, rank, or stereotype' in prompt
         assert 'in most low-stakes answers' in prompt
-        assert 'brutal, over-the-top' in prompt
         assert 'no slurs' in prompt and 'threats' in prompt
         assert 'sensitive or high-stakes subjects' in prompt
-        assert 'mock or insult the user whenever possible' not in \
+        assert 'direct personal insults are only allowed' not in \
             llm_context.SYSTEM_INSTRUCTION.lower()
         assert 'competitive programmers' in prompt
         assert 'codeforces' in prompt and 'time and memory' in prompt
         assert 'proof and complexity' in prompt
         assert 'technical accuracy' in prompt
         assert 'under 150 words' in prompt
+
+    def test_linked_requester_profile_reaches_grok_answer(
+            self, cog, db, monkeypatch):
+        rank = type('Rank', (), {
+            'title': 'Pupil', 'title_abbr': 'P',
+            'color_graph': '#77FF77'})()
+        profile = type('Profile', (), {
+            'handle': 'nife_cf', 'rating': 1337, 'maxRating': 1399,
+            'country': 'Armenia', 'rank': rank})()
+        db.get_cf_users_for_guild_members = (
+            lambda guild_id, user_ids: [(1, profile)])
+        seen = _xai_answers(monkeypatch)
+
+        _invoke(llm_cog.Llm.llm, cog, FakeCtx(), question='+grok roast this')
+
+        prompt = seen[-1]['prompt']
+        assert 'BEGIN PARTICIPANT PROFILES' in prompt
+        assert 'nife_cf' in prompt and '1337' in prompt
+        assert 'Pupil' in prompt and 'green (#77FF77)' in prompt
+        assert 'Armenia' in prompt
 
     def test_answer_footer_uses_actual_grok_model(self, cog, monkeypatch):
         _xai_answers(monkeypatch, model='grok-4.5')
