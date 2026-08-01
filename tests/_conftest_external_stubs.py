@@ -114,6 +114,11 @@ class _StubGroupResult:
         self.__wrapped__ = func
         self.name = attrs.get('name', self.__name__)
         self.aliases = list(attrs.get('aliases', ()))
+        self.brief = attrs.get('brief')
+        self.help = attrs.get('help', self.__doc__)
+        self.usage = attrs.get('usage')
+        self.extras = attrs.get('extras', {})
+        self.parent = None
         self.all_commands = {}
     def command(self, **kw):
         return self._register(kw)
@@ -122,6 +127,7 @@ class _StubGroupResult:
     def _register(self, attrs):
         def decorator(func):
             child = _StubGroupResult(func, attrs)
+            child.parent = self
             self.all_commands[child.name] = child
             for alias in child.aliases:
                 self.all_commands[alias] = child

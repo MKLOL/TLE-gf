@@ -56,8 +56,8 @@ class TestGrokLimitGate:
             messages[reason] = ctx.text
 
         assert messages['user'] == (
-            'ALERT: You have used all 15 Grok requests available to you in '
-            'the last hour. Try again <t:2000000001:R> '
+            'ALERT: You have used all 15 Grok requests available in this '
+            'server over the last hour. Try again <t:2000000001:R> '
             '(<t:2000000001:F>).')
         shared = (
             "ALERT: Grok's shared daily allowance is used up. Try again "
@@ -67,22 +67,26 @@ class TestGrokLimitGate:
         assert not any(word in shared.casefold() for word in hidden)
         assert db.llm_get_usage(100, 1, llm_cog._today()) == 0
 
-    def test_cross_guild_user_limit_is_enforced_for_regular_user(
+    def test_user_limit_is_per_guild_for_regular_user(
             self, cog, db, monkeypatch):
         _add_xai_key(db)
         seen = _xai_answers(monkeypatch)
 
-        for index in range(constants.XAI_USER_RATE_LIMIT):
-            ctx = FakeCtx(guild_id=100 + index % 2)
+        for _ in range(constants.XAI_USER_RATE_LIMIT):
+            ctx = FakeCtx(guild_id=100)
             _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok again')
             assert 'Grok answer' in ctx.text
 
-        blocked = FakeCtx(guild_id=999)
+        blocked = FakeCtx(guild_id=100)
         _invoke(llm_cog.Llm.llm, cog, blocked, question='+grok again')
         assert 'used all 15 Grok requests' in blocked.text
         assert '<t:' in blocked.text and ':R>' in blocked.text
-        assert len(seen) == constants.XAI_USER_RATE_LIMIT * 2
-        assert _event_count(db) == constants.XAI_USER_RATE_LIMIT
+
+        other_guild = FakeCtx(guild_id=999)
+        _invoke(llm_cog.Llm.llm, cog, other_guild, question='+grok again')
+        assert 'Grok answer' in other_guild.text
+        assert len(seen) == (constants.XAI_USER_RATE_LIMIT + 1) * 2
+        assert _event_count(db) == constants.XAI_USER_RATE_LIMIT + 1
 
     @pytest.mark.parametrize('role', (
         constants.TLE_ADMIN, constants.TLE_MODERATOR,

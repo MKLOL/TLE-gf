@@ -236,6 +236,31 @@ class TleHelp(commands.DefaultHelpCommand):
     async def send_pages(self):
         await self._send_help_pages(tuple(self.paginator.pages))
 
+    async def send_group_help(self, group):
+        compact = self._compact_help_extra(group, 'compact_help')
+        if compact is not None:
+            await self.get_destination().send(compact)
+            return
+        await super().send_group_help(group)
+
+    async def send_command_help(self, command):
+        renderer = self._compact_help_extra(
+            command, 'compact_command_help', from_root=True)
+        if renderer is not None:
+            content = renderer(command) if callable(renderer) else renderer
+            await self.get_destination().send(content)
+            return
+        await super().send_command_help(command)
+
+    @staticmethod
+    def _compact_help_extra(command, key, *, from_root=False):
+        current = command
+        if from_root:
+            while getattr(current, 'parent', None) is not None:
+                current = current.parent
+        extras = getattr(current, 'extras', None) or {}
+        return extras.get(key)
+
     async def filter_commands(self, cmds, *, sort=False, key=None):
         """Like the default, but also drops commands whose ``extras`` declares a
         ``help_hidden_when`` predicate that returns truthy for this invocation.

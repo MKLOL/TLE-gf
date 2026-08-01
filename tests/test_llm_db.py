@@ -208,6 +208,57 @@ class TestXaiRequestLimits:
         assert self.reserve(db, '7', now=1_001) == 'user'
         assert self.reserve(db, 8, now=1_001) is None
 
+    def test_supplied_guild_scopes_only_the_personal_limit(self, db):
+        kwargs = dict(
+            user_limit=2, window_seconds=self.WINDOW,
+            daily_limit=self.DAILY_LIMIT, now=1_000)
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) == 'user'
+        assert db.llm_reserve_xai_request(7, guild_id=200, **kwargs) is None
+
+    def test_scoped_retry_ignores_another_guilds_older_request(self, db):
+        kwargs = dict(
+            user_limit=1, window_seconds=self.WINDOW,
+            daily_limit=self.DAILY_LIMIT)
+        assert db.llm_reserve_xai_request(
+            7, guild_id=200, now=900, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            7, guild_id=100, now=1_000, **kwargs) is None
+        denial = db.llm_reserve_xai_request(
+            7, guild_id=100, now=1_001, **kwargs)
+        assert denial == 'user'
+        assert denial.retry_at == 1_000 + self.WINDOW
+
+    def test_shared_daily_limit_still_spans_supplied_guilds(self, db):
+        kwargs = dict(
+            user_limit=10, window_seconds=self.WINDOW,
+            daily_limit=2, now=100)
+        assert db.llm_reserve_xai_request(1, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(2, guild_id=200, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            3, guild_id=300, **kwargs) == 'daily'
+
+    def test_shared_spend_guard_still_spans_supplied_guilds(self, db):
+        kwargs = dict(
+            user_limit=10, window_seconds=self.WINDOW,
+            daily_limit=10, daily_budget_microusd=1_000, now=100)
+        assert db.llm_reserve_xai_request(
+            1, guild_id=100, reserved_microusd=400, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            2, guild_id=200, reserved_microusd=600, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            3, guild_id=300, reserved_microusd=1, **kwargs) == 'budget'
+
+    def test_pruning_preserves_the_active_call_window(self, db):
+        window = 40 * 86400
+        kwargs = dict(user_limit=1, window_seconds=window,
+                      daily_limit=self.DAILY_LIMIT)
+        assert db.llm_reserve_xai_request(
+            7, now=18 * 86400, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            7, now=50 * 86400, **kwargs) == 'user'
+
     def test_exact_rolling_window_boundary_reopens_a_slot(self, db):
         for _ in range(self.USER_LIMIT):
             assert self.reserve(db, 7, now=1_000) is None

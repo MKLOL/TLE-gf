@@ -1,7 +1,6 @@
 """Shared guarded request flow for commands and literal provider triggers."""
 from datetime import datetime, timezone
 import logging
-import math
 import secrets
 import time
 
@@ -17,6 +16,7 @@ from tle.cogs import _llm_entrypoints as llm_entrypoints
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_identity as llm_identity
+from tle.cogs import _llm_limits as llm_limits
 from tle.cogs import _llm_pipeline as llm_pipeline
 from tle.cogs import _llm_profiles as llm_profiles
 from tle.cogs._llm_failures import (
@@ -36,25 +36,6 @@ class LlmNotReadyError(commands.CommandError):
 
 class _ContextDisabledError(Exception):
     pass
-
-
-class _GrokGuardError(Exception):
-    def __init__(self, reason, retry_at=None):
-        super().__init__(reason)
-        self.reason = reason
-        self.retry_at = retry_at
-
-
-def _grok_guard_message(error):
-    when = 'later'
-    if error.retry_at is not None:
-        stamp = max(0, int(math.ceil(error.retry_at)))
-        when = f'<t:{stamp}:R> (<t:{stamp}:F>)'
-    if error.reason == 'user':
-        return (
-            f'You have used all {constants.XAI_USER_RATE_LIMIT} Grok requests '
-            f'available to you in the last hour. Try again {when}.')
-    return f'Grok\'s shared daily allowance is used up. Try again {when}.'
 
 
 def db():
@@ -245,18 +226,21 @@ async def ask_grok(cog, ctx, question):
     async def operation():
         nonlocal mode, window, lease, reservation_id
         llm_access.raise_if_request_blocked(db(), ctx)
+        user_rate = llm_limits.resolve(db(), ctx.guild.id)
         reservation_id = db().llm_reserve_xai_request(
-            ctx.author.id, user_limit=constants.XAI_USER_RATE_LIMIT,
-            window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
+            ctx.author.id, user_limit=max(1, user_rate.requests),
+            window_seconds=user_rate.window_seconds,
             daily_limit=constants.XAI_DAILY_REQUEST_LIMIT,
             guild_id=ctx.guild.id, model=constants.XAI_MODELS[0],
             reserved_microusd=accounting.xai_reservation_microusd(),
             daily_budget_microusd=accounting.daily_budget_microusd(),
             return_id=True,
-            enforce_user_limit=not cog._is_privileged(ctx.author))
+            enforce_user_limit=(
+                user_rate.enabled and not cog._is_privileged(ctx.author)))
         if isinstance(reservation_id, str):
-            raise _GrokGuardError(
-                str(reservation_id), getattr(reservation_id, 'retry_at', None))
+            raise llm_limits.GrokGuardError(
+                str(reservation_id),
+                getattr(reservation_id, 'retry_at', None), user_rate)
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'xai', pool, question, referenced, attachments,
             controls, router_stats)
@@ -286,12 +270,12 @@ async def ask_grok(cog, ctx, question):
     except llm_access.LlmAccessDeniedError as err:
         await ctx.send(embed=discord_common.embed_alert(str(err)))
         return
-    except _GrokGuardError as err:
+    except llm_limits.GrokGuardError as err:
         _record(cog, ctx, 'xai', 'guarded', started,
                 constants.XAI_MODELS[0], router_stats, answer_stats,
                 mode, window)
         await ctx.send(embed=discord_common.embed_alert(
-            _grok_guard_message(err)))
+            llm_limits.guard_message(err)))
         return
     except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
         await _finalize_xai(reservation_id, router_stats, answer_stats,

@@ -376,7 +376,8 @@ class TestCommandDispatch:
         group = llm_cog.Llm.llm
         assert 'ai' in group.aliases
         assert {'ban', 'unban', 'banlist', 'disable', 'enable',
-                'cooldown', 'grokreset'} <= set(group.all_commands)
+                'cooldown', 'ratelimit', 'groklimit',
+                'grokreset'} <= set(group.all_commands)
 
     @pytest.mark.parametrize('question,expected', [
         ('"disable here"', 'disable here'),

@@ -20,9 +20,9 @@ Owns the core LLM tables:
     Per-user, per-UTC-day call counts for moderator visibility.
 
 ``llm_xai_request``
-    A compact timestamp ledger for Grok-only credit protection: per-user
-    rolling-window limits plus one bot-wide UTC-day limit. Old rows are pruned
-    whenever a request reserves a slot.
+    A compact timestamp ledger for Grok-only credit protection: per-guild,
+    per-user rolling-window limits plus one bot-wide UTC-day limit. Old rows
+    are pruned whenever a request reserves a slot.
 
 ``llm_user_ban``
     Guild-scoped request bans. These block both provider routes while leaving
@@ -46,6 +46,7 @@ from tle.util.db.llm_cooldown_db import LlmCooldownDbMixin
 logger = logging.getLogger(__name__)
 
 _KEY_PROVIDERS = frozenset(('gemini', 'xai'))
+_XAI_LEDGER_RETENTION_SECONDS = 31 * 86400
 
 
 class XaiRequestDenial(str):
@@ -304,7 +305,11 @@ class LlmDbMixin(LlmCooldownDbMixin, LlmTelemetryDbMixin):
         daily_budget_microusd = max(0, int(daily_budget_microusd or 0))
         window_cutoff = now - max(0, window_seconds)
         day_start = int(now // 86400) * 86400
-        retain_after = min(window_cutoff, day_start)
+        retention = max(_XAI_LEDGER_RETENTION_SECONDS,
+                        max(0, window_seconds))
+        retain_after = min(now - retention, day_start)
+        scope_sql = '' if guild_id is None else ' AND guild_id = ?'
+        scope_params = () if guild_id is None else (_s(guild_id),)
 
         with self.conn:
             # The write starts a transaction before the counts, so concurrent
@@ -316,8 +321,8 @@ class LlmDbMixin(LlmCooldownDbMixin, LlmTelemetryDbMixin):
             if enforce_user_limit:
                 user_count = self.conn.execute(
                     'SELECT COUNT(*) AS count FROM llm_xai_request '
-                    'WHERE user_id = ? AND requested_at > ?',
-                    (user_id, window_cutoff)).fetchone().count
+                    f'WHERE user_id = ? AND requested_at > ?{scope_sql}',
+                    (user_id, window_cutoff, *scope_params)).fetchone().count
             daily_count = self.conn.execute(
                 'SELECT COUNT(*) AS count FROM llm_xai_request '
                 'WHERE requested_at >= ?', (day_start,)).fetchone().count
@@ -327,9 +332,9 @@ class LlmDbMixin(LlmCooldownDbMixin, LlmTelemetryDbMixin):
                 if user_limit > 0:
                     row = self.conn.execute(
                         'SELECT requested_at FROM llm_xai_request '
-                        'WHERE user_id = ? AND requested_at > ? '
+                        f'WHERE user_id = ? AND requested_at > ?{scope_sql} '
                         'ORDER BY requested_at, id LIMIT 1 OFFSET ?',
-                        (user_id, window_cutoff,
+                        (user_id, window_cutoff, *scope_params,
                          max(0, user_count - user_limit))).fetchone()
                     if row is not None:
                         retry_at = row.requested_at + max(0, window_seconds)

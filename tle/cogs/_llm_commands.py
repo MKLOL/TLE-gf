@@ -11,6 +11,8 @@ from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_ask as llm_ask
 from tle.cogs import _llm_cooldown as llm_cooldown
 from tle.cogs import _llm_format as llm_format
+from tle.cogs import _llm_help as llm_help
+from tle.cogs import _llm_limits as llm_limits
 from tle.cogs import _llm_status as llm_status
 
 logger = logging.getLogger(__name__)
@@ -20,8 +22,12 @@ _MIN_KEY_LENGTH = 20
 class LlmCommandsMixin:
     """Public and owner-only prefix commands inherited by ``Llm``."""
 
-    @commands.group(brief='Ask Gemini or Grok a question',
-                    invoke_without_command=True, aliases=('ai',))
+    @commands.group(
+        brief='Ask Gemini or Grok a question', invoke_without_command=True,
+        aliases=('ai',), extras={
+            'compact_help': llm_help.GROUP_HELP,
+            'compact_command_help': llm_help.command_help,
+        })
     async def llm(self, ctx, *, question: str = None):
         """Ask Gemini by default, or select Gemini/Grok explicitly."""
         await llm_ask.ask(self, ctx, _unwrap_quoted_request(question))
@@ -238,6 +244,11 @@ class LlmCommandsMixin:
     async def cooldown(self, ctx, *arguments: str):
         await llm_cooldown.configure(self, ctx, arguments)
 
+    @llm.command(brief='Set the regular-user Grok allowance',
+                 aliases=('groklimit',))
+    async def ratelimit(self, ctx, *arguments: str):
+        await llm_limits.configure(self, ctx, arguments)
+
     @llm.command(brief='Add xAI API keys (bot owner only)',
                  aliases=('xkeys', 'xaikeys'))
     async def grokkeys(self, ctx, *api_keys: str):
@@ -442,3 +453,6 @@ async def _delete_quietly(message):
     except Exception:  # noqa: BLE001 - missing permission/already deleted
         logger.warning('Could not delete an ;llm API-key message')
         return False
+
+
+llm_help.apply_metadata(LlmCommandsMixin.llm)
