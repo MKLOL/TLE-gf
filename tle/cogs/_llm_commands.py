@@ -225,15 +225,15 @@ class LlmCommandsMixin:
             title='LLM request ban list', description='\n'.join(lines),
             color=discord_common._ALERT_AMBER))
 
-    @llm.command(brief='Disable LLM requests in the server or here')
-    async def disable(self, ctx, scope: str = None):
-        await self._set_llm_disabled(ctx, scope, disabled=True)
+    @llm.command(brief='Disable LLM requests by server or local scope')
+    async def disable(self, ctx, *arguments: str):
+        await self._set_llm_disabled(ctx, arguments, disabled=True)
 
-    @llm.command(brief='Enable LLM requests in the server or here')
-    async def enable(self, ctx, scope: str = None):
-        await self._set_llm_disabled(ctx, scope, disabled=False)
+    @llm.command(brief='Enable LLM requests by server or local scope')
+    async def enable(self, ctx, *arguments: str):
+        await self._set_llm_disabled(ctx, arguments, disabled=False)
 
-    @llm.command(brief='Set a shared channel or server LLM cooldown')
+    @llm.command(brief='Set an exact, channel-family, or server cooldown')
     async def cooldown(self, ctx, *arguments: str):
         await llm_cooldown.configure(self, ctx, arguments)
 
@@ -275,37 +275,38 @@ class LlmCommandsMixin:
             'Only this guild’s admins or moderators can manage LLM access.'))
         return False
 
-    async def _set_llm_disabled(self, ctx, scope, *, disabled):
+    async def _set_llm_disabled(self, ctx, arguments, *, disabled):
         if not await self._require_guild_moderator(ctx):
             return
-        resolved = llm_access.access_scope(scope)
+        resolved = llm_access.access_scope(arguments)
+        action = 'disable' if disabled else 'enable'
         if resolved is None:
-            action = 'disable' if disabled else 'enable'
             await ctx.send(embed=discord_common.embed_alert(
-                f'Usage: `;llm {action}` or `;llm {action} here`.'))
+                f'Usage: `;llm {action}`, `;llm {action} here`, or '
+                f'`;llm {action} here +threads`.'))
             return
+
         channel_id = llm_access.scope_channel_id(ctx.channel)
+        family_id = llm_access.family_channel_id(ctx.channel)
         database = self._llm_db()
         llm_access.set_disabled(
-            database, ctx.guild.id, channel_id,
+            database, ctx.guild.id, channel_id, family_id,
             disabled=disabled, scope=resolved)
-        if (not disabled and resolved == 'channel'
-                and llm_access.disabled_scope(
-                    database, ctx.guild.id, channel_id) is None
-                and database.get_guild_config(
-                    ctx.guild.id, llm_access.GUILD_DISABLED_KEY) == '1'):
-            message = ('LLM requests are now enabled for this channel and its '
-                       'threads, overriding the server-wide disable.')
-        elif resolved == 'guild':
-            state = 'disabled' if disabled else 'enabled'
-            message = (f'LLM requests are now {state} for every channel in '
-                       'this server. Previous channel overrides were cleared.')
-        else:
-            state = 'disabled' if disabled else 'enabled'
+
+        state = 'disabled' if disabled else 'enabled'
+        if resolved == 'guild':
+            message = (f'LLM requests are now {state} for every channel and '
+                       'thread in this server. Previous local overrides were '
+                       'cleared.')
+        elif resolved == 'family':
             message = (f'LLM requests are now {state} for this channel and '
-                       'its threads.')
-        await ctx.send(embed=discord_common.embed_success(
-            message))
+                       'all of its threads. Exact local overrides in this '
+                       'channel family were cleared.')
+        else:
+            local_label = ('thread' if llm_access.is_thread_channel(ctx.channel)
+                           else 'channel')
+            message = f'LLM requests are now {state} for this {local_label}.'
+        await ctx.send(embed=discord_common.embed_success(message))
 
     async def _require_global_owner(self, ctx, *, deleted=None,
                                     has_secret=False):
