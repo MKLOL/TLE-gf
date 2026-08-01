@@ -1,4 +1,4 @@
-"""Shared, guarded request flow for ``;llm`` and literal ``@grok``."""
+"""Shared guarded request flow for commands and literal provider triggers."""
 from datetime import datetime, timezone
 import logging
 import math
@@ -13,6 +13,7 @@ from tle.util import discord_common, gemini_api, llm_models, xai_api
 from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_accounting as accounting
 from tle.cogs import _llm_context as llm_context
+from tle.cogs import _llm_entrypoints as llm_entrypoints
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_identity as llm_identity
@@ -26,6 +27,7 @@ from tle.cogs._llm_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+split_provider = llm_entrypoints.split_provider
 
 
 class LlmNotReadyError(commands.CommandError):
@@ -68,29 +70,19 @@ def today():
     return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 
-def split_provider(question):
-    """Return ``(provider, question)`` for an exact leading ``+grok``."""
-    if question is None:
-        return 'gemini', None
-    parts = question.strip().split(maxsplit=1)
-    if parts and parts[0].casefold() == '+grok':
-        return 'grok', (parts[1].strip() if len(parts) > 1 else None)
-    return 'gemini', question
-
-
 async def ask(cog, ctx, question):
     if getattr(ctx, 'guild', None) is None:
         await ctx.send(embed=discord_common.embed_alert(
             'LLM requests are only available inside a server.'))
         return
-    provider, question = split_provider(question)
+    provider, question, explicit = llm_entrypoints.parse_provider(question)
     if provider == 'grok':
         await ask_grok(cog, ctx, question)
     else:
-        await ask_gemini(cog, ctx, question)
+        await ask_gemini(cog, ctx, question, explicit=explicit)
 
 
-async def ask_gemini(cog, ctx, question):
+async def ask_gemini(cog, ctx, question, *, explicit=False):
     if not await llm_access.allow_request_or_notify(db(), ctx):
         return
     referenced = await cog._resolve_reference(ctx)
@@ -102,7 +94,11 @@ async def ask_gemini(cog, ctx, question):
     question = controls.question
     if (question is None and referenced is None
             and controls.mode != llm_context.MODE_CONTEXT):
-        await ctx.send_help(ctx.command)
+        if explicit:
+            await ctx.send(embed=discord_common.embed_alert(
+                llm_entrypoints.usage('gemini')))
+        else:
+            await ctx.send_help(ctx.command)
         return
 
     try:
@@ -219,7 +215,7 @@ async def ask_grok(cog, ctx, question):
     if (question is None and referenced is None
             and controls.mode != llm_context.MODE_CONTEXT):
         await ctx.send(embed=discord_common.embed_alert(
-            'Usage: `@grok <question>` or `;llm +grok <question>`.'))
+            llm_entrypoints.usage('grok')))
         return
     if not await _valid_question(question, ctx):
         return

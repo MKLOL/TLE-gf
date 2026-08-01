@@ -1,4 +1,4 @@
-"""Persistent shared cooldowns for ``;ai`` and ``@grok`` requests."""
+"""Persistent shared cooldowns for command and literal LLM requests."""
 
 import sqlite3
 
@@ -350,7 +350,9 @@ class TestCooldownEnforcement:
         assert calls == [1]
         assert 'shared cooldown in this channel' in denied.text
 
-    def test_literal_grok_obeys_existing_cooldown(self, db, monkeypatch):
+    @pytest.mark.parametrize('trigger', ('@grok hello', '@gemini hello'))
+    def test_literal_providers_obey_existing_cooldown(
+            self, db, monkeypatch, trigger):
         now = 1_700_000_000.0
         monkeypatch.setattr(llm_cooldown_db.time, 'time', lambda: now)
         db.llm_set_cooldown(100, 60)
@@ -368,10 +370,11 @@ class TestCooldownEnforcement:
                 return True
 
         async def forbidden(*args, **kwargs):
-            raise AssertionError('cooldown-denied @grok reached xAI')
+            raise AssertionError('cooldown-denied literal reached a provider')
 
         monkeypatch.setattr(xai_api, 'complete', forbidden)
-        message = FakeMessage(content='@grok hello')
+        monkeypatch.setattr(gemini_api, 'complete', forbidden)
+        message = FakeMessage(content=trigger)
         message.guild = type('Guild', (), {'id': 100})()
         message.author = type('Author', (), {
             'bot': False, 'id': 2, 'display_name': 'target'})()

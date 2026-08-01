@@ -9,8 +9,9 @@ from tle.util.db.llm_db import XaiRequestDenial
 from tests.llm_test_utils import FakeLlmDb, run
 from tests.test_llm_cog import FakeCtx, _answers
 from tests.test_llm_grok import (
-    _FakeBot, _add_xai_key, _invoke, _listener_message, _xai_answers,
+    _add_xai_key, _invoke, _xai_answers,
 )
+from tests.test_llm_literal_triggers import _FakeBot, _listener_message
 
 
 @pytest.fixture(autouse=True)

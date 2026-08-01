@@ -1,8 +1,9 @@
-"""Provider routing, key management, and literal trigger tests for Grok."""
+"""Provider routing, key management, and literal trigger tests."""
 from discord.ext import commands
 import pytest
 
 from tle import constants
+from tle.cogs import _llm_ask as llm_ask
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import llm as llm_cog
 from tle.util import codeforces_common as cf_common
@@ -66,6 +67,10 @@ def _gemini_answers(monkeypatch, answer='Gemini answer'):
 
 
 class TestProviderSelector:
+    def test_compatibility_splitter_keeps_two_value_shape(self):
+        assert llm_ask.split_provider('+gemini hello') == ('gemini', 'hello')
+        assert llm_ask.split_provider('+grok hello') == ('grok', 'hello')
+
     def test_grok_needs_no_gemini_key(self, cog, db, monkeypatch):
         _add_xai_key(db)
         seen = _xai_answers(monkeypatch)
@@ -80,6 +85,33 @@ class TestProviderSelector:
         seen = _xai_answers(monkeypatch)
         _invoke(llm_cog.Llm.llm, cog, FakeCtx(), question='+GrOk hello')
         assert seen[-1]['prompt'] == 'hello'
+
+    def test_explicit_gemini_selector_is_stripped(self, cog, db, monkeypatch):
+        db.llm_add_key('AIzaSyExampleKeyValue1234567')
+        seen = _gemini_answers(monkeypatch)
+
+        async def no_xai(*args, **kwargs):
+            raise AssertionError('xAI must not handle explicit Gemini')
+
+        monkeypatch.setattr(xai_api, 'complete', no_xai)
+        ctx = FakeCtx()
+        _invoke(llm_cog.Llm.llm, cog, ctx,
+                question='+GeMiNi +direct hello')
+        assert seen[-1] == 'hello'
+        assert 'Gemini answer' in ctx.text
+
+    def test_gemini_near_match_remains_question(self, cog, db, monkeypatch):
+        db.llm_add_key('AIzaSyExampleKeyValue1234567')
+        seen = _gemini_answers(monkeypatch)
+        _invoke(llm_cog.Llm.llm, cog, FakeCtx(),
+                question='+geminiish hello')
+        assert seen[-1] == '+geminiish hello'
+
+    def test_bare_gemini_selector_shows_provider_usage(self, cog, db):
+        ctx = FakeCtx()
+        _invoke(llm_cog.Llm.llm, cog, ctx, question='+gemini')
+        assert '@gemini <question>' in ctx.text
+        assert ';ai +gemini <question>' in ctx.text
 
     def test_near_match_remains_a_gemini_question(self, cog, db, monkeypatch):
         db.llm_add_key('AIzaSyExampleKeyValue1234567')
@@ -291,83 +323,3 @@ class TestGrokKeys:
         assert message.deleted is True
         assert self.KEY not in ctx.text
         assert 'revoke' in ctx.text
-
-
-class _FakeBot:
-    def __init__(self, ctx):
-        self.ctx = ctx
-        self.calls = 0
-        self.user = None
-
-    async def get_context(self, message):
-        self.calls += 1
-        self.ctx.message = message
-        return self.ctx
-
-
-def _listener_message(content, guild=True, bot=False):
-    message = FakeMessage(content=content)
-    message.guild = type('G', (), {'id': 100})() if guild else None
-    message.author = type('Author', (), {
-        'bot': bot, 'id': 1, 'display_name': 'nife'})()
-    return message
-
-
-class TestLiteralTrigger:
-    def test_literal_trigger_uses_the_shared_grok_path(self, db, monkeypatch):
-        _add_xai_key(db)
-        seen = _xai_answers(monkeypatch)
-        ctx = FakeCtx()
-        bot = _FakeBot(ctx)
-        cog = llm_cog.Llm(bot)
-        message = _listener_message('@grok hello there')
-        run(cog.on_message(message))
-        assert seen[-1]['prompt'] == 'hello there'
-        assert 'Grok answer' in ctx.text
-        assert ctx.send_kwargs[0]['reference'] is message
-        assert ctx.send_kwargs[0]['mention_author'] is False
-
-    def test_trigger_is_case_insensitive_and_allows_leading_space(
-            self, db, monkeypatch):
-        _add_xai_key(db)
-        seen = _xai_answers(monkeypatch)
-        ctx = FakeCtx()
-        cog = llm_cog.Llm(_FakeBot(ctx))
-        run(cog.on_message(_listener_message('  @GrOk   hi')))
-        assert seen[-1]['prompt'] == 'hi'
-
-    @pytest.mark.parametrize('content,guild,author_bot', [
-        ('hey @grok hi', True, False),
-        ('@groks hi', True, False),
-        ('@grokish hi', True, False),
-        ('@grok hi', False, False),
-        ('@grok hi', True, True),
-    ])
-    def test_near_matches_dms_and_bots_are_ignored(
-            self, content, guild, author_bot):
-        ctx = FakeCtx()
-        bot = _FakeBot(ctx)
-        cog = llm_cog.Llm(bot)
-        run(cog.on_message(_listener_message(
-            content, guild=guild, bot=author_bot)))
-        assert bot.calls == 0
-        assert ctx.sent == []
-
-    def test_empty_trigger_can_ask_about_a_reply(self, db, monkeypatch):
-        _add_xai_key(db)
-        seen = _xai_answers(monkeypatch)
-        message = _listener_message('@grok')
-        target = FakeMessage(content='what does this mean?', author_name='alice')
-        message.reference = type('Ref', (), {
-            'resolved': target, 'message_id': 8})()
-        ctx = FakeCtx(message=message)
-        cog = llm_cog.Llm(_FakeBot(ctx))
-        run(cog.on_message(message))
-        assert 'what does this mean?' in seen[-1]['prompt']
-
-    def test_startup_race_is_reported_not_raised(self, monkeypatch):
-        monkeypatch.setattr(cf_common, 'user_db', None, raising=False)
-        ctx = FakeCtx()
-        cog = llm_cog.Llm(_FakeBot(ctx))
-        run(cog.on_message(_listener_message('@grok hi')))
-        assert 'starting up' in ctx.text

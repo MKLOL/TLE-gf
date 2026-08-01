@@ -57,7 +57,8 @@ async def classify(pool, question, is_reply, session=None, stats=None,
     """
     local = _local_choice(question, is_reply, has_current_images)
     if local is not None:
-        logger.info(';llm routed locally to %s (is_reply=%s)', local, is_reply)
+        logger.info('Gemini routed locally to %s (is_reply=%s)',
+                    local, is_reply)
         return local
 
     # LLM_MODELS is ordered cheapest-first, so the router takes the head of the
@@ -87,12 +88,13 @@ async def classify(pool, question, is_reply, session=None, stats=None,
         # Logged at WARNING, not INFO: a router that always fails looks exactly
         # like a bot that never uses context, and the previous INFO line was
         # invisible at the default log level.
-        logger.warning(';llm router failed (%s) — answering with context',
+        logger.warning('Gemini router failed (%s) — answering with context',
                        err)
         return llm_context.MODE_CONTEXT
 
     mode = llm_context.parse_mode(raw, is_reply)
-    logger.info(';llm routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
+    logger.info('Gemini routed to %s (raw=%r, is_reply=%s)',
+                mode, raw, is_reply)
     return mode
 
 
@@ -102,7 +104,7 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
     """xAI-backed equivalent of :func:`classify` for the Grok route."""
     local = _local_choice(question, is_reply, has_current_images)
     if local is not None:
-        logger.info('@grok routed locally to %s (is_reply=%s)', local, is_reply)
+        logger.info('Grok routed locally to %s (is_reply=%s)', local, is_reply)
         return local
     try:
         raw, _ = await asyncio.wait_for(
@@ -121,12 +123,12 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
                 max_attempts=2),
             timeout=constants.LLM_ROUTER_TIMEOUT_SECONDS)
     except (xai_api.XaiError, TimeoutError) as err:
-        logger.warning('@grok router failed (%s) — answering without context',
+        logger.warning('Grok router failed (%s) — answering without context',
                        err)
         return llm_context.MODE_DIRECT
 
     mode = llm_context.parse_mode(raw, is_reply)
-    logger.info('@grok routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
+    logger.info('Grok routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
     return mode
 
 
@@ -162,12 +164,12 @@ async def gather(ctx, mode, referenced, bot_user_id=None, message_limit=None,
         return []
 
     if not window:
-        logger.warning(';llm gathered no context for mode=%s (is_reply=%s) — '
+        logger.warning('LLM gathered no context for mode=%s (is_reply=%s) — '
                        'check Read Message History and '
                        'LLM_CONTEXT_WINDOW_SECONDS',
                        mode, referenced is not None)
     else:
-        logger.info(';llm gathered %d message(s) for mode=%s',
+        logger.info('LLM gathered %d message(s) for mode=%s',
                     len(window), mode)
     return window
 

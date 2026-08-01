@@ -23,7 +23,7 @@ class LlmCommandsMixin:
     @commands.group(brief='Ask Gemini or Grok a question',
                     invoke_without_command=True, aliases=('ai',))
     async def llm(self, ctx, *, question: str = None):
-        """Ask Gemini, or use a leading ``+grok`` to ask Grok."""
+        """Ask Gemini by default, or select Gemini/Grok explicitly."""
         await llm_ask.ask(self, ctx, _unwrap_quoted_request(question))
 
     @llm.command(brief='List selectable models and reasoning tiers')
@@ -39,14 +39,15 @@ class LlmCommandsMixin:
             description=(
                 f'{llm_models.describe_catalog()}\n\n'
                 f'{llm_models.describe_tiers()}\n\n'
-                f'Grok: `+grok` uses {grok_ladder} and is also '
-                f'available as `@grok <question>`.\n\n'
+                'Gemini: default, `+gemini`, or `@gemini <question>`.\n'
+                f'Grok: `+grok` or `@grok <question>` uses '
+                f'{grok_ladder}.\n\n'
                 f'Prefix a question to pick one, e.g. '
                 f'`;llm 3.5f-h why is this TLE?`\n'
                 f'Left alone, the ladder is tried in order: {ladder}.\n\n'
-                'Context controls go before a Gemini selector: '
-                '`;llm +context messages=10 3.5f question`. For Grok, put '
-                'the provider first: `;llm +grok +context question`.'),
+                'Put an explicit provider first, then context/model controls: '
+                '`;ai +gemini +context 3.5f question` or '
+                '`;ai +grok +context question`.'),
             color=discord_common._ALERT_AMBER))
 
     @llm.command(brief='Add Gemini API keys (bot owner only)')

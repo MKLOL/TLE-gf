@@ -109,6 +109,8 @@ class TestOwnerStatus:
         _invoke(llm_cog.Llm.models, llm_cog.Llm(OwnerBot()), ctx)
         assert self.KEY not in ctx.text
         assert 'REDACTED' in ctx.text
+        assert '+gemini' in ctx.text and '@gemini <question>' in ctx.text
+        assert '+grok' in ctx.text and '@grok <question>' in ctx.text
 
     def test_non_owner_cannot_see_health_or_spend(self, db):
         db.llm_add_key(self.KEY, provider='xai')

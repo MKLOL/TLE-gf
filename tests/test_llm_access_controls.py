@@ -324,9 +324,12 @@ class TestRequestEnforcement:
             'SELECT COUNT(*) AS count FROM llm_xai_request').fetchone().count
         assert count == 0
 
-    def test_at_grok_uses_the_same_ban(self, db, monkeypatch):
+    @pytest.mark.parametrize('trigger', ('@grok hello', '@gemini hello'))
+    def test_literal_providers_use_the_same_ban(
+            self, db, monkeypatch, trigger):
         db.llm_ban_user(100, 1, banned_by=3)
         monkeypatch.setattr(xai_api, 'complete', self._forbidden)
+        monkeypatch.setattr(gemini_api, 'complete', self._forbidden)
         ctx = FakeCtx()
 
         class Bot:
@@ -339,7 +342,7 @@ class TestRequestEnforcement:
             async def can_run(self, context):
                 return True
 
-        message = FakeMessage(content='@grok hello')
+        message = FakeMessage(content=trigger)
         message.guild = type('Guild', (), {'id': 100})()
         message.author = type('Author', (), {
             'bot': False, 'id': 1, 'display_name': 'target'})()
