@@ -65,7 +65,7 @@ Each pair then receives a blended proper-score weight:
 
 ```text
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
-delta_i = (108 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 ```
 
 This is the rating-logit gradient of a 10% cross-entropy / 90% Brier
@@ -75,7 +75,7 @@ day has less leverage, while the 10% cross-entropy floor prevents it from
 being ignored. It is a smooth formula, not a post-processing delta cap.
 
 The wider `800` expectation scale keeps sustained skill differences visible
-across the existing rank bands, while the `108` K-factor reduces the weight
+across the existing rank bands, while the `124` K-factor controls the weight
 of one noisy daily puzzle. Rating scales have arbitrary units—Microsoft's
 [TrueSkill explanation](https://www.microsoft.com/en-us/research/project/trueskill-ranking-system/)
 likewise calculates on one scale and multiplies into a useful display range.
@@ -91,7 +91,7 @@ Consequences:
   selective submission, hidden accounts, or sybils.
 - There is no post-processing cap. Every pair score and expectation is a
   probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  `|delta_i| < 108(n - 1)/n`, which is below the K-factor.
+  `|delta_i| < 124(n - 1)/n`, which is below the K-factor.
 - Inactivity never changes skill.
 - New players receive the same bounded update rule as established players.
 - Playing more days supplies more evidence but does not award rating by itself;

@@ -13,7 +13,7 @@ The current player-facing parameters are:
 - time offset `0` seconds;
 - soft-margin width `0.35`;
 - expectation scale `800 / ln(10)`;
-- K-factor `108`;
+- K-factor `124`;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
 - no field-size multiplier or post-hoc delta cap.
 
@@ -102,7 +102,7 @@ W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 Lower time is better. The update is:
 
 ```text
-delta_i = (108 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 ```
 
 The weight is the rating-logit gradient of a 10% cross-entropy / 90% Brier
@@ -163,10 +163,10 @@ Each pair residual lies strictly between `-1` and `1`, and there are `n - 1`
 non-self terms:
 
 ```text
-abs(delta_i) < 108 * (n - 1) / n
+abs(delta_i) < 124 * (n - 1) / n
 ```
 
-That is below 99 points in a 12-player field and below 102.6 in a 20-player
+That is below 113.7 points in a 12-player field and below 117.8 in a 20-player
 field. There is no post-processing delta clamp.
 
 ### One-time contamination bound
@@ -176,10 +176,10 @@ fixed, every comparison not involving `k` is bit-for-bit unchanged. For any
 other player `i`, only one term can move:
 
 ```text
-abs(delta_i_after - delta_i_before) <= 108 / n
+abs(delta_i_after - delta_i_before) <= 124 / n
 ```
 
-The limit is 9 points at `n = 12` and 5.4 at `n = 20`. The changed player's
+The limit is 10.34 points at `n = 12` and 6.2 at `n = 20`. The changed player's
 own time affects `n - 1` terms, so their own update can move by almost the full
 natural daily bound. The formula protects the rest of the field more strongly
 than it protects the owner of a corrupt record.
@@ -373,8 +373,8 @@ Future changes to `+beta` must retain:
 - solo days producing no rating signal;
 - exact ties and tied performance;
 - pair complement and round point conservation;
-- the `108(n - 1)/n` daily bound;
-- the `108/n` one-opponent contamination bound;
+- the `124(n - 1)/n` daily bound;
+- the `124/n` one-opponent contamination bound;
 - rating-translation invariance;
 - unique, result-monotone event performance;
 - Akari accuracy validation and square-root effective time;

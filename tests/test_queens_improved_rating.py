@@ -49,6 +49,7 @@ def _day(puzzle, results):
 
 
 def test_time_spacing_shapes_the_soft_bracket_and_performance():
+    assert _RATING_K == 124
     assert _soft_time_score(12, 12) == 0.5
     close_advantage = _soft_time_score(12, 13) - 0.5
     wider_advantage = _soft_time_score(13, 16) - 0.5
