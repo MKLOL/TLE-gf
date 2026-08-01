@@ -29,7 +29,8 @@ Owns the core LLM tables:
     moderation subcommands available so the ban can always be reversed.
 
 ``llm_cooldown``
-    Persistent shared admission cooldowns for one server or parent channel.
+    Persistent shared admission cooldowns for one server, channel family,
+    exact channel, or exact thread.
 
 The key material is stored in plaintext: the bot must be able to present it
 to the provider on every call, so there is nothing to gain from hashing it.

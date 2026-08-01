@@ -10,7 +10,10 @@ from tle.cogs import llm as llm_cog
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, gemini_api, xai_api
 from tle.util.db import llm_cooldown_db
-from tle.util.db.user_db_upgrades import upgrade_1_50_0
+from tle.util.db.user_db_conn import UserDbConn
+from tle.util.db.user_db_upgrades import (
+    registry, upgrade_1_50_0, upgrade_1_51_0,
+)
 from tle.util.llm_keypool import Lease
 from tests.llm_test_utils import FakeLlmDb, FakeMessage, run
 from tests.test_llm_cog import FakeChannel, FakeCtx
@@ -73,6 +76,19 @@ class TestCooldownStorage:
         db.llm_set_cooldown(100, 0, channel_id=44)
         assert db.llm_get_cooldown_settings(100, 44) == {}
 
+    def test_family_scope_is_shared_by_parent_and_threads(self, db):
+        db.llm_set_cooldown(100, 60, family_id=44)
+        assert db.llm_claim_cooldowns(
+            100, 99, family_id=44, now=100) is None
+
+        denial = db.llm_cooldown_retry(
+            100, 98, family_id=44, now=110)
+        assert (denial.scope, denial.retry_at) == ('threads', 160)
+        assert db.llm_cooldown_retry(
+            100, 44, family_id=44, now=110).retry_at == 160
+        assert db.llm_cooldown_retry(
+            100, 45, family_id=45, now=110) is None
+
     def test_1_50_migration_is_idempotent(self):
         conn = sqlite3.connect(':memory:')
         upgrade_1_50_0(conn)
@@ -89,6 +105,87 @@ class TestCooldownStorage:
         assert columns == {
             'guild_id', 'channel_id', 'seconds', 'last_attempt_at'}
         assert primary == {'guild_id', 'channel_id'}
+
+    def test_1_51_migrates_existing_parent_cooldown_to_family(self, db):
+        db.conn.execute('CREATE TABLE db_version (version TEXT NOT NULL)')
+        db.conn.execute(
+            'INSERT INTO db_version (version) VALUES (?)', ('1.50.0',))
+        db.conn.execute(
+            'INSERT INTO llm_cooldown '
+            '(guild_id, channel_id, seconds, last_attempt_at) '
+            'VALUES (?, ?, ?, ?)',
+            ('100', '44', 60, 100.0))
+        db.conn.execute(
+            'INSERT INTO llm_cooldown '
+            '(guild_id, channel_id, seconds, last_attempt_at) '
+            'VALUES (?, ?, ?, ?)',
+            ('200', '*', 120, 50.0))
+        db.conn.commit()
+
+        registry.run(db.conn)
+        upgrade_1_51_0(db.conn)
+
+        rows = db.conn.execute(
+            'SELECT guild_id, channel_id, seconds, last_attempt_at '
+            'FROM llm_cooldown ORDER BY guild_id').fetchall()
+        assert [tuple(row) for row in rows] == [
+            ('100', 'family:44', 60, 100.0),
+            ('200', '*', 120, 50.0),
+        ]
+        assert registry.get_current_version(db.conn) == '1.51.0'
+        denial = db.llm_cooldown_retry(
+            100, 99, family_id=44, now=110.0)
+        assert (denial.scope, denial.retry_at) == ('threads', 160.0)
+        assert db.llm_cooldown_retry(
+            100, 98, family_id=44, now=110.0) == denial
+        assert db.llm_cooldown_retry(
+            100, 44, family_id=44, now=110.0) == denial
+
+    def test_1_51_preserves_ambiguous_raw_row_on_scope_collision(self, db):
+        db.conn.executemany(
+            'INSERT INTO llm_cooldown '
+            '(guild_id, channel_id, seconds, last_attempt_at) '
+            'VALUES (?, ?, ?, ?)', (
+                ('100', '44', 60, 100.0),
+                ('100', 'family:44', 90, 200.0),
+            ))
+        db.conn.commit()
+
+        upgrade_1_51_0(db.conn)
+        upgrade_1_51_0(db.conn)
+
+        rows = db.conn.execute(
+            'SELECT channel_id, seconds, last_attempt_at '
+            'FROM llm_cooldown ORDER BY channel_id').fetchall()
+        assert [tuple(row) for row in rows] == [
+            ('44', 60, 100.0),
+            ('family:44', 90, 200.0),
+        ]
+
+    def test_opening_1_50_database_runs_scope_migration(self, tmp_path):
+        dbfile = tmp_path / 'user.db'
+        raw = sqlite3.connect(dbfile)
+        upgrade_1_50_0(raw)
+        raw.execute('CREATE TABLE db_version (version TEXT NOT NULL)')
+        raw.execute(
+            'INSERT INTO db_version (version) VALUES (?)', ('1.50.0',))
+        raw.execute(
+            'INSERT INTO llm_cooldown '
+            '(guild_id, channel_id, seconds, last_attempt_at) '
+            'VALUES (?, ?, ?, ?)',
+            ('100', '44', 60, 100.0))
+        raw.commit()
+        raw.close()
+
+        database = UserDbConn(str(dbfile))
+        try:
+            assert registry.get_current_version(
+                database.conn) == registry.latest_version == '1.51.0'
+            denial = database.llm_cooldown_retry(
+                100, 99, family_id=44, now=110.0)
+            assert (denial.scope, denial.retry_at) == ('threads', 160.0)
+        finally:
+            database.conn.close()
 
 
 class TestCooldownCommand:
@@ -109,16 +206,35 @@ class TestCooldownCommand:
         inspect = FakeCtx(roles=(role,), channel=_channel(44))
         _invoke(llm_cog.Llm.cooldown, cog, inspect)
         assert '60 seconds' in inspect.text and '120 seconds' in inspect.text
+        assert 'Channel + threads cooldown' in inspect.text
         _invoke(llm_cog.Llm.cooldown, cog, ctx, '0', '+global')
         assert db.llm_get_cooldown_settings(100, 44) == {'channel': 60}
 
-    def test_thread_configuration_uses_parent_channel(self, db):
+    def test_thread_configuration_uses_exact_thread_channel(self, db):
         ctx = FakeCtx(
             roles=(constants.TLE_MODERATOR,),
             channel=_channel(99, parent_id=44))
         _invoke(llm_cog.Llm.cooldown, llm_cog.Llm(bot=None), ctx, '60')
-        assert db.llm_get_cooldown_settings(100, 44) == {'channel': 60}
-        assert db.llm_get_cooldown_settings(100, 99) == {}
+        assert db.llm_get_cooldown_settings(
+            100, 99, family_id=44) == {'channel': 60}
+        assert db.llm_get_cooldown_settings(100, 44) == {}
+        assert 'this thread' in ctx.text
+
+    def test_threads_flag_targets_parent_family_from_inside_thread(self, db):
+        ctx = FakeCtx(
+            roles=(constants.TLE_MODERATOR,),
+            channel=_channel(99, parent_id=44))
+        cog = llm_cog.Llm(bot=None)
+
+        _invoke(llm_cog.Llm.cooldown, cog, ctx, '90', '+threads')
+
+        assert db.llm_get_cooldown_settings(
+            100, 99, family_id=44) == {'threads': 90}
+        assert db.llm_get_cooldown_settings(
+            100, 44, family_id=44) == {'threads': 90}
+        assert db.llm_get_cooldown_settings(
+            100, 45, family_id=45) == {}
+        assert 'channel and all of its threads' in ctx.text
 
     def test_regular_user_and_invalid_values_cannot_mutate(self, db):
         cog = llm_cog.Llm(bot=None)
@@ -130,6 +246,8 @@ class TestCooldownCommand:
             roles=(constants.TLE_MODERATOR,), channel=_channel(44))
         _invoke(llm_cog.Llm.cooldown, cog, moderator, '86401')
         _invoke(llm_cog.Llm.cooldown, cog, moderator, 'nope', '+global')
+        _invoke(llm_cog.Llm.cooldown, cog, moderator,
+                '60', '+threads', '+global')
         assert db.llm_get_cooldown_settings(100, 44) == {}
         assert '0 to 86400' in moderator.text
         assert 'Usage:' in moderator.text
@@ -139,16 +257,41 @@ class TestCooldownCommand:
 
 
 class TestCooldownEnforcement:
-    def test_parent_channel_and_threads_share_the_timer(self, db, monkeypatch):
+    def test_parent_channel_and_threads_have_independent_timers(
+            self, db, monkeypatch):
         monkeypatch.setattr(llm_cooldown_db.time, 'time', lambda: 100.0)
-        db.llm_set_cooldown(100, 60, channel_id=44)
+        db.llm_set_cooldown(100, 60, channel_id=99)
         first = FakeCtx(channel=_channel(99, parent_id=44))
         llm_access.raise_if_request_blocked(db, first)
 
         sibling = FakeCtx(user_id=2, channel=_channel(98, parent_id=44))
+        llm_access.raise_if_request_blocked(db, sibling)
+        parent = FakeCtx(user_id=3, channel=_channel(44))
+        llm_access.raise_if_request_blocked(db, parent)
+
+        retry = FakeCtx(user_id=4, channel=_channel(99, parent_id=44))
         with pytest.raises(llm_access.LlmAccessDeniedError) as error:
-            llm_access.raise_if_request_blocked(db, sibling)
+            llm_access.raise_if_request_blocked(db, retry)
         assert '<t:160:R>' in str(error.value)
+
+    def test_threads_cooldown_is_shared_by_parent_and_siblings(
+            self, db, monkeypatch):
+        monkeypatch.setattr(llm_cooldown_db.time, 'time', lambda: 100.0)
+        db.llm_set_cooldown(100, 60, family_id=44)
+        first = FakeCtx(channel=_channel(99, parent_id=44))
+        llm_access.raise_if_request_blocked(db, first)
+
+        for channel in (
+                _channel(98, parent_id=44),
+                _channel(44)):
+            denied = FakeCtx(user_id=2, channel=channel)
+            with pytest.raises(llm_access.LlmAccessDeniedError) as error:
+                llm_access.raise_if_request_blocked(db, denied)
+            assert 'channel and its threads' in str(error.value)
+            assert '<t:160:R>' in str(error.value)
+
+        other_channel = FakeCtx(user_id=3, channel=_channel(45))
+        llm_access.raise_if_request_blocked(db, other_channel)
 
     def test_gemini_attempt_blocks_grok_before_spend_or_provider(
             self, db, monkeypatch):
