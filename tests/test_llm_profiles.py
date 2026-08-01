@@ -58,9 +58,12 @@ def test_profiles_are_requester_first_bounded_and_rank_colored():
     assert [record['discord_user_id'] for record in records] == ['1', '2']
     assert records[0] == {
         'discord_user_id': '1', 'display_name': 'Alice',
+        'is_requester': True, 'is_reply_target': False,
         'codeforces_handle': 'alice_cf', 'rating': 1337,
         'max_rating': 1399, 'rank': 'Pupil', 'rank_abbreviation': 'P',
         'rank_color': 'green (#77FF77)', 'country': 'Armenia'}
+    assert records[1]['is_requester'] is False
+    assert records[1]['is_reply_target'] is False
 
 
 def test_missing_profile_support_degrades_to_no_metadata():

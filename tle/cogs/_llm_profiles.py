@@ -24,7 +24,7 @@ _RANK_COLORS = {
 }
 
 
-def build_profiles(database, guild_id, requester, messages=()):
+def build_profiles(database, guild_id, requester, messages=(), focused=None):
     """Return compact JSON for linked participants in request-first order."""
     authors = {}
     order = []
@@ -54,19 +54,26 @@ def build_profiles(database, guild_id, requester, messages=()):
         return ''
 
     by_user = {str(user_id): profile for user_id, profile in rows}
+    requester_id = str(getattr(requester, 'id', ''))
+    focused_id = str(getattr(
+        getattr(focused, 'author', None), 'id', ''))
     records = []
     for user_id in order[:_MAX_PROFILES]:
         profile = by_user.get(user_id)
         if profile is None:
             continue
-        record = _profile_record(user_id, authors[user_id], profile)
+        record = _profile_record(
+            user_id, authors[user_id], profile,
+            is_requester=user_id == requester_id,
+            is_reply_target=bool(focused_id) and user_id == focused_id)
         if record is not None:
             records.append(record)
     return json.dumps(records, ensure_ascii=False, separators=(',', ':')) \
         if records else ''
 
 
-def _profile_record(user_id, author, profile):
+def _profile_record(user_id, author, profile, *, is_requester=False,
+                    is_reply_target=False):
     handle = _text(getattr(profile, 'handle', None))
     if not handle:
         return None
@@ -80,6 +87,8 @@ def _profile_record(user_id, author, profile):
     return {
         'discord_user_id': user_id,
         'display_name': _text(getattr(author, 'display_name', None)),
+        'is_requester': is_requester,
+        'is_reply_target': is_reply_target,
         'codeforces_handle': handle,
         'rating': rating,
         'max_rating': maximum,

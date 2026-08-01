@@ -337,7 +337,8 @@ def _reply_later_boundary(target, until, window_seconds):
     return cutoff
 
 
-def format_transcript(messages, focus=None, structured=False):
+def format_transcript(messages, focus=None, structured=False,
+                      requester_id=None):
     """Render collected messages as a plain transcript for the prompt.
 
     ``focus`` (the replied-to message) is marked so the model knows which line
@@ -348,7 +349,9 @@ def format_transcript(messages, focus=None, structured=False):
     rendered = []
     focus_position = None
     for message in messages or []:
-        line = _render_message(message, focus, structured=structured)
+        line = _render_message(
+            message, focus, structured=structured,
+            requester_id=requester_id)
         if line is None:
             continue
         if message is focus:
@@ -397,7 +400,7 @@ def format_transcript(messages, focus=None, structured=False):
     return _compose_transcript(rendered, start, end)
 
 
-def _render_message(message, focus, structured=False):
+def _render_message(message, focus, structured=False, requester_id=None):
     """Render one bounded transcript entry, or ``None`` when empty."""
     author = getattr(getattr(message, 'author', None), 'display_name', None) \
         or 'unknown'
@@ -411,6 +414,8 @@ def _render_message(message, focus, structured=False):
         body = body[:_MAX_MESSAGE_CHARS - 1] + '…'
 
     if structured:
+        message_author = getattr(message, 'author', None)
+        author_id = getattr(message_author, 'id', None)
         message_id = getattr(message, 'id', None)
         reply_to = _reply_target_token(message)
         reply_id = reply_to[1] if reply_to and reply_to[0] == 'id' else None
@@ -420,6 +425,10 @@ def _render_message(message, focus, structured=False):
             'id': str(message_id) if message_id is not None else None,
             'timestamp': timestamp,
             'author': author,
+            'author_is_bot': bool(getattr(message_author, 'bot', False)),
+            'is_requester': (
+                requester_id is not None and author_id is not None
+                and str(author_id) == str(requester_id)),
             'reply_to': reply_id,
             'focus': message is focus,
             'content': body,
