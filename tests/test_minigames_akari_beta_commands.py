@@ -171,31 +171,38 @@ class TestAkariBetaViews(_AkariBetaBase):
         ]
         assert shown_performances == sorted(
             shown_performances, reverse=True)
-        # Bob's fast 99% result beats both slower perfect results after the
-        # accuracy multiplier, proving this is performance rather than the
-        # ordinary accuracy-first ordering.
-        assert str(ordered[0].user_id) == str(members[1].id)
+        # Accuracy is a hard tier: Bob's much faster 99% result stays below
+        # both 100% results, then equal accuracy is ordered by time.
+        assert [str(row.user_id) for row in ordered] == [
+            str(members[0].id), str(members[2].id), str(members[1].id)]
 
-    def test_beta_performance_sort_uses_displayed_ties(self):
+    def test_beta_result_sort_is_accuracy_then_time_with_exact_ties(self):
         rows = [
             SimpleNamespace(
-                user_id=str(user_id), is_perfect=True, accuracy=100,
+                user_id=str(user_id), is_perfect=perfect, accuracy=accuracy,
                 time_seconds=time_seconds, message_id=user_id,
             )
-            for user_id, time_seconds in ((1, 30), (2, 20), (3, 10))
+            for user_id, perfect, accuracy, time_seconds in (
+                (1, True, 100, 30),
+                (2, False, 100, 20),
+                (3, False, 99, 1),
+                (4, False, 100, 30),
+            )
         ]
         puzzle_info = {
             '1': SimpleNamespace(performance=1500.40),
             '2': SimpleNamespace(performance=1500.49),
-            '3': SimpleNamespace(performance=1400.0),
+            '3': SimpleNamespace(performance=9999.0),
+            '4': SimpleNamespace(performance=1200.0),
         }
         sort_key, rank_key = _akari_beta_performance_keys(puzzle_info)
 
         ranked = _ranked_result_rows(
             rows, sort_key_fn=sort_key, rank_key_fn=rank_key)
 
-        assert [str(row.user_id) for _rank, row in ranked] == ['2', '1', '3']
-        assert [rank for rank, _row in ranked] == [1, 1, 3]
+        assert [str(row.user_id) for _rank, row in ranked] == [
+            '2', '1', '4', '3']
+        assert [rank for rank, _row in ranked] == [1, 2, 2, 4]
 
 
 class TestAkariBetaRouting:

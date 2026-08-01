@@ -7,6 +7,7 @@ from tle.util.akari_beta_rating import compute_akari_beta_ratings
 from tle.util.queens_improved_rating import (
     _RATING_K,
     _compute_round,
+    _compute_round_from_pair_score,
     _elo_expected,
     _field_expected,
     _soft_time_score,
@@ -71,6 +72,40 @@ def test_round_uses_pairwise_blended_proper_residuals():
             rel_tol=0, abs_tol=1e-10,
         )
     assert abs(sum(update.delta for update in updates.values())) < 1e-10
+
+
+def test_separate_performance_scores_do_not_change_rating_deltas():
+    ratings = {'a': 1200.0, 'b': 1200.0}
+
+    def rating_score(user, _opponent):
+        return 0.6 if user == 'a' else 0.4
+
+    def performance_score(user, _opponent):
+        return 1.0 if user == 'a' else 0.0
+
+    ordinary = _compute_round_from_pair_score(ratings, rating_score)
+    separated = _compute_round_from_pair_score(
+        ratings, rating_score,
+        performance_pair_score_fn=performance_score)
+
+    assert separated['a'].delta == ordinary['a'].delta
+    assert separated['b'].delta == ordinary['b'].delta
+    assert abs(sum(update.delta for update in separated.values())) < 1e-12
+    assert separated['a'].performance > ordinary['a'].performance
+    assert separated['b'].performance < ordinary['b'].performance
+
+
+def test_skipped_performance_does_not_call_its_pair_callback():
+    def unexpected(_user, _opponent):
+        raise AssertionError('performance callback should not run')
+
+    updates = _compute_round_from_pair_score(
+        {'a': 1200.0, 'b': 1200.0},
+        lambda user, _opponent: 0.6 if user == 'a' else 0.4,
+        compute_performance=False,
+        performance_pair_score_fn=unexpected)
+
+    assert all(update.performance is None for update in updates.values())
 
 
 def test_blend_keeps_an_extreme_probability_floor_without_full_elo_force():

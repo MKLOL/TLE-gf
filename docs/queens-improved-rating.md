@@ -149,23 +149,39 @@ The performance drop from 12 to 13 seconds is about 60 points; the drop from
 13 to 16 is about 157 points. The larger time gap therefore matters about 2.6
 times as much without making either result catastrophic.
 
-## Akari accuracy multiplier
+## Akari accuracy-first pair scores
 
-Akari `+beta` feeds an accuracy-adjusted time into this same engine:
+Akari `+beta` keeps the shared zero-sum update but supplies its own pair score.
+For equal accuracy, the ordinary soft time comparison applies. For different
+accuracies, let `L` be the lower-accuracy result and `H` the higher-accuracy
+result:
 
 ```text
-effective_time = raw_time * sqrt(101 - accuracy)
+adjusted_time_L = time_L + time_H
+S_LH = soft_time(adjusted_time_L, time_H)
+S_HL = 1 - S_LH
 ```
 
-This makes 100% `1x`, 99% about `1.414x`, 90% about `3.32x`, and 68% about
-`5.74x`. A 99% result must be approximately 29% faster to tie a perfect
-result. Accuracy therefore matters even at 99%, but there is no hard
-perfect/imperfect cliff and an exceptional time can overcome the penalty.
+The denominator is the higher-accuracy time. Consequently, a very fast lower
+accuracy can approach a tie but never win, and taking longer can only worsen
+its score. Every nonzero accuracy difference is a tier boundary; the size of
+the percentage gap does not add another parameter. Pair scores remain
+complementary, so the K=124 rating round remains exactly zero-sum.
 
-In `;akari results +beta`, rows are sorted by beta performance rather than the
-ordinary accuracy-first result key. Performance is shown as a whole number,
-so values that round to the same displayed number receive the same competition
-rank. This makes the visible order, value, and rank agree.
+Displayed event performance uses a separate hierarchical pair score:
+
+```text
+H_ij = 1                         if accuracy_i > accuracy_j
+H_ij = 0                         if accuracy_i < accuracy_j
+H_ij = soft_time(time_i, time_j) if accuracy_i = accuracy_j
+```
+
+The same common-field inversion turns each player's mean `H_ij` into `Perf`.
+This guarantees that every higher-accuracy result has higher performance than
+every lower-accuracy result, while time orders players inside one accuracy
+tier. `;akari results +beta` ranks rows directly by accuracy descending and
+time ascending; exact `(accuracy, time)` ties share a competition rank. The
+perfect flag adds no hidden tier beyond its reported accuracy.
 
 ## Snapshot replay
 

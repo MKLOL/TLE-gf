@@ -2,8 +2,9 @@
 
 ## Scope and decision
 
-This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses the
-same engine after multiplying time by `sqrt(101 - accuracy)`.
+This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses its
+zero-sum update with an accuracy-first, opponent-relative pair score and a
+separate hierarchical score for displayed event performance.
 Ordinary Queens, ordinary Akari, persisted rating snapshots, registration
 policy, and command routing are outside the formula change.
 
@@ -73,33 +74,45 @@ Accuracy alone cannot distinguish calibrated confidence from overconfidence.
 
 ## Exact model
 
-For a field of `n` players, transform player `i`'s time:
+For a Queens field of `n` players, transform player `i`'s time:
 
 ```text
 x_i = ln(time_i)
 ```
 
-Akari uses the same equations after replacing this with:
-
-```text
-x_i = ln(raw_time_i) + 0.5 * ln(101 - accuracy_i)
-effective_time_i = raw_time_i * sqrt(101 - accuracy_i)
-```
-
-Accuracy must be an integer from 0 through 100. The perfect flag adds no
-second tier: 100% is `1x`, 99% is `sqrt(2)x`, and a sufficiently fast
-imperfect result can outrank a slower perfect result.
-
-For each pair:
+Queens pair evidence is:
 
 ```text
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
 S_ij = sigmoid(z_ij)
+```
+
+Akari uses the same score for equal accuracy. For unequal accuracy, identify
+the lower-accuracy result `L` and higher-accuracy result `H`:
+
+```text
+adjusted_time_L = time_L + time_H
+S_LH = soft_time(adjusted_time_L, time_H)
+S_HL = 1 - S_LH
+```
+
+Equivalently, the lower player's unclipped logit numerator is
+`-ln(1 + time_L / time_H)`. Higher accuracy therefore always wins the direct
+pair; a faster lower-accuracy result can approach but never cross a tie, and a
+slower one is never rewarded. Accuracy must be an integer from 0 through 100.
+Every nonzero accuracy difference uses the same tier rule, and the perfect
+flag adds no separate tier.
+
+For both games, expected score and robust update weight are:
+
+```text
 E_ij = sigmoid((rating_i - rating_j) / (800 / ln(10)))
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 ```
 
-Lower time is better. The update is:
+Lower time is better for Queens and within an Akari accuracy tier. Across
+Akari tiers, accuracy determines the winner and time determines the margin.
+The update is:
 
 ```text
 delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
@@ -114,16 +127,22 @@ The implementation includes a neutral self-comparison. Its score and
 expectation are both `0.5` at the incoming rating, so it contributes zero to
 the update and explains the denominator `n`.
 
-The `±8` limit activates only when the raw-time ratio exceeds:
+For Queens, the `±8` limit activates when the raw-time ratio exceeds:
 
 ```text
 exp(0.35 * 8) = 16.445
 ```
 
-It bounds one pair score to `[0.000335, 0.999665]`. It is not a cap on rating
-change. The ordinary probability response already saturates well before that
-point; the limit prevents a corrupt or repeatedly absurd margin from implying
-numerical certainty and unlimited pair separation.
+For unequal-accuracy Akari pairs it clips the adjusted ratio
+`1 + time_L / time_H`; equivalently, the raw lower/higher time ratio must
+exceed `15.445`.
+
+It bounds one rating-update pair score to `[0.000335, 0.999665]`. It is not a
+cap on rating change. The ordinary probability response already saturates well
+before that point; the limit prevents a corrupt or repeatedly absurd margin
+from implying numerical certainty and unlimited pair separation. Akari's
+display-only hierarchy may use exact `0` or `1`; those values never enter a
+delta, and the neutral self-score keeps their field means strictly interior.
 
 ## Proven guarantees
 
@@ -171,7 +190,7 @@ field. There is no post-processing delta clamp.
 
 ### One-time contamination bound
 
-If one participant `k`'s time changes while the field and pre-ratings stay
+If one participant `k`'s result changes while the field and pre-ratings stay
 fixed, every comparison not involving `k` is bit-for-bit unchanged. For any
 other player `i`, only one term can move:
 
@@ -180,7 +199,7 @@ abs(delta_i_after - delta_i_before) <= 124 / n
 ```
 
 The limit is 10.34 points at `n = 12` and 6.2 at `n = 20`. The changed player's
-own time affects `n - 1` terms, so their own update can move by almost the full
+own result affects `n - 1` terms, so their own update can move by almost the full
 natural daily bound. The formula protects the rest of the field more strongly
 than it protects the owner of a corrupt record.
 
@@ -189,18 +208,33 @@ expectations, so full-history corruption can propagate.
 
 ### Monotone event performance
 
-Displayed performance uses the player's mean soft field score:
+Displayed performance inverts a player's mean field score:
 
 ```text
-A_i = mean(j in field, S_ij)
+A_i = mean(j in field, Q_ij)
 F(P) = mean(j in field, E(P, rating_j))
 F(P_i) = A_i
 ```
 
-`F` is strictly increasing, so the inverse is unique. Better effective results
-always have higher performance, and identical score vectors share exactly one
-performance regardless of incoming rating. The neutral self-score keeps the
-target inside `(0, 1)` and the displayed result finite.
+For Queens, `Q_ij = S_ij`. Akari deliberately uses a display-only hierarchy:
+
+```text
+Q_ij = 1                         if accuracy_i > accuracy_j
+Q_ij = 0                         if accuracy_i < accuracy_j
+Q_ij = soft_time(time_i, time_j) if accuracy_i = accuracy_j
+```
+
+This display score never enters the rating delta. `F` is strictly increasing,
+so the inverse is unique. Queens performance follows time; Akari performance
+follows accuracy descending and then time ascending. The neutral self-score
+keeps every target inside `(0, 1)` and every displayed result finite. Exact
+result ties share one performance regardless of incoming rating.
+
+For an Akari accuracy tier of `m` players with `B` players in lower tiers, the
+unnormalized display total lies between `B + 0.5` and `B + m - 0.5`. Adjacent
+tiers are therefore separated by at least one pair point, or `1/n` after the
+field mean. Within a tier, the soft-time score is strictly monotone. This proves
+the stated accuracy/time ordering for every field, not only observed data.
 
 Adding the same constant to every pre-rating leaves all deltas unchanged and
 adds that constant to every performance. Equal times share the same
@@ -213,8 +247,8 @@ result order. The unique field inversion avoids that ambiguity. On the Queens
 snapshot it preserved every strict result comparison, and every exact result
 tie shared one performance.
 
-The delta applies opponent-specific `W_ij` values while performance uses the
-unweighted mean soft result. In unusually spread fields, delta and
+The delta applies opponent-specific `W_ij` values while performance uses an
+unweighted mean display score. In unusually spread fields, delta and
 `performance - pre_rating` can therefore have opposite signs without changing
 the day's performance order. In the documented merged live/import replay this
 occurred in 13 of 994 contested Queens performances (1.31%); the largest
@@ -239,8 +273,10 @@ odds.
 
 ### Akari snapshot cross-check
 
-The supplied Akari snapshot figures below are the previous K=144 baseline
-with the square-root accuracy multiplier:
+The supplied Akari snapshot figures below are historical: they use the retired
+K=144 square-root accuracy multiplier, not the current additive pair score.
+They remain only as a record of the earlier experiment and are not evidence
+for the current Akari policy:
 
 | Measure | Previous K=144 Akari beta |
 |---|---:|
@@ -250,16 +286,16 @@ with the square-root accuracy multiplier:
 | Loss magnitude, 95th / 99th / worst | 53.75 / 61.91 / 70.49 |
 | Gain, 95th / 99th / best | 46.93 / 58.28 / 71.14 |
 
-The largest per-day zero-sum error was `6.39e-14`. Performance had no
-strict-order inversions, and every exact result tie shared one performance.
-For the merged Akari replay, delta/performance direction differed in 45 of
-4,149 contested performances (1.08%); the largest opposite-direction offset
-was 54.56 points.
+The largest per-day zero-sum error in that retired replay was `6.39e-14`.
+Under its old effective-time order, performance had no strict-order inversions
+and every exact result tie shared one performance. Delta/performance direction
+differed in 45 of 4,149 contested performances (1.08%); the largest
+opposite-direction offset was 54.56 points.
 
-`+beta` Akari result tables sort by descending beta performance. Since the
-table displays whole-number performance, values that round to the same number
-receive the same competition rank; ordinary Akari result ordering is
-unchanged outside `+beta`.
+Current `+beta` Akari result tables sort explicitly by accuracy descending and
+time ascending. The hierarchical display score proves that exact performance
+has the same order; exact `(accuracy, time)` ties share a competition rank.
+Ordinary Akari result ordering is unchanged outside `+beta`.
 
 ## Historical alternative-model tournament (four-second offset)
 
@@ -377,8 +413,9 @@ Future changes to `+beta` must retain:
 - the `124/n` one-opponent contamination bound;
 - rating-translation invariance;
 - unique, result-monotone event performance;
-- Akari accuracy validation and square-root effective time;
-- Akari `+beta` result ordering and ranks based on displayed performance;
+- Akari accuracy validation and additive, complementary rating pair scores;
+- Akari hierarchical performance ordered by accuracy, then time;
+- Akari `+beta` result ordering and exact-tie ranks based on `(accuracy, time)`;
 - deterministic replay under arbitrary input ordering.
 
 Any future retuning needs substantially more rated days, a preregistered

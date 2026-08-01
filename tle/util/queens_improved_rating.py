@@ -147,8 +147,9 @@ def _compute_round(ratings, times, *, compute_performance=True):
 
 
 def _compute_round_from_pair_score(
-        ratings, pair_score_fn, *, compute_performance=True):
-    """Convert complementary pair scores into proper-score beta updates."""
+        ratings, pair_score_fn, *, compute_performance=True,
+        performance_pair_score_fn=None):
+    """Convert update scores and optional display scores into one beta round."""
     users = sorted(ratings)
     if len(users) < 2:
         return {
@@ -163,15 +164,29 @@ def _compute_round_from_pair_score(
         scores = []
         residuals = []
         for opponent in users:
-            score = (
+            update_score = (
                 0.5 if opponent == user
                 else float(pair_score_fn(user, opponent))
             )
-            if not math.isfinite(score) or not 0 <= score <= 1:
-                raise ValueError(f'Beta pair score must be in [0, 1], got {score}.')
+            if (not math.isfinite(update_score)
+                    or not 0 <= update_score <= 1):
+                raise ValueError(
+                    f'Beta pair score must be in [0, 1], '
+                    f'got {update_score}.')
             expected = _elo_expected(ratings[user], ratings[opponent])
-            scores.append(score)
-            residuals.append(_proper_residual(score, expected))
+            residuals.append(_proper_residual(update_score, expected))
+            performance_score = update_score
+            if (compute_performance
+                    and performance_pair_score_fn is not None
+                    and opponent != user):
+                performance_score = float(
+                    performance_pair_score_fn(user, opponent))
+                if (not math.isfinite(performance_score)
+                        or not 0 <= performance_score <= 1):
+                    raise ValueError(
+                        'Beta performance pair score must be in [0, 1], '
+                        f'got {performance_score}.')
+            scores.append(performance_score)
         scores_by_user[user] = scores
         residuals_by_user[user] = residuals
 
@@ -191,7 +206,8 @@ def _compute_round_from_pair_score(
 
 
 def _compute_pair_round(
-        ratings, rows, pair_score_fn, *, compute_performance=True):
+        ratings, rows, pair_score_fn, *, compute_performance=True,
+        performance_pair_score_fn=None):
     """Run a beta round using a game-specific complementary pair score."""
     users = sorted(ratings)
     if set(users) != set(rows):
@@ -201,6 +217,11 @@ def _compute_pair_round(
         lambda user, opponent: pair_score_fn(
             rows[user], rows[opponent]),
         compute_performance=compute_performance,
+        performance_pair_score_fn=(
+            None if performance_pair_score_fn is None
+            else lambda user, opponent: performance_pair_score_fn(
+                rows[user], rows[opponent])
+        ),
     )
 
 
@@ -248,16 +269,21 @@ def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
         rank_fn=None, pair_score_fn=None, row_validator_fn=None,
-        performance_puzzles=None, **_ignored):
+        performance_pair_score_fn=None, performance_puzzles=None, **_ignored):
     """Replay Queens results with the experimental soft-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
     existing ``+beta`` table and graph can use this engine without storing
     a second rating snapshot.  Queens inactivity never changes visible skill;
     ``include_decay_in_history`` and ``rank_fn`` are accepted only for shared
-    engine compatibility.
+    engine compatibility. A custom ``performance_pair_score_fn`` can decouple
+    event-performance ordering from rating evidence, but requires a custom
+    ``pair_score_fn`` and never affects deltas.
     """
     del include_decay_in_history, rank_fn
+    if performance_pair_score_fn is not None and pair_score_fn is None:
+        raise ValueError(
+            'A performance pair score requires a rating pair score.')
     if performance_puzzles is not None:
         performance_puzzles = {
             int(puzzle_number) for puzzle_number in performance_puzzles
@@ -334,7 +360,8 @@ def compute_queens_improved_ratings(
             if pair_score_fn is None
             else _compute_pair_round(
                 before, day_rows, pair_score_fn,
-                compute_performance=compute_performance)
+                compute_performance=compute_performance,
+                performance_pair_score_fn=performance_pair_score_fn)
         )
 
         for user_id in active_ids:

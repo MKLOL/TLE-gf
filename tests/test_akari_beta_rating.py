@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from tle.util.akari_beta_rating import (
     _akari_beta_pair_score,
+    _akari_beta_performance_pair_score,
     compute_akari_beta_ratings,
 )
 from tle.util.queens_improved_rating import _soft_time_score
@@ -38,65 +39,105 @@ def _one_round(rows):
     return states, histories
 
 
-def test_accuracy_uses_parameter_free_sqrt_effective_time():
-    baseline = _row(
-        1, seconds=100, perfect=True, accuracy=100)
-    for accuracy in (100, 99, 98, 97, 90, 68, 0):
-        candidate = _row(
-            2, seconds=100, perfect=False, accuracy=accuracy)
-        multiplier = math.sqrt(101 - accuracy)
-        expected = _soft_time_score(100 * multiplier, 100)
-        assert math.isclose(
-            _akari_beta_pair_score(candidate, baseline),
-            expected,
-            rel_tol=0,
-            abs_tol=1e-15,
-        )
+def test_additive_pair_score_uses_higher_accuracy_time_as_denominator():
+    higher = _row(1, seconds=100, perfect=True, accuracy=100)
+    lower = _row(2, seconds=50, perfect=False, accuracy=99)
 
+    expected_lower = _soft_time_score(50 + 100, 100)
+    lower_score = _akari_beta_pair_score(lower, higher)
 
-def test_accuracy_speed_tradeoff_has_the_expected_break_even():
-    perfect = _row(
-        1, seconds=100, perfect=True, accuracy=100)
-    tied_99 = _row(
-        2, seconds=100 / math.sqrt(2),
-        perfect=False, accuracy=99)
-    faster_99 = _row(
-        3, seconds=60, perfect=False, accuracy=99)
-    slower_99 = _row(
-        4, seconds=80, perfect=False, accuracy=99)
-    exactly_tied_97 = _row(
-        5, seconds=50, perfect=False, accuracy=97)
-
+    assert math.isclose(lower_score, expected_lower, rel_tol=0, abs_tol=1e-15)
     assert math.isclose(
-        _akari_beta_pair_score(tied_99, perfect),
-        0.5,
-        rel_tol=0,
-        abs_tol=1e-15,
-    )
-    assert _akari_beta_pair_score(faster_99, perfect) > 0.5
-    assert _akari_beta_pair_score(slower_99, perfect) < 0.5
-    assert math.isclose(
-        _akari_beta_pair_score(exactly_tied_97, perfect),
-        0.5,
+        _akari_beta_pair_score(higher, lower),
+        1.0 - expected_lower,
         rel_tol=0,
         abs_tol=1e-15,
     )
 
 
-def test_equal_time_99_percent_has_a_meaningful_smooth_penalty():
-    perfect = _row(
-        1, seconds=100, perfect=True, accuracy=100)
-    almost = _row(
-        2, seconds=100, perfect=False, accuracy=99)
+def test_lower_accuracy_never_wins_or_benefits_from_taking_longer():
+    higher = _row(1, seconds=100, perfect=True, accuracy=100)
+    lower_rows = [
+        _row(2, seconds=1, perfect=False, accuracy=99),
+        _row(3, seconds=100, perfect=False, accuracy=99),
+        _row(4, seconds=200, perfect=False, accuracy=99),
+    ]
+    scores = [
+        _akari_beta_pair_score(lower, higher) for lower in lower_rows
+    ]
 
-    expected = _soft_time_score(100 * math.sqrt(2), 100)
-    score = _akari_beta_pair_score(almost, perfect)
-    assert math.isclose(score, expected, rel_tol=0, abs_tol=1e-15)
-    assert 0.27 < score < 0.28
+    assert 0 < scores[2] < scores[1] < scores[0] < 0.5
+    equally_slow_but_much_lower = _row(
+        5, seconds=100, perfect=False, accuracy=0)
+    assert (
+        _akari_beta_pair_score(equally_slow_but_much_lower, higher)
+        == scores[1]
+    )
 
-    states, histories = _one_round([perfect, almost])
-    assert states['1'].rating > 1200 > states['2'].rating
+
+def test_extreme_ratio_keeps_a_strict_complementary_accuracy_result():
+    higher = _row(
+        1, seconds=2 ** 63 - 1, perfect=True, accuracy=100)
+    lower = _row(2, seconds=1, perfect=False, accuracy=99)
+
+    lower_score = _akari_beta_pair_score(lower, higher)
+    higher_score = _akari_beta_pair_score(higher, lower)
+
+    assert 0 < lower_score < 0.5 < higher_score < 1
+    assert lower_score + higher_score == 1.0
+
+
+def test_large_integral_string_times_are_normalized_before_scoring():
+    rows = [
+        _row(
+            1, seconds='1' + '0' * 309,
+            perfect=True, accuracy=100),
+        _row(2, seconds='1', perfect=False, accuracy=99),
+    ]
+
+    states, histories = _one_round(rows)
+
+    assert set(states) == {'1', '2'}
+    assert all(math.isfinite(state.rating) for state in states.values())
     assert histories['1'][0].performance > histories['2'][0].performance
+
+
+def test_pair_scores_are_complementary_across_accuracy_and_time():
+    rows = [
+        _row(1, seconds=1, perfect=True, accuracy=100),
+        _row(2, seconds=10, perfect=False, accuracy=100),
+        _row(3, seconds=2, perfect=False, accuracy=99),
+        _row(4, seconds=200, perfect=False, accuracy=0),
+        _row(5, seconds=10 ** 10_000, perfect=False, accuracy=50),
+    ]
+    for left in rows:
+        for right in rows:
+            assert math.isclose(
+                _akari_beta_pair_score(left, right)
+                + _akari_beta_pair_score(right, left),
+                1.0,
+                rel_tol=0,
+                abs_tol=1e-15,
+            )
+
+
+def test_equal_accuracy_keeps_the_existing_soft_time_margin():
+    fast = _row(1, seconds=10, perfect=False, accuracy=95)
+    slow = _row(2, seconds=20, perfect=False, accuracy=95)
+    tied = _row(3, seconds=10, perfect=False, accuracy=95)
+
+    assert _akari_beta_pair_score(fast, slow) == _soft_time_score(10, 20)
+    assert _akari_beta_pair_score(fast, slow) > 0.5
+    assert _akari_beta_pair_score(slow, fast) < 0.5
+    assert _akari_beta_pair_score(fast, tied) == 0.5
+
+
+def test_display_performance_uses_a_hard_accuracy_hierarchy():
+    higher = _row(1, seconds=1000, perfect=True, accuracy=100)
+    lower = _row(2, seconds=1, perfect=False, accuracy=99)
+
+    assert _akari_beta_performance_pair_score(higher, lower) == 1.0
+    assert _akari_beta_performance_pair_score(lower, higher) == 0.0
 
 
 def test_perfect_flag_does_not_add_a_hidden_accuracy_tier():
@@ -109,36 +150,62 @@ def test_perfect_flag_does_not_add_a_hidden_accuracy_tier():
     assert _akari_beta_pair_score(plain_100, marked_perfect) == 0.5
 
 
-def test_performance_follows_effective_time_across_accuracy_levels():
+def test_performance_is_accuracy_first_then_time_even_in_adversarial_field():
     rows = [
-        _row(1, seconds=100, perfect=True, accuracy=100),
-        _row(2, seconds=60, perfect=False, accuracy=99),
-        _row(3, seconds=80, perfect=False, accuracy=98),
-        _row(4, seconds=40, perfect=False, accuracy=90),
-        _row(5, seconds=20, perfect=False, accuracy=68),
-        # 50 * sqrt(4) ties 100 * sqrt(1) exactly.
-        _row(6, seconds=50, perfect=False, accuracy=97),
+        _row(1, seconds=1000, perfect=True, accuracy=100),
+        _row(2, seconds=1, perfect=False, accuracy=99),
+        _row(3, seconds=1, perfect=False, accuracy=98),
+        _row(4, seconds=2, perfect=False, accuracy=98),
     ]
     _states, histories = _one_round(rows)
     performances = {
         int(user_id): points[0].performance
         for user_id, points in histories.items()
     }
-    effective = {
-        int(row.user_id): (
-            row.time_seconds * math.sqrt(101 - row.accuracy)
-        )
-        for row in rows
-    }
 
-    for left in effective:
-        for right in effective:
-            if effective[left] < effective[right]:
-                assert performances[left] > performances[right]
-            elif effective[left] == effective[right]:
+    assert (
+        performances[1] > performances[2]
+        > performances[3] > performances[4]
+    )
+
+
+def test_random_fields_keep_performance_in_accuracy_time_order():
+    rng = random.Random(20260801)
+    for _trial in range(40):
+        rows = [
+            _row(
+                user_id,
+                seconds=rng.randint(1, 3600),
+                perfect=False,
+                accuracy=rng.randint(0, 100),
+            )
+            for user_id in range(1, rng.randint(2, 20) + 1)
+        ]
+        states, histories = _one_round(rows)
+        ordered = sorted(
+            rows,
+            key=lambda row: (-row.accuracy, row.time_seconds),
+        )
+        performances = {
+            user_id: histories[user_id][0].performance
+            for user_id in states
+        }
+
+        for better, worse in zip(ordered, ordered[1:]):
+            better_result = (better.accuracy, -better.time_seconds)
+            worse_result = (worse.accuracy, -worse.time_seconds)
+            if better_result == worse_result:
                 assert math.isclose(
-                    performances[left], performances[right],
-                    rel_tol=0, abs_tol=1e-9)
+                    performances[better.user_id],
+                    performances[worse.user_id],
+                    rel_tol=0,
+                    abs_tol=1e-9,
+                )
+            else:
+                assert (
+                    performances[better.user_id]
+                    > performances[worse.user_id]
+                )
 
 
 def test_same_quality_uses_soft_time_margin_and_equal_results_tie():
