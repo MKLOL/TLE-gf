@@ -72,6 +72,21 @@ def disabled_scope(database, guild_id, channel_id=None):
     return None
 
 
+def _has_enabled_channel_override(database, guild_id):
+    """Whether a disabled server has been selectively reopened anywhere."""
+    getter = getattr(database, 'get_all_guild_configs', None)
+    if getter is None:
+        return False
+    for row in getter(guild_id):
+        key, value = (
+            getattr(row, 'key', row[0]),
+            getattr(row, 'value', row[1]),
+        )
+        if key.startswith(_CHANNEL_DISABLED_PREFIX) and value == _ENABLED:
+            return True
+    return False
+
+
 def set_disabled(database, guild_id, channel_id=None, *, disabled, scope):
     """Apply a server baseline or a channel override.
 
@@ -113,6 +128,9 @@ def request_block_reason(database, guild_id, channel_id, user_id):
 def _policy_block_reason(database, guild_id, channel_id, user_id):
     scope = disabled_scope(database, guild_id, channel_id)
     if scope == 'guild':
+        if (channel_id is not None
+                and _has_enabled_channel_override(database, guild_id)):
+            return 'LLM requests are disabled in this channel.'
         return 'LLM requests are disabled in this server.'
     if scope == 'channel':
         return 'LLM requests are disabled in this channel.'

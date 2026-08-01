@@ -40,6 +40,10 @@ def _add_config_storage(database):
         values.__setitem__((str(guild_id), key), value))
     database.delete_guild_config = (
         lambda guild_id, key: values.pop((str(guild_id), key), None))
+    database.get_all_guild_configs = lambda guild_id: [
+        (key, value) for (stored_guild, key), value in values.items()
+        if stored_guild == str(guild_id)
+    ]
 
     def delete_by_prefix(guild_id, prefix):
         guild_id = str(guild_id)
@@ -199,6 +203,20 @@ class TestDisableCommands:
 
         assert llm_access.request_block_reason(db, 100, 44, 1) == \
             'You are not allowed to use LLM requests in this server.'
+
+    def test_selectively_reopened_server_reports_other_channels_as_disabled(
+            self, db):
+        _add_config_storage(db)
+        llm_access.set_disabled(db, 100, disabled=True, scope='guild')
+        assert llm_access.disabled_scope(db, 100, 45) == 'guild'
+
+        llm_access.set_disabled(
+            db, 100, 44, disabled=False, scope='channel')
+
+        assert llm_access.disabled_scope(db, 100, 44) is None
+        assert llm_access.disabled_scope(db, 100, 45) == 'guild'
+        assert llm_access.request_block_reason(db, 100, 45, 1) == \
+            'LLM requests are disabled in this channel.'
 
     def test_channel_disable_isolated_and_inherited_by_threads(self, db):
         _add_config_storage(db)
