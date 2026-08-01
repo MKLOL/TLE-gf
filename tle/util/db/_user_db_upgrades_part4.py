@@ -287,3 +287,26 @@ def upgrade_1_50_0(db):
     ''')
     db.commit()
     logger.info('1.50.0: Upgrade complete')
+
+
+@registry.register('1.51.0', 'Exact channel and thread LLM cooldown scopes')
+def upgrade_1_51_0(db):
+    """Keep 1.50 parent-channel cooldowns covering their child threads."""
+    logger.info('1.51.0: Migrating shared LLM cooldown scopes')
+    # A prefixed row can only pre-exist after a partial rollout. In that case,
+    # the raw row may already represent an exact scope, so preserve both.
+    db.execute('''
+        UPDATE OR IGNORE llm_cooldown
+        SET channel_id = 'family:' || channel_id
+        WHERE channel_id != '*' AND channel_id NOT LIKE 'family:%'
+    ''')
+    ambiguous = db.execute('''
+        SELECT COUNT(*) FROM llm_cooldown
+        WHERE channel_id != '*' AND channel_id NOT LIKE 'family:%'
+    ''').fetchone()[0]
+    if ambiguous:
+        logger.warning(
+            '1.51.0: Preserved %d ambiguous exact cooldown scope(s)',
+            ambiguous)
+    db.commit()
+    logger.info('1.51.0: Upgrade complete')
