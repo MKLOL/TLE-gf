@@ -232,7 +232,9 @@ _EXPLICIT_CONTEXT_PATTERNS = tuple(
 
 _BARE_CONTEXT_REQUEST = re.compile(
     r'^(?:why|how so|thoughts|your thoughts|what do you think|'
-    r'what did i miss|catch me up|who is right|who do you agree with|'
+    r'what did i miss|catch me up|'
+    r'(?:summari[sz]e|recap) (?:this|that|it|these|those|above)|'
+    r'who is right|who do you agree with|'
     r'what (?:are|were) '
     r'(?:they|we|people|everyone|you (?:all|guys)) '
     r'(?:talking|arguing|discussing)(?: about)?|what happened|'
@@ -248,6 +250,7 @@ _BARE_CONTEXT_REQUEST = re.compile(
 # I miss?" into direct requests merely because the command also has an image.
 _VISUAL_DEICTIC_REQUEST = re.compile(
     r'^(?:please\s+)?(?:'
+    r'(?:summari[sz]e|recap) (?:this|that|it)|'
     r'(?:what|who) (?:is|are)(?: in)? (?:this|that|these|those)'
     r'(?: (?:image|photo|picture|screenshot))?|'
     r'what (?:does|did) (?:this|that|it) mean|'

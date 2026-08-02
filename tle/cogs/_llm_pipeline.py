@@ -123,9 +123,9 @@ async def classify_grok(pool, question, is_reply, session=None, stats=None,
                 max_attempts=2),
             timeout=constants.LLM_ROUTER_TIMEOUT_SECONDS)
     except (xai_api.XaiError, TimeoutError) as err:
-        logger.warning('Grok router failed (%s) — answering without context',
+        logger.warning('Grok router failed (%s) — answering with context',
                        err)
-        return llm_context.MODE_DIRECT
+        return llm_context.MODE_CONTEXT
 
     mode = llm_context.parse_mode(raw, is_reply)
     logger.info('Grok routed to %s (raw=%r, is_reply=%s)', mode, raw, is_reply)
@@ -158,19 +158,17 @@ async def gather(ctx, mode, referenced, bot_user_id=None, message_limit=None,
         window = await llm_history.collect_recent(
             ctx.channel, before=ctx.message,
             limit=recent_limit,
-            window_seconds=constants.LLM_CONTEXT_WINDOW_SECONDS,
-            bot_user_id=bot_user_id, include_other_bots=False)
+            window_seconds=constants.LLM_CONTEXT_RECENT_MAX_AGE_SECONDS,
+            bot_user_id=bot_user_id, include_other_bots=False,
+            gap_seconds=constants.LLM_CONTEXT_GAP_SECONDS)
     else:
         return []
 
     if not window:
-        logger.warning('LLM gathered no context for mode=%s (is_reply=%s) — '
-                       'check Read Message History and '
-                       'LLM_CONTEXT_WINDOW_SECONDS',
-                       mode, referenced is not None)
-    else:
-        logger.info('LLM gathered %d message(s) for mode=%s',
-                    len(window), mode)
+        logger.warning(
+            'LLM gathered no context for mode=%s (is_reply=%s) ? '
+            'check Read Message History and context window settings',
+            mode, referenced is not None)
     return window
 
 

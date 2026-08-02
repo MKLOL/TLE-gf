@@ -22,6 +22,9 @@ class TestLocalRouting:
         'what did Alice mean above?',
         'why?',
         'what about that?',
+        'summarize this',
+        'summarise that',
+        'recap it',
     ])
     def test_context_dependent_requests_are_detected(self, question):
         assert llm_context.local_mode_hint(question) == \
@@ -48,6 +51,9 @@ class TestLocalRouting:
     def test_a_current_image_resolves_a_bare_referent(self):
         assert llm_context.local_mode_hint(
             'what is this?', has_current_images=True) == \
+            llm_context.MODE_DIRECT
+        assert llm_context.local_mode_hint(
+            'summarize this', has_current_images=True) == \
             llm_context.MODE_DIRECT
 
 
@@ -136,6 +142,16 @@ class TestProviderRouting:
         assert seen['reasoning_effort'] == 'low'
         assert seen['max_output_tokens'] == \
             constants.XAI_ROUTER_MAX_OUTPUT_TOKENS == 256
+
+    def test_grok_router_failure_falls_back_to_context(
+            self, monkeypatch):
+        async def complete(*args, **kwargs):
+            raise xai_api.XaiError('router unavailable')
+
+        monkeypatch.setattr(xai_api, 'complete', complete)
+        mode = run(llm_pipeline.classify_grok(
+            None, 'does their reasoning hold?', False))
+        assert mode == llm_context.MODE_CONTEXT
 
     def test_context_switch_still_disables_nonreply_history(
             self, monkeypatch):

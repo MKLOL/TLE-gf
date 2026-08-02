@@ -79,5 +79,10 @@ export LLM_CONTEXT_ENABLED="1"
 export LLM_CONTEXT_MESSAGES="50"
 export LLM_CONTEXT_WINDOW_SECONDS="600"
 
+# Recent non-reply context follows the active conversation backward
+# until an inactivity gap or hard maximum age is reached.
+export LLM_CONTEXT_GAP_SECONDS="600"
+export LLM_CONTEXT_RECENT_MAX_AGE_SECONDS="21600"
+
 # Set to enable automatic venv usage.
 export VENV_DIR=""

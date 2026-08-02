@@ -79,12 +79,25 @@ def _is_usable(message, bot_user_id=None, include_other_bots=False,
     return bool(message_text(message))
 
 
-async def collect_recent(channel, before=None, limit=50, window_seconds=600,
-                         bot_user_id=None, include_other_bots=False):
-    """Messages just before ``before``, newest-last.
+def _outside_session(newer_at, older_at, gap_seconds):
+    """Return whether adjacent usable messages cross an inactivity gap."""
+    if gap_seconds is None or newer_at is None or older_at is None:
+        return False
+    try:
+        gap = max(0, int(gap_seconds))
+        return (newer_at - older_at).total_seconds() > gap
+    except (AttributeError, TypeError, ValueError):
+        return False
 
-    Returns [] rather than raising if history is unreadable — an answer
-    without context beats no answer.
+
+async def collect_recent(channel, before=None, limit=50, window_seconds=600,
+                         bot_user_id=None, include_other_bots=False,
+                         gap_seconds=None):
+    """Collect the active conversation before ``before``, oldest-first.
+
+    ``window_seconds`` is the hard maximum age. When ``gap_seconds`` is
+    provided, collection stops at the first inactivity boundary.
+    Unreadable history returns an empty list rather than failing.
     """
     after = None
     anchor = getattr(before, 'created_at', None)
@@ -97,6 +110,7 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
 
     wanted = max(0, int(limit))
     collected = []
+    newer_at = anchor
     try:
         # oldest_first defaults to True whenever `after` is given, which would
         # take the *oldest* `limit` messages in the window and walk forward.
@@ -105,10 +119,18 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
         scan_limit = wanted * _HISTORY_SCAN_FACTOR
         async for message in channel.history(limit=scan_limit, before=before,
                                              after=after, oldest_first=False):
-            if _is_usable(message, bot_user_id, include_other_bots):
-                collected.append(message)
-                if len(collected) >= wanted:
-                    break
+            if not _is_usable(message, bot_user_id, include_other_bots):
+                continue
+
+            sent_at = getattr(message, 'created_at', None)
+            if _outside_session(newer_at, sent_at, gap_seconds):
+                break
+
+            collected.append(message)
+            if sent_at is not None:
+                newer_at = sent_at
+            if len(collected) >= wanted:
+                break
     except Exception:  # noqa: BLE001 — missing Read Message History, etc.
         logger.exception('Could not read channel history for ;llm')
         return []

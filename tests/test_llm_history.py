@@ -149,6 +149,33 @@ class TestCollectRecent:
                                        window_seconds=600))
         assert channel.calls[0]['after'] == anchor.created_at - timedelta(seconds=600)
 
+    def test_recent_context_stops_at_an_inactivity_gap(self):
+        channel = FakeHistoryChannel([
+            HistMessage(content='stale topic', offset=0),
+            HistMessage(content='active one', offset=700),
+            HistMessage(content='active two', offset=800),
+        ])
+        anchor = HistMessage(content=';llm summarize this', offset=900)
+        got = run(llm_history.collect_recent(
+            channel, before=anchor, window_seconds=3600,
+            gap_seconds=600))
+        assert [m.content for m in got] == [
+            'active one', 'active two']
+
+    def test_active_session_can_span_more_than_ten_minutes(self):
+        channel = FakeHistoryChannel([
+            HistMessage(content='part one', offset=0),
+            HistMessage(content='part two', offset=400),
+            HistMessage(content='part three', offset=800),
+            HistMessage(content='part four', offset=1200),
+        ])
+        anchor = HistMessage(content=';llm summarize this', offset=1250)
+        got = run(llm_history.collect_recent(
+            channel, before=anchor, window_seconds=3600,
+            gap_seconds=600))
+        assert [m.content for m in got] == [
+            'part one', 'part two', 'part three', 'part four']
+
     def test_unreadable_history_returns_empty_not_an_error(self):
         channel = FakeHistoryChannel([], fail=True)
         assert run(llm_history.collect_recent(
