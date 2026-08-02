@@ -79,12 +79,35 @@ def _is_usable(message, bot_user_id=None, include_other_bots=False,
     return bool(message_text(message))
 
 
-async def collect_recent(channel, before=None, limit=50, window_seconds=600,
-                         bot_user_id=None, include_other_bots=False):
-    """Messages just before ``before``, newest-last.
+def _outside_session(newer_at, older_at, gap_seconds):
+    """Return whether adjacent usable messages cross an inactivity gap."""
+    if gap_seconds is None or newer_at is None or older_at is None:
+        return False
+    try:
+        gap = max(0, int(gap_seconds))
+        return (newer_at - older_at).total_seconds() > gap
+    except (AttributeError, TypeError, ValueError):
+        return False
 
-    Returns [] rather than raising if history is unreadable — an answer
-    without context beats no answer.
+
+def _speaker_key(message):
+    """Return a stable identity for adjacent speaker-turn grouping."""
+    author = getattr(message, 'author', None)
+    author_id = getattr(author, 'id', None)
+    if author_id is not None:
+        return ('id', author_id)
+    return ('name', getattr(author, 'display_name', None))
+
+
+async def collect_recent(channel, before=None, limit=50, window_seconds=600,
+                         bot_user_id=None, include_other_bots=False,
+                         gap_seconds=None):
+    """Collect the active conversation before ``before``, oldest-first.
+
+    ``limit`` counts adjacent speaker turns; consecutive usable messages
+    from one author consume one turn while all remain in the transcript.
+    ``window_seconds`` is the hard maximum age, and ``gap_seconds`` ends
+    the session at an inactivity boundary. Unreadable history returns [].
     """
     after = None
     anchor = getattr(before, 'created_at', None)
@@ -96,19 +119,43 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
             after = None
 
     wanted = max(0, int(limit))
+    if wanted == 0:
+        return []
+
     collected = []
+    newer_at = anchor
+    newer_speaker = None
+    speaker_turns = 0
     try:
-        # oldest_first defaults to True whenever `after` is given, which would
-        # take the *oldest* `limit` messages in the window and walk forward.
-        # We want the ones nearest the command, so force newest-first and
-        # reverse below.
-        scan_limit = wanted * _HISTORY_SCAN_FACTOR
-        async for message in channel.history(limit=scan_limit, before=before,
-                                             after=after, oldest_first=False):
-            if _is_usable(message, bot_user_id, include_other_bots):
-                collected.append(message)
-                if len(collected) >= wanted:
+        # The limit counts adjacent speaker turns, not raw Discord
+        # messages. With a real time boundary, scan the complete bounded
+        # window so a long run from one speaker is not truncated.
+        scan_limit = (
+            None if after is not None
+            else wanted * _HISTORY_SCAN_FACTOR
+        )
+        async for message in channel.history(
+                limit=scan_limit, before=before, after=after,
+                oldest_first=False):
+            if not _is_usable(message, bot_user_id, include_other_bots):
+                continue
+
+            sent_at = getattr(message, 'created_at', None)
+            if _outside_session(newer_at, sent_at, gap_seconds):
+                break
+
+            speaker = _speaker_key(message)
+            if newer_speaker is None:
+                speaker_turns = 1
+            elif speaker != newer_speaker:
+                if speaker_turns >= wanted:
                     break
+                speaker_turns += 1
+
+            collected.append(message)
+            newer_speaker = speaker
+            if sent_at is not None:
+                newer_at = sent_at
     except Exception:  # noqa: BLE001 — missing Read Message History, etc.
         logger.exception('Could not read channel history for ;llm')
         return []

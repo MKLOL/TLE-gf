@@ -1,5 +1,7 @@
 """Literal ``@gemini`` and ``@grok`` entry-point tests."""
 
+from datetime import timedelta
+
 import pytest
 
 from tle import constants
@@ -8,6 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, gemini_api, xai_api
 from tests.llm_test_utils import FakeLlmDb, FakeMessage, run
 from tests.test_llm_cog import FakeCtx
+from tests.test_llm_history import FakeHistoryChannel, HistMessage
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +84,34 @@ class TestLiteralTrigger:
         assert 'Grok answer' in ctx.text
         assert ctx.send_kwargs[0]['reference'] is message
         assert ctx.send_kwargs[0]['mention_author'] is False
+
+    def test_literal_grok_summarize_this_uses_channel_context(
+            self, db, monkeypatch):
+        _add_xai_key(db)
+        seen = _xai_answers(monkeypatch)
+
+        history = [
+            HistMessage(author='alice', content='first discussion point',
+                        offset=0),
+            HistMessage(author='bob', content='second discussion point',
+                        offset=10),
+        ]
+        channel = FakeHistoryChannel(history)
+        ctx = FakeCtx(channel=channel)
+        cog = llm_cog.Llm(_FakeBot(ctx))
+
+        message = _listener_message('@grok summarize this')
+        message.created_at = history[-1].created_at + timedelta(seconds=10)
+
+        run(cog.on_message(message))
+
+        assert len(seen) == 1
+        prompt = seen[0]['prompt']
+        assert 'BEGIN TRANSCRIPT' in prompt
+        assert 'first discussion point' in prompt
+        assert 'second discussion point' in prompt
+        assert 'summarize this' in prompt
+        assert 'Grok answer' in ctx.text
 
     def test_literal_gemini_uses_the_shared_path(self, db, monkeypatch):
         db.llm_add_key('AIzaSyExampleKeyValue1234567')

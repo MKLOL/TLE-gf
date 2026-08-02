@@ -127,11 +127,60 @@ class TestCollectRecent:
         # oldest_first=True, so a limit would take the *start* of the window
         # and walk forward — dropping everything nearest the command.
         channel = FakeHistoryChannel([
-            HistMessage(content=f'msg{i}', offset=i * 10) for i in range(10)])
+            HistMessage(content=f'msg{i}', offset=i * 10,
+                        author_id=i) for i in range(10)])
         anchor = HistMessage(offset=500)
         got = run(llm_history.collect_recent(channel, before=anchor, limit=3,
                                              window_seconds=6000))
         assert [m.content for m in got] == ['msg7', 'msg8', 'msg9']
+
+    def test_the_limit_counts_speaker_turns_not_messages(self):
+        channel = FakeHistoryChannel([
+            HistMessage(author='alice', author_id=1,
+                        content='alice one', offset=0),
+            HistMessage(author='alice', author_id=1,
+                        content='alice two', offset=1),
+            HistMessage(author='bob', author_id=2,
+                        content='bob one', offset=2),
+            HistMessage(author='bob', author_id=2,
+                        content='bob two', offset=3),
+            HistMessage(author='carol', author_id=3,
+                        content='carol one', offset=4),
+            HistMessage(author='carol', author_id=3,
+                        content='carol two', offset=5),
+        ])
+        got = run(llm_history.collect_recent(
+            channel, before=HistMessage(offset=10), limit=2,
+            window_seconds=600))
+        assert [message.content for message in got] == [
+            'bob one', 'bob two', 'carol one', 'carol two']
+
+    def test_one_speaker_turn_can_include_many_messages(self):
+        channel = FakeHistoryChannel([
+            HistMessage(author='alice', author_id=1,
+                        content=f'part {index}', offset=index)
+            for index in range(20)
+        ])
+        got = run(llm_history.collect_recent(
+            channel, before=HistMessage(offset=30), limit=1,
+            window_seconds=600))
+        assert [message.content for message in got] == [
+            f'part {index}' for index in range(20)]
+
+    def test_same_author_after_another_speaker_is_a_new_turn(self):
+        channel = FakeHistoryChannel([
+            HistMessage(author='alice', author_id=1,
+                        content='old alice', offset=0),
+            HistMessage(author='bob', author_id=2,
+                        content='bob', offset=1),
+            HistMessage(author='alice', author_id=1,
+                        content='new alice', offset=2),
+        ])
+        got = run(llm_history.collect_recent(
+            channel, before=HistMessage(offset=10), limit=2,
+            window_seconds=600))
+        assert [message.content for message in got] == [
+            'bob', 'new alice']
 
     def test_the_transcript_is_oldest_first_as_the_prompt_claims(self):
         channel = FakeHistoryChannel([
@@ -148,6 +197,33 @@ class TestCollectRecent:
         run(llm_history.collect_recent(channel, before=anchor,
                                        window_seconds=600))
         assert channel.calls[0]['after'] == anchor.created_at - timedelta(seconds=600)
+
+    def test_recent_context_stops_at_an_inactivity_gap(self):
+        channel = FakeHistoryChannel([
+            HistMessage(content='stale topic', offset=0),
+            HistMessage(content='active one', offset=700),
+            HistMessage(content='active two', offset=800),
+        ])
+        anchor = HistMessage(content=';llm summarize this', offset=900)
+        got = run(llm_history.collect_recent(
+            channel, before=anchor, window_seconds=3600,
+            gap_seconds=600))
+        assert [m.content for m in got] == [
+            'active one', 'active two']
+
+    def test_active_session_can_span_more_than_ten_minutes(self):
+        channel = FakeHistoryChannel([
+            HistMessage(content='part one', offset=0),
+            HistMessage(content='part two', offset=400),
+            HistMessage(content='part three', offset=800),
+            HistMessage(content='part four', offset=1200),
+        ])
+        anchor = HistMessage(content=';llm summarize this', offset=1250)
+        got = run(llm_history.collect_recent(
+            channel, before=anchor, window_seconds=3600,
+            gap_seconds=600))
+        assert [m.content for m in got] == [
+            'part one', 'part two', 'part three', 'part four']
 
     def test_unreadable_history_returns_empty_not_an_error(self):
         channel = FakeHistoryChannel([], fail=True)
