@@ -76,6 +76,7 @@ export LLM_MODELS="gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-
 # Users can request `+context`, force `+direct`, and cap context with
 # `messages=N` (up to LLM_CONTEXT_MESSAGES).
 export LLM_CONTEXT_ENABLED="1"
+# Maximum non-reply speaker turns; consecutive messages from one author share a turn.
 export LLM_CONTEXT_MESSAGES="50"
 export LLM_CONTEXT_WINDOW_SECONDS="600"
 
