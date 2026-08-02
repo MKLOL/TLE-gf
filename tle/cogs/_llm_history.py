@@ -123,7 +123,10 @@ async def collect_recent(channel, before=None, limit=50, window_seconds=600,
         return []
 
     collected = []
-    newer_at = anchor
+    # The invoking command bounds the history query, but is not part of the
+    # conversation being summarized. Start inactivity-gap detection from the
+    # newest usable message before the command instead.
+    newer_at = None
     newer_speaker = None
     speaker_turns = 0
     try:

@@ -211,6 +211,27 @@ class TestCollectRecent:
         assert [m.content for m in got] == [
             'active one', 'active two']
 
+    def test_command_gap_does_not_discard_the_latest_session(self):
+        channel = FakeHistoryChannel([
+            HistMessage(content='session one', offset=0),
+            HistMessage(content='session two', offset=300),
+        ])
+        # The command arrives 50 minutes after the latest conversation message.
+        anchor = HistMessage(
+            content='@grok summarize this',
+            offset=3300,
+        )
+        got = run(llm_history.collect_recent(
+            channel,
+            before=anchor,
+            window_seconds=3600,
+            gap_seconds=600,
+        ))
+        assert [message.content for message in got] == [
+            'session one',
+            'session two',
+        ]
+
     def test_active_session_can_span_more_than_ten_minutes(self):
         channel = FakeHistoryChannel([
             HistMessage(content='part one', offset=0),
