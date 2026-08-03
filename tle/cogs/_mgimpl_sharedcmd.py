@@ -26,12 +26,36 @@ from tle.cogs._minigame_helpers import (
     MinigameCogError, _safe_member_name, _safe_user_name,
     _format_score,
 )
+from tle.cogs._minigame_tables import _AKARI_HISTORY_PER_PAGE
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _filter_queens_weekday_rows,
     _format_queens_weekday_filter,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _skipped_puzzles(puzzle_numbers, current_puzzle):
+    """Return the first submission and missing concluded puzzle numbers."""
+    submitted = set()
+    for value in puzzle_numbers:
+        try:
+            puzzle_number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 < puzzle_number <= int(current_puzzle):
+            submitted.add(puzzle_number)
+    if not submitted:
+        return None, []
+
+    first_submission = min(submitted)
+    skipped = [
+        puzzle_number
+        for puzzle_number in range(
+            int(current_puzzle) - 1, first_submission, -1)
+        if puzzle_number not in submitted
+    ]
+    return first_submission, skipped
 
 
 class ImplSharedCmdMixin:
@@ -89,6 +113,48 @@ class ImplSharedCmdMixin:
                 f'`{_safe_member_name(member)}` was not an extra '
                 f'{label} admin.')
         await ctx.send(embed=discord_common.embed_success(message))
+
+    async def _send_minigame_skips(
+            self, ctx, member, game, first_submission, skipped,
+            date_for_puzzle):
+        """Render the shared Akari/Queens skipped-day response."""
+        member_name = _safe_member_name(member)
+        if first_submission is None:
+            raise MinigameCogError(
+                f'No {game.display_name} results found for `{member_name}`.')
+
+        first_date = date_for_puzzle(first_submission)
+        if not skipped:
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{member_name}` has no skipped {game.display_name} days '
+                f'since first submitting **#{first_submission}** on '
+                f'**{first_date.isoformat()}**.'))
+            return
+
+        lines = []
+        for puzzle_number in skipped:
+            puzzle_date = date_for_puzzle(puzzle_number)
+            lines.append(
+                f'**#{puzzle_number}** \N{MIDDLE DOT} '
+                f'{puzzle_date.isoformat()} \N{MIDDLE DOT} '
+                f'{puzzle_date:%A}')
+        day_label = 'day' if len(skipped) == 1 else 'days'
+        title = (
+            f'{game.display_name} skipped days — '
+            f'{member_name} ({len(skipped)} {day_label})')
+        tracking_line = (
+            f'Since first submission: **#{first_submission}** '
+            f'\N{MIDDLE DOT} **{first_date.isoformat()}**')
+        pages = []
+        for chunk in paginator.chunkify(lines, _AKARI_HISTORY_PER_PAGE):
+            pages.append((None, discord.Embed(
+                title=title,
+                description=f'{tracking_line}\n\n' + '\n'.join(chunk),
+                color=discord_common.random_cf_color(),
+            )))
+        paginator.paginate(
+            self.bot, ctx.channel, pages, wait_time=300,
+            set_pagenum_footers=True, author_id=ctx.author.id)
 
     # ── Shared command implementations ──────────────────────────────────
 

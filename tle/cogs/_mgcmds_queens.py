@@ -98,6 +98,12 @@ class QueensCmdsMixin:
     async def queens_links(self, ctx):
         await self._cmd_queens_links(ctx)
 
+    @queens.command(name='skips',
+                    brief='Show skipped days since the first Queens submission',
+                    usage='[@user]')
+    async def queens_skips(self, ctx, member: CaseInsensitiveMember = None):
+        await self._cmd_queens_skips(ctx, member or ctx.author)
+
     @queens.command(
         name='backfill', aliases=['backill'],
         brief='(Mod) Backfill historical Queens results',

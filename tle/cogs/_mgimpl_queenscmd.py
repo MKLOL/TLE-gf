@@ -29,11 +29,13 @@ from tle.cogs._minigame_queens_filters import (
 )
 from tle.cogs._minigame_queens_cog import (
     _queens_puzzle_number_for_date,
+    _queens_date_for_puzzle_number,
     _parse_queens_date_or_number,
     _queens_current_puzzle_date,
     _queens_puzzle_numbers_for_date,
     _queens_puzzle_date_text,
 )
+from tle.cogs._mgimpl_sharedcmd import _skipped_puzzles
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,28 @@ _QueensWeeklyRow = namedtuple(
 
 
 class ImplQueensCmdMixin:
+    async def _cmd_queens_skips(self, ctx, member):
+        """List missing concluded puzzles since a linked user's first day."""
+        self._require_enabled(ctx.guild.id, QUEENS_GAME)
+        link = self._require_queens_registered_member(ctx.guild.id, member)
+        self._migrate_legacy_queens_results_to_external(ctx.guild.id)
+        rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
+            ctx.guild.id, QUEENS_GAME.name, link.normalized_name)
+        puzzle_numbers = []
+        for row in rows:
+            try:
+                puzzle_numbers.append(
+                    _queens_puzzle_number_for_date(row.puzzle_date))
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+        current_puzzle = _queens_puzzle_number_for_date(
+            _queens_current_puzzle_date())
+        first_submission, skipped = _skipped_puzzles(
+            puzzle_numbers, current_puzzle)
+        await self._send_minigame_skips(
+            ctx, member, QUEENS_GAME, first_submission, skipped,
+            _queens_date_for_puzzle_number)
+
     async def _cmd_queens_clear(self, ctx, puzzle_date):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         if puzzle_date is None:
