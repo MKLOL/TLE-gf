@@ -87,16 +87,21 @@ Consequences:
 
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
-- Every round is zero-sum, so a fixed retained identity pool cannot create
-  nominal points. Active or visible averages can still move through churn,
-  selective submission, hidden accounts, or sybils.
+- Every contested round is zero-sum. Decay is also zero-sum: points removed
+  from absentees are transferred to that day's valid participants. A fixed
+  retained identity pool therefore cannot create nominal points. Active or
+  visible averages can still move through churn, selective submission, hidden
+  accounts, or sybils.
 - There is no post-processing cap. Every pair score and expectation is a
   probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
   `|delta_i| < 124(n - 1)/n`, which is below the K-factor.
-- Inactivity never changes skill.
+- On each concluded puzzle day with at least one valid result, an above-1200
+  absentee loses 4% of their gap to 1200 on the first skipped day and up to 8%
+  as the streak grows. Below-start players freeze; the still-open Pacific-time
+  Queens puzzle is protected. Ordinary non-beta Queens remains decay-free.
 - New players receive the same bounded update rule as established players.
-- Playing more days supplies more evidence but does not award rating by itself;
-  participation volume belongs to Queens XP rather than skill rating.
+- Playing more days supplies more contest evidence but does not create points;
+  even a solo participant can receive points already removed from absentees.
 - A malformed locked first time is quarantined from the beta replay after
   first-submission deduplication. It cannot become a zero-second win, promote a
   later retry, or break every `+beta` command.
@@ -188,13 +193,14 @@ perfect flag adds no hidden tier beyond its reported accuracy.
 
 ## Historical snapshot replay
 
-The following snapshot figures predate the 85/15 head-to-head blend and are
-retained only as historical context. The current model has not been rerun on
-that unavailable snapshot.
+The following snapshot figures predate the 85/15 head-to-head blend and the
+current beta decay policy. They are retained only as historical context. The
+current model has not been rerun on that unavailable snapshot.
 
 The supplied snapshot was read without modification. Its exact live/import
 first-submission merge contains 1,378 results, 29 observed users, and 442
-puzzle days. Of those days, 384 are solo and provide no rating signal. The 58
+puzzle days. Of those days, 384 are solo and provide no contest signal (under
+the current policy they can still receive a zero-sum decay transfer). The 58
 rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
@@ -243,3 +249,6 @@ Akari exposes the matching beta views:
 
 The beta replay is transient for both games: it does not overwrite the
 ordinary Queens ladder or Akari rating snapshot.
+
+Akari's `+decay` history-display flag can be combined with `+beta`; it shows
+the otherwise implicit skipped-day points without changing the replay.

@@ -145,7 +145,7 @@ def test_replay_is_deterministic_and_dedupes_by_first_message():
     assert len(histories_a['u2']) == 6
 
 
-def test_solo_days_seed_players_without_rating_signal():
+def test_solo_days_seed_players_and_track_concluded_absences():
     histories = {}
     states = compute_queens_improved_ratings(
         [_row('u1', 1, 18), _row('u2', 2, 12)],
@@ -159,13 +159,17 @@ def test_solo_days_seed_players_without_rating_signal():
         assert state.games == 0
         assert state.peak == 1200
         assert state.last_delta == 0
-        assert state.skip_streak == 0
         assert state.last_puzzle == puzzle
-        assert len(histories[user_id]) == 1
         point = histories[user_id][0]
         assert point.delta == 0
         assert point.performance is None
         assert point.is_decay is False
+    assert states['u1'].skip_streak == 1
+    assert states['u2'].skip_streak == 0
+    assert len(histories['u1']) == 2
+    assert histories['u1'][-1].is_decay is True
+    assert histories['u1'][-1].delta == 0
+    assert len(histories['u2']) == 1
 
 
 def test_equal_times_share_performance_and_stay_symmetric():
@@ -356,7 +360,8 @@ def test_malformed_times_are_quarantined_from_improved_replay():
         _row('u8', 2, None, message_id=8),
         _row('u9', 2, 'not-a-time', message_id=9),
         _row('u12', 2, Decimal('1.5'), message_id=12),
-        # Quarantining u11 leaves a valid solo day, which must remain unrated.
+        # Quarantining u11 leaves a valid solo day. It remains uncontested but
+        # can receive the zero-sum pool from an above-start absentee.
         _row('u10', 3, 15, message_id=10),
         _row('u11', 3, -1, message_id=11),
     ]
@@ -365,8 +370,12 @@ def test_malformed_times_are_quarantined_from_improved_replay():
 
     assert set(states) == {'u2', 'u3', 'u10'}
     assert states['u2'].rating > 1200 > states['u3'].rating
-    assert states['u10'].rating == 1200
+    assert states['u10'].rating > 1200
     assert states['u10'].games == 0
+    assert math.isclose(
+        sum(state.rating for state in states.values()), 3600,
+        abs_tol=1e-9,
+    )
     with pytest.raises(ValueError):
         _time_log(-1)
     with pytest.raises(ValueError):
@@ -384,16 +393,18 @@ def test_history_contract_and_inactivity_state():
         include_decay_in_history=True,
     )
 
-    # Inactivity changes metadata only: never visible rating or history.
-    assert states['u1'].rating == histories['u1'][0].rating
-    assert states['u1'].last_delta == 0
+    # Above-start inactivity is a visible, optional history point.
+    assert states['u1'].rating == histories['u1'][-1].rating
+    assert states['u1'].rating < histories['u1'][0].rating
+    assert states['u1'].last_delta == histories['u1'][-1].delta < 0
     assert states['u1'].skip_streak == 1
     assert states['u1'].last_puzzle == 1
-    assert len(histories['u1']) == 1
+    assert len(histories['u1']) == 2
     assert histories['u1'][0].is_decay is False
+    assert histories['u1'][-1].is_decay is True
 
     for user_id, points in histories.items():
-        assert len(points) == states[user_id].games
+        assert sum(not point.is_decay for point in points) == states[user_id].games
         for point in points:
             assert point.puzzle_number >= 1
             assert math.isfinite(point.rating)

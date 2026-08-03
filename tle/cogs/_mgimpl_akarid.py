@@ -44,9 +44,8 @@ class ImplAkariDMixin:
     def _validate_akari_beta(
             beta, *, include_decay=False, test_decay=False, weekly=False):
         """Reject alternate rating modes that beta cannot represent."""
+        del include_decay
         conflicts = []
-        if include_decay:
-            conflicts.append('`+decay`')
         if test_decay:
             conflicts.append('`+test`')
         if weekly:

@@ -236,7 +236,6 @@ class TestAkariBetaRouting:
     @pytest.mark.parametrize(
         'kwargs, conflict',
         [
-            ({'beta': True, 'include_decay': True}, '+decay'),
             ({'beta': True, 'test_decay': True}, '+test'),
             ({'beta': True, 'weekly': True}, '+weekly'),
         ],
@@ -245,6 +244,10 @@ class TestAkariBetaRouting:
         with pytest.raises(MinigameCogError) as exc_info:
             Minigames._validate_akari_beta(**kwargs)
         assert conflict in str(exc_info.value)
+
+    def test_beta_accepts_decay_history_display(self):
+        Minigames._validate_akari_beta(
+            beta=True, include_decay=True)
 
     def test_every_akari_rating_slash_view_exposes_beta(self):
         methods = (

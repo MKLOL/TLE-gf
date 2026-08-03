@@ -385,7 +385,7 @@ The formula cannot by itself prevent:
 - the visible mean rising when low-rated accounts become hidden or inactive;
 - a player submitting only unusually good days;
 - sybil or colluding accounts donating their starting points;
-- peak parking when inactivity never changes rating;
+- peak fields remaining historical maxima even while current rating decays;
 - historical rewrites when current registration filters old fields;
 - the whole community improving together on an absolute scale.
 
@@ -396,10 +396,11 @@ day. Both attacks still conserve total points: balancing losses remain in
 submitted-round opponents or donor accounts, while withheld bad days create
 selection bias.
 
-Solving those issues requires product policy—mandatory capture, activity
-requirements, decay, identity trust, or stable anonymized historical
-competitors. Those choices affect registration, privacy, bans, and potentially
-ordinary Queens. They are not safe to smuggle into this beta formula.
+Stronger defenses require product policy—mandatory capture, activity
+requirements, identity trust, or stable anonymized historical competitors.
+The beta's active-day decay now limits above-start current-rating parking, but
+does not solve selective submission, sybils, or historical peak parking.
+Ordinary Queens remains deliberately unaffected.
 
 This is also why richer systems were not transplanted. TrueSkill tracks
 uncertainty and handles multiplayer rankings through approximate message
@@ -418,13 +419,16 @@ Future changes to `+beta` must retain:
 - ordinary Queens isolation and no rating-table writes;
 - deterministic first-submission locking;
 - invalid-time quarantine after that lock;
-- solo days producing no rating signal;
+- solo days producing no contest delta while remaining eligible to receive a
+  zero-sum decay transfer;
 - exact ties and tied performance;
 - pair complement and round point conservation;
+- concluded-active-day decay only above 1200, with current-day protection and
+  equal redistribution to valid participants;
 - the 85% continuous-margin / 15% hard-result pair target;
-- the `124(n - 1)/n` daily bound;
+- the `124(n - 1)/n` contest-delta bound before any decay transfer;
 - the `124/n` one-opponent contamination bound;
-- rating-translation invariance;
+- contest-update rating-translation invariance before fixed-anchor decay;
 - unique, result-monotone event performance;
 - Akari accuracy validation and additive, complementary rating pair scores;
 - Akari hierarchical performance ordered by accuracy, then time;

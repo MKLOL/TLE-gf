@@ -23,7 +23,8 @@ other player by only ``1 / field_size``.
 import math
 from dataclasses import dataclass
 
-from tle.util.akari_rating import HistoryPoint, RatingState
+from tle import constants
+from tle.util.akari_rating import HistoryPoint, RatingState, _decay_rate
 from tle.util._beta_rating_performance import (
     _BRIER_BLEND,
     _ELO_SCALE,
@@ -222,19 +223,29 @@ def _history_point(puzzle_number, row, rating, delta, performance):
 def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
-        rank_fn=None, pair_score_fn=None, row_validator_fn=None,
+        rank_fn=None, start_rating=None, decay_base=None, decay_max=None,
+        decay_grace=None, pair_score_fn=None, row_validator_fn=None,
         performance_pair_score_fn=None, performance_puzzles=None, **_ignored):
     """Replay Queens results with the experimental hybrid-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
     existing ``+beta`` table and graph can use this engine without storing
-    a second rating snapshot.  Queens inactivity never changes visible skill;
-    ``include_decay_in_history`` and ``rank_fn`` are accepted only for shared
-    engine compatibility. A custom ``performance_pair_score_fn`` can decouple
-    event-performance ordering from rating evidence, but requires a custom
-    ``pair_score_fn`` and never affects deltas.
+    a second rating snapshot. Above-start absentees decay toward
+    ``start_rating`` on concluded active days, and their lost points are split
+    equally among that day's valid participants. A custom
+    ``performance_pair_score_fn`` can decouple event-performance ordering from
+    rating evidence, but requires a custom ``pair_score_fn`` and never affects
+    deltas.
     """
-    del include_decay_in_history, rank_fn
+    del rank_fn
+    if start_rating is None:
+        start_rating = float(_START_RATING)
+    if decay_base is None:
+        decay_base = constants.AKARI_DECAY_BASE
+    if decay_max is None:
+        decay_max = constants.AKARI_DECAY_MAX
+    if decay_grace is None:
+        decay_grace = constants.AKARI_DECAY_GRACE
     if performance_pair_score_fn is not None and pair_score_fn is None:
         raise ValueError(
             'A performance pair score requires a rating pair score.')
@@ -273,60 +284,83 @@ def compute_queens_improved_ratings(
         day_rows = valid_day_rows
         active_ids = sorted(day_rows)
 
-        for user_id in active_ids:
-            players.setdefault(
-                user_id, _Player(last_puzzle=puzzle_number))
-
-        if len(active_ids) < 2:
-            for user_id in active_ids:
-                old = players[user_id]
-                players[user_id] = _Player(
-                    rating=old.rating,
-                    games=old.games,
-                    peak=old.peak,
-                    last_delta=0.0,
-                    skip_streak=0,
-                    last_puzzle=puzzle_number,
-                )
-                if histories is not None:
-                    histories.setdefault(user_id, []).append(_history_point(
-                        puzzle_number, day_rows[user_id], old.rating, 0.0, None))
+        # A fully malformed day supplies neither rating evidence nor anyone to
+        # receive a zero-sum decay transfer, so quarantine it completely.
+        if not active_ids:
             continue
 
-        before = {
-            user_id: players[user_id].rating for user_id in active_ids
-        }
-        times = {
-            user_id: _result_time_seconds(day_rows[user_id].time_seconds)
-            for user_id in active_ids
-        }
-        compute_performance = (
-            histories is not None
-            and (
-                performance_puzzles is None
-                or puzzle_number in performance_puzzles
+        for user_id in active_ids:
+            players.setdefault(
+                user_id,
+                _Player(
+                    rating=start_rating,
+                    peak=start_rating,
+                    last_puzzle=puzzle_number,
+                ),
             )
+
+        rated_day = len(active_ids) >= 2
+        if rated_day:
+            before = {
+                user_id: players[user_id].rating for user_id in active_ids
+            }
+            times = {
+                user_id: _result_time_seconds(day_rows[user_id].time_seconds)
+                for user_id in active_ids
+            }
+            compute_performance = (
+                histories is not None
+                and (
+                    performance_puzzles is None
+                    or puzzle_number in performance_puzzles
+                )
+            )
+            updates = (
+                _compute_round(
+                    before, times,
+                    compute_performance=compute_performance)
+                if pair_score_fn is None
+                else _compute_pair_round(
+                    before, day_rows, pair_score_fn,
+                    compute_performance=compute_performance,
+                    performance_pair_score_fn=performance_pair_score_fn)
+            )
+        else:
+            updates = {
+                user_id: _RoundUpdate(delta=0.0, performance=None)
+                for user_id in active_ids
+            }
+
+        day_concluded = (
+            current_puzzle_number is None
+            or puzzle_number < current_puzzle_number
         )
-        updates = (
-            _compute_round(
-                before, times,
-                compute_performance=compute_performance)
-            if pair_score_fn is None
-            else _compute_pair_round(
-                before, day_rows, pair_score_fn,
-                compute_performance=compute_performance,
-                performance_pair_score_fn=performance_pair_score_fn)
-        )
+        absent_changes = {}
+        decay_pool = 0.0
+        if day_concluded:
+            for user_id in sorted(players):
+                if user_id in day_rows:
+                    continue
+                old = players[user_id]
+                skip_streak = old.skip_streak + 1
+                raw_delta = (start_rating - old.rating) * _decay_rate(
+                    skip_streak, decay_base, decay_max, decay_grace)
+                delta = min(0.0, raw_delta)
+                absent_changes[user_id] = (skip_streak, delta)
+                decay_pool -= delta
+
+        transfer_share = decay_pool / len(active_ids) if decay_pool > 0 else 0.0
 
         for user_id in active_ids:
             old = players[user_id]
             update = updates[user_id]
-            new_rating = old.rating + update.delta
+            combined_delta = update.delta + transfer_share
+            new_rating = old.rating + combined_delta
             players[user_id] = _Player(
                 rating=new_rating,
-                games=old.games + 1,
+                games=old.games + int(rated_day),
                 peak=max(old.peak, new_rating),
-                last_delta=update.delta,
+                last_delta=combined_delta,
                 skip_streak=0,
                 last_puzzle=puzzle_number,
             )
@@ -335,27 +369,34 @@ def compute_queens_improved_ratings(
                     puzzle_number,
                     day_rows[user_id],
                     new_rating,
-                    update.delta,
+                    combined_delta,
                     update.performance,
                 ))
 
-        day_concluded = (
-            current_puzzle_number is None
-            or puzzle_number < current_puzzle_number
-        )
-        if day_concluded:
-            for user_id in sorted(players):
-                if user_id in day_rows:
-                    continue
-                old = players[user_id]
-                players[user_id] = _Player(
-                    rating=old.rating,
-                    games=old.games,
-                    peak=old.peak,
-                    last_delta=0.0,
-                    skip_streak=old.skip_streak + 1,
-                    last_puzzle=old.last_puzzle,
-                )
+        puzzle_date = getattr(day_rows[active_ids[0]], 'puzzle_date', None)
+        for user_id, (skip_streak, delta) in absent_changes.items():
+            old = players[user_id]
+            new_rating = old.rating + delta
+            players[user_id] = _Player(
+                rating=new_rating,
+                games=old.games,
+                peak=old.peak,
+                last_delta=delta,
+                skip_streak=skip_streak,
+                last_puzzle=old.last_puzzle,
+            )
+            if histories is not None and include_decay_in_history:
+                histories.setdefault(user_id, []).append(HistoryPoint(
+                    puzzle_number=puzzle_number,
+                    puzzle_date=puzzle_date,
+                    rating=new_rating,
+                    delta=delta,
+                    performance=None,
+                    is_perfect=False,
+                    accuracy=0,
+                    time_seconds=0,
+                    is_decay=True,
+                ))
 
     return {
         user_id: RatingState(
