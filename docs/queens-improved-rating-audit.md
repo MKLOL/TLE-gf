@@ -13,7 +13,7 @@ The current player-facing parameters are:
 - start rating `1200`;
 - time offset `0` seconds;
 - soft-margin width `0.35`;
-- pair-result blend: 75% continuous margin and 25% hard head-to-head result;
+- pair-result blend: 85% continuous margin and 15% hard head-to-head result;
 - expectation scale `800 / ln(10)`;
 - K-factor `124`;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
@@ -65,7 +65,7 @@ research therefore used:
 6. injected corruptions, leave-one-day/player replay, null permutations, and
    long stationary simulations.
 
-That protocol was not rerun after the raw-time, 90/10-gradient, or 75/25
+That protocol was not rerun after the raw-time, 90/10-gradient, or 85/15
 head-to-head retunes. The structural proofs below apply to the current formula;
 all snapshot, predictive, and corruption figures are explicitly historical. In
 the original study, log
@@ -88,7 +88,7 @@ Queens continuous margin evidence and hard result are:
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
 M_ij = sigmoid(z_ij)
 R_ij = 1 if time_i < time_j, 0 if time_i > time_j, else 0.5
-S_ij = 0.75 * M_ij + 0.25 * R_ij
+S_ij = 0.85 * M_ij + 0.15 * R_ij
 ```
 
 Akari uses the same hybrid score for equal accuracy. For unequal accuracy,
@@ -100,7 +100,7 @@ M_LH = soft_time(adjusted_time_L, time_H)
 M_HL = 1 - M_LH
 R_LH = 0
 R_HL = 1
-S_ij = 0.75 * M_ij + 0.25 * R_ij
+S_ij = 0.85 * M_ij + 0.15 * R_ij
 ```
 
 Equivalently, the lower player's unclipped logit numerator is
@@ -144,8 +144,8 @@ For unequal-accuracy Akari pairs it clips the adjusted ratio
 `1 + time_L / time_H`; equivalently, the raw lower/higher time ratio must
 exceed `15.445`.
 
-After the 75/25 blend, it bounds one strict rating-update pair score to roughly
-`[0.000252, 0.999748]`; exact ties remain `0.5`. It is not a cap on rating
+After the 85/15 blend, it bounds one strict rating-update pair score to roughly
+`[0.000285, 0.999715]`; exact ties remain `0.5`. It is not a cap on rating
 change. The response already saturates well before that point; the limit
 prevents a corrupt or repeatedly absurd margin from implying numerical
 certainty and unlimited pair separation. Akari's display-only hierarchy may
@@ -264,7 +264,7 @@ opposite-direction offset was 19.06 rating points.
 
 ## Historical snapshot results
 
-These results predate the current 75/25 head-to-head blend. The source snapshot
+These results predate the current 85/15 head-to-head blend. The source snapshot
 is not in this repository, so they were not recomputed for this change.
 
 | Measure | Previous K=144 beta |
@@ -338,7 +338,7 @@ discontinuous rank step to near-tied times.
 
 That historical 95% soft-result / 5% strict-result experiment used an older
 time offset and optimizer. It tests the same broad target family but does not
-validate the current user-directed 75/25 choice. The 90% Brier / 10% log-loss
+validate the current user-directed 85/15 choice. The 90% Brier / 10% log-loss
 gradient blend is a separate robustness mechanism.
 
 Adding hard-result weight changes the product goal: strict wins matter even
@@ -421,7 +421,7 @@ Future changes to `+beta` must retain:
 - solo days producing no rating signal;
 - exact ties and tied performance;
 - pair complement and round point conservation;
-- the 75% continuous-margin / 25% hard-result pair target;
+- the 85% continuous-margin / 15% hard-result pair target;
 - the `124(n - 1)/n` daily bound;
 - the `124/n` one-opponent contamination bound;
 - rating-translation invariance;

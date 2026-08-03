@@ -4,7 +4,7 @@ The canonical Queens ladder remains Codeforces-style.  This module powers only
 the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
 
 * every opponent contributes a bounded fraction of one daily result;
-* 75% of each pair score comes from the time margin and 25% from the hard
+* 85% of each pair score comes from the time margin and 15% from the hard
   faster/slower result, so close wins still matter;
 * the field is averaged, so a 20-player day is not 19 independent games;
 * a proper log-loss/Brier blend smoothly reduces one surprising day's
@@ -42,7 +42,7 @@ _START_RATING = 1200.0
 # player-facing points per original beta point.  Scaling the expectation curve,
 # K, and performance search together preserves every probability and ordering.
 _TIME_MARGIN_WIDTH = 0.35
-_HEAD_TO_HEAD_WEIGHT = 0.25
+_HEAD_TO_HEAD_WEIGHT = 0.15
 # This is a bound on one pair's *evidence*, not on a player's rating change.
 # It activates only beyond a 16.4x raw-time ratio and prevents malformed
 # or repeated extreme margins from producing numerical 0/1 separation.
@@ -143,7 +143,7 @@ def _blend_pair_score(margin_score, head_to_head_score):
 
 
 def _hybrid_time_score(time_self, time_other):
-    """Return the 75% time-margin, 25% head-to-head pair score."""
+    """Return the 85% time-margin, 15% head-to-head pair score."""
     self_seconds = _result_time_seconds(time_self)
     other_seconds = _result_time_seconds(time_other)
     return _blend_pair_score(

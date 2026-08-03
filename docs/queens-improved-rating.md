@@ -42,12 +42,12 @@ Each other time first contributes a soft margin result:
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
 M_ij = sigmoid(z_ij)
 H_ij = 1 if time_i < time_j, 0 if time_i > time_j, else 0.5
-S_ij = 0.75 * M_ij + 0.25 * H_ij
+S_ij = 0.85 * M_ij + 0.15 * H_ij
 ```
 
 Lower time is better. Equal times contribute exactly `0.5`. A strict win has
-at least `0.625` pair evidence, so beating someone matters even in a photo
-finish; the remaining 75% still distinguishes narrow wins from blowouts. A
+at least `0.575` pair evidence, so beating someone matters even in a photo
+finish; the remaining 85% still distinguishes narrow wins from blowouts. A
 neutral self-result anchors the bracket. Every person contributes at most
 `1/n`, so one extreme result cannot dominate the whole field.
 
@@ -137,17 +137,17 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1750 | +40.85 |
-| 8 | 1592 | +31.71 |
-| 10 | 1404 | +17.68 |
-| 12 | 1253 | +4.75 |
-| 13 | 1164 | -3.17 |
-| 16 | 1001 | -17.30 |
-| 20 | 816 | -31.18 |
-| 25 | 599 | -43.34 |
+| 7 | 1715 | +39.07 |
+| 8 | 1578 | +30.78 |
+| 10 | 1395 | +16.94 |
+| 12 | 1249 | +4.35 |
+| 13 | 1171 | -2.56 |
+| 16 | 1010 | -16.51 |
+| 20 | 831 | -30.17 |
+| 25 | 629 | -41.89 |
 
-The performance drop from 12 to 13 seconds is about 89 points; the drop from
-13 to 16 is about 164 points. The hard component makes each strict placement
+The performance drop from 12 to 13 seconds is about 78 points; the drop from
+13 to 16 is about 161 points. The hard component makes each strict placement
 meaningful while the time component still rewards the larger margin.
 
 ## Akari accuracy-first pair scores
@@ -167,7 +167,7 @@ The denominator is the higher-accuracy time. Consequently, a very fast lower
 accuracy can approach a tie but never win, and taking longer can only worsen
 its score. Every nonzero accuracy difference is a tier boundary; the size of
 the percentage gap does not add another parameter. The rating target is then
-`S_ij = 0.75 * M_ij + 0.25 * H_ij`, where `H` is the hard accuracy-first,
+`S_ij = 0.85 * M_ij + 0.15 * H_ij`, where `H` is the hard accuracy-first,
 time-second result. Pair scores remain complementary, so the K=124 rating
 round remains exactly zero-sum.
 
@@ -188,7 +188,7 @@ perfect flag adds no hidden tier beyond its reported accuracy.
 
 ## Historical snapshot replay
 
-The following snapshot figures predate the 75/25 head-to-head blend and are
+The following snapshot figures predate the 85/15 head-to-head blend and are
 retained only as historical context. The current model has not been rerun on
 that unavailable snapshot.
 

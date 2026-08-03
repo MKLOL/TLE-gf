@@ -52,7 +52,7 @@ def test_additive_pair_score_uses_higher_accuracy_time_as_denominator():
     lower_score = _akari_beta_pair_score(lower, higher)
 
     assert math.isclose(lower_score, expected_lower, rel_tol=0, abs_tol=1e-15)
-    assert lower_score < 0.375
+    assert lower_score < 0.425
     assert math.isclose(
         _akari_beta_pair_score(higher, lower),
         1.0 - expected_lower,
