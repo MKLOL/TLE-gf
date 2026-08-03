@@ -1,6 +1,6 @@
 # Queens improved rating beta
 
-The `+beta` Queens mode is an on-demand, margin-aware multiplayer Elo
+The `+beta` Queens mode is an on-demand, hybrid multiplayer Elo
 replay. It is separate from the persisted Codeforces-style Queens rating:
 testing it cannot alter the ordinary leaderboard or anything that consumes the
 ordinary rating.
@@ -25,7 +25,7 @@ The design also borrows the robust-response goal of native multiplayer systems
 such as [Elo-MMR](https://arxiv.org/abs/2101.00400), while staying small and
 explainable for a 12–20-player community.
 
-## Soft time bracket
+## Hybrid time and head-to-head bracket
 
 For player `i`, transform the time in seconds:
 
@@ -36,19 +36,20 @@ x_i = ln(time_i)
 There is no additive time offset. The bracket therefore measures the raw time
 ratio: the same absolute gap carries more evidence on a faster puzzle.
 
-Each other time contributes a soft result, and a neutral self-result anchors
-the bracket:
+Each other time first contributes a soft margin result:
 
 ```text
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
-S_ij = sigmoid(z_ij)
-S_ii = 0.5
+M_ij = sigmoid(z_ij)
+H_ij = 1 if time_i < time_j, 0 if time_i > time_j, else 0.5
+S_ij = 0.75 * M_ij + 0.25 * H_ij
 ```
 
-Lower time is better. Equal times contribute exactly `0.5`; a wider gap moves
-smoothly toward `1` or `0`. Every person contributes at most `1/n`, so one
-extreme fastest or slowest time cannot stretch the middle of the field the way
-literal min/max normalization would.
+Lower time is better. Equal times contribute exactly `0.5`. A strict win has
+at least `0.625` pair evidence, so beating someone matters even in a photo
+finish; the remaining 75% still distinguishes narrow wins from blowouts. A
+neutral self-result anchors the bracket. Every person contributes at most
+`1/n`, so one extreme result cannot dominate the whole field.
 
 The symmetric `±8` evidence limit activates only beyond a 16.4x raw-time
 ratio. It prevents numerical certainty and extreme long-run pair separation;
@@ -102,7 +103,7 @@ Consequences:
 
 ## Performance
 
-Let the player's mean soft result against the day's field be:
+Let the player's mean hybrid result against the day's field be:
 
 ```text
 A_i = mean(j in field, S_ij)
@@ -136,44 +137,46 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1668 | +31.69 |
-| 8 | 1558 | +25.58 |
-| 10 | 1381 | +13.79 |
-| 12 | 1242 | +3.26 |
-| 13 | 1182 | -1.43 |
-| 16 | 1025 | -13.34 |
-| 20 | 853 | -24.96 |
-| 25 | 673 | -34.59 |
+| 7 | 1750 | +40.85 |
+| 8 | 1592 | +31.71 |
+| 10 | 1404 | +17.68 |
+| 12 | 1253 | +4.75 |
+| 13 | 1164 | -3.17 |
+| 16 | 1001 | -17.30 |
+| 20 | 816 | -31.18 |
+| 25 | 599 | -43.34 |
 
-The performance drop from 12 to 13 seconds is about 60 points; the drop from
-13 to 16 is about 157 points. The larger time gap therefore matters about 2.6
-times as much without making either result catastrophic.
+The performance drop from 12 to 13 seconds is about 89 points; the drop from
+13 to 16 is about 164 points. The hard component makes each strict placement
+meaningful while the time component still rewards the larger margin.
 
 ## Akari accuracy-first pair scores
 
-Akari `+beta` keeps the shared zero-sum update but supplies its own pair score.
-For equal accuracy, the ordinary soft time comparison applies. For different
-accuracies, let `L` be the lower-accuracy result and `H` the higher-accuracy
-result:
+Akari `+beta` keeps the shared zero-sum update but supplies its own margin
+score. For equal accuracy, it uses the ordinary soft time comparison. For
+different accuracies, let `L` be the lower-accuracy result and `H` the
+higher-accuracy result:
 
 ```text
 adjusted_time_L = time_L + time_H
-S_LH = soft_time(adjusted_time_L, time_H)
-S_HL = 1 - S_LH
+M_LH = soft_time(adjusted_time_L, time_H)
+M_HL = 1 - M_LH
 ```
 
 The denominator is the higher-accuracy time. Consequently, a very fast lower
 accuracy can approach a tie but never win, and taking longer can only worsen
 its score. Every nonzero accuracy difference is a tier boundary; the size of
-the percentage gap does not add another parameter. Pair scores remain
-complementary, so the K=124 rating round remains exactly zero-sum.
+the percentage gap does not add another parameter. The rating target is then
+`S_ij = 0.75 * M_ij + 0.25 * H_ij`, where `H` is the hard accuracy-first,
+time-second result. Pair scores remain complementary, so the K=124 rating
+round remains exactly zero-sum.
 
 Displayed event performance uses a separate hierarchical pair score:
 
 ```text
 H_ij = 1                         if accuracy_i > accuracy_j
 H_ij = 0                         if accuracy_i < accuracy_j
-H_ij = soft_time(time_i, time_j) if accuracy_i = accuracy_j
+H_ij = hybrid_time(time_i, time_j) if accuracy_i = accuracy_j
 ```
 
 The same common-field inversion turns each player's mean `H_ij` into `Perf`.
@@ -183,7 +186,11 @@ tier. `;akari results +beta` ranks rows directly by accuracy descending and
 time ascending; exact `(accuracy, time)` ties share a competition rank. The
 perfect flag adds no hidden tier beyond its reported accuracy.
 
-## Snapshot replay
+## Historical snapshot replay
+
+The following snapshot figures predate the 75/25 head-to-head blend and are
+retained only as historical context. The current model has not been rerun on
+that unavailable snapshot.
 
 The supplied snapshot was read without modification. Its exact live/import
 first-submission merge contains 1,378 results, 29 observed users, and 442

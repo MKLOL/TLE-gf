@@ -3,7 +3,7 @@
 ## Scope and decision
 
 This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses its
-zero-sum update with an accuracy-first, opponent-relative pair score and a
+zero-sum update with an accuracy-first, opponent-relative hybrid score and a
 separate hierarchical score for displayed event performance.
 Ordinary Queens, ordinary Akari, persisted rating snapshots, registration
 policy, and command routing are outside the formula change.
@@ -13,6 +13,7 @@ The current player-facing parameters are:
 - start rating `1200`;
 - time offset `0` seconds;
 - soft-margin width `0.35`;
+- pair-result blend: 75% continuous margin and 25% hard head-to-head result;
 - expectation scale `800 / ln(10)`;
 - K-factor `124`;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
@@ -64,9 +65,10 @@ research therefore used:
 6. injected corruptions, leave-one-day/player replay, null permutations, and
    long stationary simulations.
 
-That protocol was not rerun after the raw-time and 90/10-gradient retunes.
-Current figures below are replay and invariant checks; the predictive and
-corruption figures remain explicitly historical. In the original study, log
+That protocol was not rerun after the raw-time, 90/10-gradient, or 75/25
+head-to-head retunes. The structural proofs below apply to the current formula;
+all snapshot, predictive, and corruption figures are explicitly historical. In
+the original study, log
 loss and Brier score were used because they are proper probabilistic scoring
 rules, following
 [Gneiting and Raftery (2007)](https://sites.stat.washington.edu/people/raftery/Research/PDF/Gneiting2007jasa.pdf).
@@ -80,20 +82,25 @@ For a Queens field of `n` players, transform player `i`'s time:
 x_i = ln(time_i)
 ```
 
-Queens pair evidence is:
+Queens continuous margin evidence and hard result are:
 
 ```text
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
-S_ij = sigmoid(z_ij)
+M_ij = sigmoid(z_ij)
+R_ij = 1 if time_i < time_j, 0 if time_i > time_j, else 0.5
+S_ij = 0.75 * M_ij + 0.25 * R_ij
 ```
 
-Akari uses the same score for equal accuracy. For unequal accuracy, identify
-the lower-accuracy result `L` and higher-accuracy result `H`:
+Akari uses the same hybrid score for equal accuracy. For unequal accuracy,
+identify the lower-accuracy result `L` and higher-accuracy result `H`:
 
 ```text
 adjusted_time_L = time_L + time_H
-S_LH = soft_time(adjusted_time_L, time_H)
-S_HL = 1 - S_LH
+M_LH = soft_time(adjusted_time_L, time_H)
+M_HL = 1 - M_LH
+R_LH = 0
+R_HL = 1
+S_ij = 0.75 * M_ij + 0.25 * R_ij
 ```
 
 Equivalently, the lower player's unclipped logit numerator is
@@ -137,12 +144,13 @@ For unequal-accuracy Akari pairs it clips the adjusted ratio
 `1 + time_L / time_H`; equivalently, the raw lower/higher time ratio must
 exceed `15.445`.
 
-It bounds one rating-update pair score to `[0.000335, 0.999665]`. It is not a
-cap on rating change. The ordinary probability response already saturates well
-before that point; the limit prevents a corrupt or repeatedly absurd margin
-from implying numerical certainty and unlimited pair separation. Akari's
-display-only hierarchy may use exact `0` or `1`; those values never enter a
-delta, and the neutral self-score keeps their field means strictly interior.
+After the 75/25 blend, it bounds one strict rating-update pair score to roughly
+`[0.000252, 0.999748]`; exact ties remain `0.5`. It is not a cap on rating
+change. The response already saturates well before that point; the limit
+prevents a corrupt or repeatedly absurd margin from implying numerical
+certainty and unlimited pair separation. Akari's display-only hierarchy may
+use exact `0` or `1`; those values never enter a delta, and the neutral
+self-score keeps their field means strictly interior.
 
 ## Proven guarantees
 
@@ -221,7 +229,7 @@ For Queens, `Q_ij = S_ij`. Akari deliberately uses a display-only hierarchy:
 ```text
 Q_ij = 1                         if accuracy_i > accuracy_j
 Q_ij = 0                         if accuracy_i < accuracy_j
-Q_ij = soft_time(time_i, time_j) if accuracy_i = accuracy_j
+Q_ij = hybrid_time(time_i, time_j) if accuracy_i = accuracy_j
 ```
 
 This display score never enters the rating delta. `F` is strictly increasing,
@@ -233,7 +241,7 @@ result ties share one performance regardless of incoming rating.
 For an Akari accuracy tier of `m` players with `B` players in lower tiers, the
 unnormalized display total lies between `B + 0.5` and `B + m - 0.5`. Adjacent
 tiers are therefore separated by at least one pair point, or `1/n` after the
-field mean. Within a tier, the soft-time score is strictly monotone. This proves
+field mean. Within a tier, the hybrid-time score is strictly monotone. This proves
 the stated accuracy/time ordering for every field, not only observed data.
 
 Adding the same constant to every pre-rating leaves all deltas unchanged and
@@ -241,20 +249,23 @@ adds that constant to every performance. Equal times share the same
 performance; equal-time players with different ratings can still receive
 different deltas because their expectations differed.
 
-The display does not minimize the blended update loss over `P`: that composite
+The display does not minimize the robust update loss over `P`: that composite
 can have multiple local minima and independently chosen branches can invert
-result order. The unique field inversion avoids that ambiguity. On the Queens
-snapshot it preserved every strict result comparison, and every exact result
-tie shared one performance.
+result order. The unique field inversion avoids that ambiguity. The historical
+Queens snapshot preserved every strict result comparison, and every exact
+result tie shared one performance under the formula tested at that time.
 
 The delta applies opponent-specific `W_ij` values while performance uses an
 unweighted mean display score. In unusually spread fields, delta and
 `performance - pre_rating` can therefore have opposite signs without changing
-the day's performance order. In the documented merged live/import replay this
+the day's performance order. In the historical merged live/import replay this
 occurred in 13 of 994 contested Queens performances (1.31%); the largest
 opposite-direction offset was 19.06 rating points.
 
-## Snapshot results
+## Historical snapshot results
+
+These results predate the current 75/25 head-to-head blend. The source snapshot
+is not in this repository, so they were not recomputed for this change.
 
 | Measure | Previous K=144 beta |
 |---|---:|
@@ -325,13 +336,14 @@ less than 0.1 percentage point, margin calibration worsened slightly, ordinary
 movement increased, and corruption tails did not improve. It also adds a
 discontinuous rank step to near-tied times.
 
-That historical 95% soft-result / 5% strict-result experiment is unrelated to
-the current 90% Brier / 10% log-loss gradient blend.
+That historical 95% soft-result / 5% strict-result experiment used an older
+time offset and optimizer. It tests the same broad target family but does not
+validate the current user-directed 75/25 choice. The 90% Brier / 10% log-loss
+gradient blend is a separate robustness mechanism.
 
-The aggressive models gain binary confidence by changing the product goal.
-They do not provide a better version of the requested close-times-as-near-ties
-rating. Recent research also finds that simple Elo can outperform more complex
-models on sparse data despite model misspecification
+Adding hard-result weight changes the product goal: strict wins matter even
+when their time margins are tiny. Recent research also finds that simple Elo
+can outperform more complex models on sparse data despite misspecification
 ([Tang, Wang, and Jin, 2025](https://arxiv.org/abs/2502.10985)).
 
 The literature supports testing score information, but not raw,
@@ -409,6 +421,7 @@ Future changes to `+beta` must retain:
 - solo days producing no rating signal;
 - exact ties and tied performance;
 - pair complement and round point conservation;
+- the 75% continuous-margin / 25% hard-result pair target;
 - the `124(n - 1)/n` daily bound;
 - the `124/n` one-opponent contamination bound;
 - rating-translation invariance;

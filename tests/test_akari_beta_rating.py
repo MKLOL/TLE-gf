@@ -10,7 +10,11 @@ from tle.util.akari_beta_rating import (
     _akari_beta_performance_pair_score,
     compute_akari_beta_ratings,
 )
-from tle.util.queens_improved_rating import _soft_time_score
+from tle.util.queens_improved_rating import (
+    _HEAD_TO_HEAD_WEIGHT,
+    _hybrid_time_score,
+    _soft_time_score,
+)
 
 
 Result = namedtuple(
@@ -43,10 +47,12 @@ def test_additive_pair_score_uses_higher_accuracy_time_as_denominator():
     higher = _row(1, seconds=100, perfect=True, accuracy=100)
     lower = _row(2, seconds=50, perfect=False, accuracy=99)
 
-    expected_lower = _soft_time_score(50 + 100, 100)
+    margin_lower = _soft_time_score(50 + 100, 100)
+    expected_lower = (1 - _HEAD_TO_HEAD_WEIGHT) * margin_lower
     lower_score = _akari_beta_pair_score(lower, higher)
 
     assert math.isclose(lower_score, expected_lower, rel_tol=0, abs_tol=1e-15)
+    assert lower_score < 0.375
     assert math.isclose(
         _akari_beta_pair_score(higher, lower),
         1.0 - expected_lower,
@@ -121,12 +127,12 @@ def test_pair_scores_are_complementary_across_accuracy_and_time():
             )
 
 
-def test_equal_accuracy_keeps_the_existing_soft_time_margin():
+def test_equal_accuracy_blends_time_margin_with_head_to_head_result():
     fast = _row(1, seconds=10, perfect=False, accuracy=95)
     slow = _row(2, seconds=20, perfect=False, accuracy=95)
     tied = _row(3, seconds=10, perfect=False, accuracy=95)
 
-    assert _akari_beta_pair_score(fast, slow) == _soft_time_score(10, 20)
+    assert _akari_beta_pair_score(fast, slow) == _hybrid_time_score(10, 20)
     assert _akari_beta_pair_score(fast, slow) > 0.5
     assert _akari_beta_pair_score(slow, fast) < 0.5
     assert _akari_beta_pair_score(fast, tied) == 0.5
@@ -138,6 +144,11 @@ def test_display_performance_uses_a_hard_accuracy_hierarchy():
 
     assert _akari_beta_performance_pair_score(higher, lower) == 1.0
     assert _akari_beta_performance_pair_score(lower, higher) == 0.0
+
+    equal_accuracy_slow = _row(
+        3, seconds=10, perfect=False, accuracy=99)
+    assert _akari_beta_performance_pair_score(
+        equal_accuracy_slow, lower) == _hybrid_time_score(10, 1)
 
 
 def test_perfect_flag_does_not_add_a_hidden_accuracy_tier():

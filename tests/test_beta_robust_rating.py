@@ -10,7 +10,7 @@ from tle.util.queens_improved_rating import (
     _compute_round_from_pair_score,
     _elo_expected,
     _field_expected,
-    _soft_time_score,
+    _hybrid_time_score,
 )
 
 from tests.test_akari_beta_rating import _row
@@ -32,7 +32,7 @@ def _manual_deltas(ratings, times):
         for opponent in users:
             if opponent == user:
                 continue
-            score = _soft_time_score(times[user], times[opponent])
+            score = _hybrid_time_score(times[user], times[opponent])
             expected = _elo_expected(
                 ratings[user], ratings[opponent])
             residual += (
@@ -41,10 +41,10 @@ def _manual_deltas(ratings, times):
     return deltas
 
 
-def _mean_soft_score(user, ratings, times):
+def _mean_hybrid_score(user, ratings, times):
     return sum(
         0.5 if opponent == user
-        else _soft_time_score(times[user], times[opponent])
+        else _hybrid_time_score(times[user], times[opponent])
         for opponent in sorted(ratings)
     ) / len(ratings)
 
@@ -173,7 +173,7 @@ def test_performance_uniquely_inverts_the_mean_field_score():
     updates = _compute_round(ratings, times)
 
     for user, update in updates.items():
-        target = _mean_soft_score(user, ratings, times)
+        target = _mean_hybrid_score(user, ratings, times)
         assert math.isclose(
             _field_expected(
                 update.performance, list(ratings.values())),
@@ -231,11 +231,11 @@ def test_akari_replay_uses_the_same_blended_update_after_ratings_diverge():
     ]
     states = compute_akari_beta_ratings(rows)
 
-    first_score = _soft_time_score(10, 30)
+    first_score = _hybrid_time_score(10, 30)
     first_delta = _RATING_K / 2 * (first_score - 0.5)
     pre_one = 1200 + first_delta
     pre_two = 1200 - first_delta
-    second_score = _soft_time_score(30, 10)
+    second_score = _hybrid_time_score(30, 10)
     second_expected = _elo_expected(pre_one, pre_two)
     second_delta = (
         _RATING_K / 2

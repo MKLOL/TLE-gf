@@ -3,6 +3,8 @@
 import math
 
 from tle.util.queens_improved_rating import (
+    _blend_pair_score,
+    _hybrid_time_score,
     _result_time_seconds,
     _soft_time_score_from_logs,
     _time_log,
@@ -55,28 +57,33 @@ def _akari_time_log(row):
 
 
 def _akari_beta_pair_score(row, opponent):
-    """Accuracy-first pair evidence with an opponent-relative time margin."""
+    """Blend accuracy-first margin evidence with the hard result."""
     accuracy = _akari_accuracy(row)
     opponent_accuracy = _akari_accuracy(opponent)
+    if accuracy == opponent_accuracy:
+        return _hybrid_time_score(
+            row.time_seconds, opponent.time_seconds)
+
     time_log = _akari_time_log(row)
     opponent_time_log = _akari_time_log(opponent)
-    if accuracy == opponent_accuracy:
-        return _soft_time_score_from_logs(time_log, opponent_time_log)
     if accuracy < opponent_accuracy:
-        return _lower_accuracy_score(time_log, opponent_time_log)
-    return 1.0 - _lower_accuracy_score(opponent_time_log, time_log)
+        margin_score = _lower_accuracy_score(time_log, opponent_time_log)
+    else:
+        margin_score = 1.0 - _lower_accuracy_score(
+            opponent_time_log, time_log)
+    return _blend_pair_score(
+        margin_score, float(accuracy > opponent_accuracy))
 
 
 def _akari_beta_performance_pair_score(row, opponent):
     """Accuracy hierarchy for monotone event performance display."""
     accuracy = _akari_accuracy(row)
     opponent_accuracy = _akari_accuracy(opponent)
-    time_log = _akari_time_log(row)
-    opponent_time_log = _akari_time_log(opponent)
+    time_seconds = _result_time_seconds(row.time_seconds)
+    opponent_time_seconds = _result_time_seconds(opponent.time_seconds)
     if accuracy != opponent_accuracy:
         return float(accuracy > opponent_accuracy)
-    return _soft_time_score_from_logs(
-        time_log, opponent_time_log)
+    return _hybrid_time_score(time_seconds, opponent_time_seconds)
 
 
 def compute_akari_beta_ratings(rows, **kwargs):

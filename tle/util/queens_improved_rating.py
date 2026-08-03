@@ -1,11 +1,11 @@
 """Experimental margin-aware multiplayer Elo replay for LinkedIn Queens.
 
 The canonical Queens ladder remains Codeforces-style.  This module powers only
-the opt-in ``+beta`` views and deliberately uses a calmer, time-sensitive
-model:
+the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
 
 * every opponent contributes a bounded fraction of one daily result;
-* close times behave almost like ties instead of full wins/losses;
+* 75% of each pair score comes from the time margin and 25% from the hard
+  faster/slower result, so close wins still matter;
 * the field is averaged, so a 20-player day is not 19 independent games;
 * a proper log-loss/Brier blend smoothly reduces one surprising day's
   leverage without a post-hoc delta cap;
@@ -14,7 +14,7 @@ model:
   span the existing minigame rank tiers.
 
 Displayed performance uniquely inverts the common field expectation from the
-mean soft result. This keeps result order monotone even though the robust
+mean hybrid result. This keeps result order monotone even though the robust
 update loss itself can be non-convex. A neutral self-comparison keeps the best
 and worst performance finite, while a single extreme time can affect every
 other player by only ``1 / field_size``.
@@ -42,6 +42,7 @@ _START_RATING = 1200.0
 # player-facing points per original beta point.  Scaling the expectation curve,
 # K, and performance search together preserves every probability and ordering.
 _TIME_MARGIN_WIDTH = 0.35
+_HEAD_TO_HEAD_WEIGHT = 0.25
 # This is a bound on one pair's *evidence*, not on a player's rating change.
 # It activates only beyond a 16.4x raw-time ratio and prevents malformed
 # or repeated extreme margins from producing numerical 0/1 separation.
@@ -126,6 +127,31 @@ def _soft_time_score_from_logs(log_self, log_other):
     return _sigmoid(logit)
 
 
+def _hard_time_score(time_self, time_other):
+    """Return the strict faster/slower result, with exact ties neutral."""
+    if time_self == time_other:
+        return 0.5
+    return float(time_self < time_other)
+
+
+def _blend_pair_score(margin_score, head_to_head_score):
+    """Blend continuous margin evidence with one bounded hard result."""
+    return (
+        (1.0 - _HEAD_TO_HEAD_WEIGHT) * margin_score
+        + _HEAD_TO_HEAD_WEIGHT * head_to_head_score
+    )
+
+
+def _hybrid_time_score(time_self, time_other):
+    """Return the 75% time-margin, 25% head-to-head pair score."""
+    self_seconds = _result_time_seconds(time_self)
+    other_seconds = _result_time_seconds(time_other)
+    return _blend_pair_score(
+        _soft_time_score(self_seconds, other_seconds),
+        _hard_time_score(self_seconds, other_seconds),
+    )
+
+
 def _compute_round(ratings, times, *, compute_performance=True):
     """Return naturally bounded, zero-sum updates for one multiplayer day."""
     users = sorted(ratings)
@@ -137,11 +163,20 @@ def _compute_round(ratings, times, *, compute_performance=True):
             for user in users
         }
 
-    time_logs = {user: _time_log(times[user]) for user in users}
+    normalized_times = {
+        user: _result_time_seconds(times[user]) for user in users
+    }
+    time_logs = {
+        user: _time_log(normalized_times[user]) for user in users
+    }
     return _compute_round_from_pair_score(
         ratings,
-        lambda user, opponent: _soft_time_score_from_logs(
-            time_logs[user], time_logs[opponent]),
+        lambda user, opponent: _blend_pair_score(
+            _soft_time_score_from_logs(
+                time_logs[user], time_logs[opponent]),
+            _hard_time_score(
+                normalized_times[user], normalized_times[opponent]),
+        ),
         compute_performance=compute_performance,
     )
 
@@ -270,7 +305,7 @@ def compute_queens_improved_ratings(
         include_decay_in_history=False, current_puzzle_number=None,
         rank_fn=None, pair_score_fn=None, row_validator_fn=None,
         performance_pair_score_fn=None, performance_puzzles=None, **_ignored):
-    """Replay Queens results with the experimental soft-bracket Elo model.
+    """Replay Queens results with the experimental hybrid-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
     existing ``+beta`` table and graph can use this engine without storing

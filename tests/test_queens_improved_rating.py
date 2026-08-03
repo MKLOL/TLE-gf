@@ -9,10 +9,12 @@ import pytest
 
 from tle.util.queens_improved_rating import (
     _ELO_SCALE,
+    _HEAD_TO_HEAD_WEIGHT,
     _RATING_K,
     _TIME_MARGIN_LOGIT_LIMIT,
     _TIME_MARGIN_WIDTH,
     _compute_round,
+    _hybrid_time_score,
     _soft_time_score,
     _time_log,
     compute_queens_improved_ratings,
@@ -48,12 +50,20 @@ def _day(puzzle, results):
     ]
 
 
-def test_time_spacing_shapes_the_soft_bracket_and_performance():
+def test_time_spacing_shapes_the_hybrid_bracket_and_performance():
     assert _RATING_K == 124
+    assert _HEAD_TO_HEAD_WEIGHT == 0.25
     assert _soft_time_score(12, 12) == 0.5
     close_advantage = _soft_time_score(12, 13) - 0.5
     wider_advantage = _soft_time_score(13, 16) - 0.5
     assert 0 < close_advantage < wider_advantage
+    assert _hybrid_time_score(12, 13) == (
+        0.75 * _soft_time_score(12, 13) + 0.25
+    )
+    assert _hybrid_time_score(13, 12) == (
+        0.75 * _soft_time_score(13, 12)
+    )
+    assert _hybrid_time_score(12, 12) == 0.5
 
     times = {
         str(index): seconds
@@ -65,12 +75,28 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     }
 
     assert by_time[12] - by_time[13] < by_time[13] - by_time[16]
-    assert abs((by_time[12] - by_time[13]) - 60.49) < 0.1
-    assert abs((by_time[13] - by_time[16]) - 156.91) < 0.1
+    assert abs((by_time[12] - by_time[13]) - 88.89) < 0.1
+    assert abs((by_time[13] - by_time[16]) - 163.65) < 0.1
     # The wider player-facing point scale should make the existing rank bands
     # meaningful while the underlying closeness response stays unchanged.
     assert updates['0'].delta > 30
     assert updates['7'].delta < -30
+
+
+def test_photo_finish_gets_a_quarter_head_to_head_result():
+    win = _hybrid_time_score(100, 101)
+    loss = _hybrid_time_score(101, 100)
+
+    assert math.isclose(win, 0.6303301753865275, abs_tol=1e-15)
+    assert 0.625 < win < 1
+    assert 0 < loss < 0.375
+    assert math.isclose(win + loss, 1.0, abs_tol=1e-15)
+
+    # Distinct enormous integers can share one floating-point logarithm. The
+    # hard component must compare their exact validated seconds instead.
+    huge = 10 ** 400
+    assert _soft_time_score(huge, huge + 1) == 0.5
+    assert _hybrid_time_score(huge, huge + 1) == 0.625
 
 
 def test_extreme_pair_evidence_is_symmetric_and_never_separates():
