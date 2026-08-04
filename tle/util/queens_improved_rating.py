@@ -9,7 +9,9 @@ the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
 * the field is averaged, so a 20-player day is not 19 independent games;
 * a proper log-loss/Brier blend smoothly reduces one surprising day's
   leverage without a post-hoc delta cap;
-* complementary pair updates preserve an exactly zero-sum round;
+* complementary pair evidence is zero-sum before a small field correction;
+* each rated participant then contributes 0.25 points of deflation to offset
+  rating parked by short-lived accounts and redistributed inactive decay;
 * player-facing rating points use a wider scale so sustained skill differences
   span the existing minigame rank tiers.
 
@@ -54,6 +56,12 @@ _START_RATING = 1200.0
 # player-facing points per original beta point.  Scaling the expectation curve,
 # K, and performance search together preserves every probability and ordering.
 _RATING_K = _RATING_POINT_SCALE * 62.0
+# The pairwise model is naturally zero-sum, but the visible active pool is not:
+# short-lived players can leave below the starting rating, while decay moves
+# points from inactive players to active ones.  Apply only the lightweight
+# field-wide part of the Codeforces correction.  There is deliberately no
+# strongest-player correction in the beta ladder.
+_FIELD_DEFLATION = 0.25
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,23 @@ class _Player:
 class _RoundUpdate:
     delta: float
     performance: float
+
+
+def _apply_field_correction(updates):
+    """Center one rated field, then remove 0.25 points per participant."""
+    if len(updates) < 2:
+        return updates
+    shift = (
+        -sum(update.delta for update in updates.values()) / len(updates)
+        - _FIELD_DEFLATION
+    )
+    return {
+        user: _RoundUpdate(
+            delta=update.delta + shift,
+            performance=update.performance,
+        )
+        for user, update in updates.items()
+    }
 
 
 def _compute_round(ratings, times, *, compute_performance=True):
@@ -232,10 +257,12 @@ def compute_queens_improved_ratings(
     existing ``+beta`` table and graph can use this engine without storing
     a second rating snapshot. Above-start absentees decay toward
     ``start_rating`` on concluded active days, and their lost points are split
-    equally among that day's valid participants. A custom
-    ``performance_pair_score_fn`` can decouple event-performance ordering from
-    rating evidence, but requires a custom ``pair_score_fn`` and never affects
-    deltas.
+    equally among that day's valid participants. Each rated update is centered
+    and then reduced by 0.25 points per participant before that zero-sum decay
+    transfer; the stronger-participant Codeforces correction is not used. A
+    custom ``performance_pair_score_fn`` can decouple event-performance ordering
+    from rating evidence, but requires a custom ``pair_score_fn`` and never
+    affects deltas.
     """
     del rank_fn
     if start_rating is None:
@@ -325,6 +352,7 @@ def compute_queens_improved_ratings(
                     compute_performance=compute_performance,
                     performance_pair_score_fn=performance_pair_score_fn)
             )
+            updates = _apply_field_correction(updates)
         else:
             updates = {
                 user_id: _RoundUpdate(delta=0.0, performance=None)

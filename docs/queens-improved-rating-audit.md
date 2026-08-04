@@ -3,8 +3,9 @@
 ## Scope and decision
 
 This audit covers the opt-in Queens `+beta` engine. Akari `+beta` reuses its
-zero-sum update with an accuracy-first, opponent-relative hybrid score and a
-separate hierarchical score for displayed event performance.
+zero-sum pair evidence and field correction with an accuracy-first,
+opponent-relative hybrid score and a separate hierarchical score for displayed
+event performance.
 Ordinary Queens, ordinary Akari, persisted rating snapshots, registration
 policy, and command routing are outside the formula change.
 
@@ -17,6 +18,7 @@ The current player-facing parameters are:
 - expectation scale `800 / ln(10)`;
 - K-factor `124`;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
+- field correction: `0.25` points per rated participant;
 - no field-size multiplier or post-hoc delta cap.
 
 The original research and robustness tournament used a four-second offset.
@@ -119,10 +121,12 @@ W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 
 Lower time is better for Queens and within an Akari accuracy tier. Across
 Akari tiers, accuracy determines the winner and time determines the margin.
-The update is:
+The pairwise update and final contest delta are:
 
 ```text
-delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+raw_delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+c = -mean(raw_delta) - 0.25
+delta_i = raw_delta_i + c
 ```
 
 The weight is the rating-logit gradient of a 10% cross-entropy / 90% Brier
@@ -154,7 +158,7 @@ self-score keeps their field means strictly interior.
 
 ## Proven guarantees
 
-### Point conservation
+### Raw conservation and field correction
 
 For every pair:
 
@@ -168,21 +172,24 @@ The evidence clip is symmetric, so it preserves this identity. Pair residuals
 cancel:
 
 ```text
-sum(delta_i over the field) = 0
+sum(raw_delta_i over the field) = 0
 ```
 
-Every newly observed player starts at 1200. If all observed identities remain
-in the replay, induction gives:
+The correction recenters floating residue and subtracts the same `0.25` from
+each rated participant. It preserves all within-round delta differences and
+produces:
 
 ```text
-total rating = 1200 * observed player count
+sum(delta_i over the field) = -0.25 * n
+total rating = 1200 * observed players - 0.25 * rated participations
 ```
 
-The snapshot total is exactly `34,800 = 29 × 1200`. Its largest per-day
-floating error was `3.38e-14`.
+Decay transfers remain zero-sum. Solo days pay no correction. The stronger-
+participant Codeforces correction is deliberately absent.
 
-This is **point conservation**, not a claim that every visible or active
-leaderboard is inflation-proof.
+The historical snapshot figures below predate this field policy; their exact
+`34,800 = 29 × 1200` total and `3.38e-14` largest daily error describe the
+retired zero-sum replay, not current output.
 
 ### Natural daily bound
 
@@ -190,11 +197,12 @@ Each pair residual lies strictly between `-1` and `1`, and there are `n - 1`
 non-self terms:
 
 ```text
-abs(delta_i) < 124 * (n - 1) / n
+abs(delta_i + 0.25) < 124 * (n - 1) / n
 ```
 
-That is below 113.7 points in a 12-player field and below 117.8 in a 20-player
-field. There is no post-processing delta clamp.
+The raw component is below 113.7 points in a 12-player field and below 117.8
+in a 20-player field; final magnitude can be `0.25` larger. There is no
+post-processing delta clamp.
 
 ### One-time contamination bound
 
@@ -389,12 +397,12 @@ The formula cannot by itself prevent:
 - historical rewrites when current registration filters old fields;
 - the whole community improving together on an absolute scale.
 
-In stress trials, submitting only times no slower than one's trailing personal
+In the historical pre-correction stress trials, submitting only times no slower than one's trailing personal
 median raised ratings by a median `34` and as much as `140`. Ten fresh losing
 accounts could give a roughly 1221-rated beneficiary about `64` points in one
-day. Both attacks still conserve total points: balancing losses remain in
-submitted-round opponents or donor accounts, while withheld bad days create
-selection bias.
+day. Their pairwise transfers remain balanced in the current model, while the
+field correction additionally removes `0.25` per rated participant. Withheld
+bad days still create selection bias.
 
 Stronger defenses require product policy—mandatory capture, activity
 requirements, identity trust, or stable anonymized historical competitors.
@@ -410,7 +418,8 @@ Elo-MMR proves robust response and aligned incentives for large ranked fields
 Bayesian models can use extra outcome information
 ([Guo et al., 2012](https://www.microsoft.com/en-us/research/wp-content/uploads/2012/01/sbsl_ecml2012.pdf)).
 For only 58 rated Queens days, their added uncertainty and parameters did not
-outweigh loss of exact conservation, time-margin semantics, or simplicity.
+outweigh loss of raw pair conservation, transparent field accounting,
+time-margin semantics, or simplicity.
 
 ## Release invariants
 
@@ -422,11 +431,13 @@ Future changes to `+beta` must retain:
 - solo days producing no contest delta while remaining eligible to receive a
   zero-sum decay transfer;
 - exact ties and tied performance;
-- pair complement and round point conservation;
+- pair complement and raw round point conservation;
+- exactly `0.25` field deflation per rated participant, with no
+  strongest-player correction;
 - concluded-active-day decay only above 1200, with current-day protection and
   equal redistribution to valid participants;
 - the 85% continuous-margin / 15% hard-result pair target;
-- the `124(n - 1)/n` contest-delta bound before any decay transfer;
+- the `124(n - 1)/n` raw contest-delta bound before field correction or decay;
 - the `124/n` one-opponent contamination bound;
 - contest-update rating-translation invariance before fixed-anchor decay;
 - unique, result-monotone event performance;

@@ -145,8 +145,9 @@ class ImplRatingMixin:
         kwargs = self._rating_compute_kwargs(game)
         if improved and game.name == QUEENS_GAME.name:
             # Canonical Queens deliberately has no inactivity decay. The beta
-            # ladder uses Akari's active-day, zero-sum profile and protects the
-            # still-open Pacific-time puzzle.
+            # ladder uses Akari's active-day decay profile and protects the
+            # still-open Pacific-time puzzle. Decay transfers remain zero-sum;
+            # rated beta contests separately apply their small field correction.
             kwargs.update(
                 decay_base=constants.AKARI_DECAY_BASE,
                 decay_max=constants.AKARI_DECAY_MAX,

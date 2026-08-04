@@ -7,7 +7,10 @@ from tle import constants
 from tle.cogs._mgimpl_rating import ImplRatingMixin
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.util.akari_beta_rating import compute_akari_beta_ratings
-from tle.util.queens_improved_rating import compute_queens_improved_ratings
+from tle.util.queens_improved_rating import (
+    _FIELD_DEFLATION,
+    compute_queens_improved_ratings,
+)
 
 
 Result = namedtuple(
@@ -45,7 +48,7 @@ def _without_decay(rows, **kwargs):
         rows, decay_base=0.0, decay_max=0.0, **kwargs)
 
 
-def test_beta_decay_is_zero_sum_and_solo_player_receives_the_pool():
+def test_beta_decay_preserves_field_deflation_and_solo_receives_the_pool():
     rows = _two_day_rows()
     baseline = _without_decay(rows)
     histories = {}
@@ -67,7 +70,8 @@ def test_beta_decay_is_zero_sum_and_solo_player_receives_the_pool():
         abs_tol=1e-9,
     )
     assert math.isclose(
-        states['fast'].rating + states['slow'].rating, 2400.0,
+        states['fast'].rating + states['slow'].rating,
+        2400.0 - 2 * _FIELD_DEFLATION,
         abs_tol=1e-9,
     )
     assert states['fast'].skip_streak == 1
@@ -129,7 +133,8 @@ def test_akari_beta_adapter_uses_the_shared_decay_engine():
     assert states['fast'].rating < baseline['fast'].rating
     assert states['slow'].rating > baseline['slow'].rating
     assert math.isclose(
-        sum(state.rating for state in states.values()), 2400.0,
+        sum(state.rating for state in states.values()),
+        2400.0 - 2 * _FIELD_DEFLATION,
         abs_tol=1e-9,
     )
 

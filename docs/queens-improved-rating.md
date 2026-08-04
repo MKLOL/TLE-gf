@@ -66,14 +66,20 @@ Each pair then receives a blended proper-score weight:
 
 ```text
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
-delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+raw_delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+c = -mean(raw_delta) - 0.25
+delta_i = raw_delta_i + c
 ```
 
 This is the rating-logit gradient of a 10% cross-entropy / 90% Brier
 proper-scoring loss. At an even expectation (`E = 0.5`) it is identical to the
 old update. Near a very confident `0` or `1` expectation, one contradictory
 day has less leverage, while the 10% cross-entropy floor prevents it from
-being ignored. It is a smooth formula, not a post-processing delta cap.
+being ignored. It is a smooth formula, not a post-processing delta cap. The
+separate common shift `c` preserves every delta difference while making the
+field lose exactly `0.25n` points. It is the lightweight field-wide part of
+Codeforces' anti-inflation policy; beta deliberately omits the strongest-player
+correction.
 
 The wider `800` expectation scale keeps sustained skill differences visible
 across the existing rank bands, while the `124` K-factor controls the weight
@@ -87,21 +93,23 @@ Consequences:
 
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
-- Every contested round is zero-sum. Decay is also zero-sum: points removed
-  from absentees are transferred to that day's valid participants. A fixed
-  retained identity pool therefore cannot create nominal points. Active or
-  visible averages can still move through churn, selective submission, hidden
-  accounts, or sybils.
+- Pairwise contest evidence is zero-sum, after which every rated participant
+  contributes `0.25` points of field deflation. Decay remains zero-sum: points
+  removed from absentees are transferred to that day's valid participants.
+  The small contest correction offsets rating parked by short-lived accounts
+  and the resulting uplift of the visible active pool.
 - There is no post-processing cap. Every pair score and expectation is a
   probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  `|delta_i| < 124(n - 1)/n`, which is below the K-factor.
+  `|delta_i + 0.25| < 124(n - 1)/n`; final magnitude is therefore below that
+  natural bound plus `0.25`.
 - On each concluded puzzle day with at least one valid result, an above-1200
   absentee loses 4% of their gap to 1200 on the first skipped day and up to 8%
   as the streak grows. Below-start players freeze; the still-open Pacific-time
   Queens puzzle is protected. Ordinary non-beta Queens remains decay-free.
 - New players receive the same bounded update rule as established players.
-- Playing more days supplies more contest evidence but does not create points;
-  even a solo participant can receive points already removed from absentees.
+- Playing more days supplies more contest evidence and pays the same small
+  field correction each time; a solo participant pays none but can receive
+  points already removed from absentees.
 - A malformed locked first time is quarantined from the beta replay after
   first-submission deduplication. It cannot become a zero-second win, promote a
   later retry, or break every `+beta` command.
@@ -142,14 +150,14 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1715 | +39.07 |
-| 8 | 1578 | +30.78 |
-| 10 | 1395 | +16.94 |
-| 12 | 1249 | +4.35 |
-| 13 | 1171 | -2.56 |
-| 16 | 1010 | -16.51 |
-| 20 | 831 | -30.17 |
-| 25 | 629 | -41.89 |
+| 7 | 1715 | +38.82 |
+| 8 | 1578 | +30.53 |
+| 10 | 1395 | +16.69 |
+| 12 | 1249 | +4.10 |
+| 13 | 1171 | -2.81 |
+| 16 | 1010 | -16.76 |
+| 20 | 831 | -30.42 |
+| 25 | 629 | -42.14 |
 
 The performance drop from 12 to 13 seconds is about 78 points; the drop from
 13 to 16 is about 161 points. The hard component makes each strict placement
@@ -157,10 +165,10 @@ meaningful while the time component still rewards the larger margin.
 
 ## Akari accuracy-first pair scores
 
-Akari `+beta` keeps the shared zero-sum update but supplies its own margin
-score. For equal accuracy, it uses the ordinary soft time comparison. For
-different accuracies, let `L` be the lower-accuracy result and `H` the
-higher-accuracy result:
+Akari `+beta` keeps the shared zero-sum pair evidence and field correction but
+supplies its own margin score. For equal accuracy, it uses the ordinary soft
+time comparison. For different accuracies, let `L` be the lower-accuracy
+result and `H` the higher-accuracy result:
 
 ```text
 adjusted_time_L = time_L + time_H
@@ -173,8 +181,8 @@ accuracy can approach a tie but never win, and taking longer can only worsen
 its score. Every nonzero accuracy difference is a tier boundary; the size of
 the percentage gap does not add another parameter. The rating target is then
 `S_ij = 0.85 * M_ij + 0.15 * H_ij`, where `H` is the hard accuracy-first,
-time-second result. Pair scores remain complementary, so the K=124 rating
-round remains exactly zero-sum.
+time-second result. Pair scores remain complementary, so the K=124 raw rating
+round remains exactly zero-sum before the common `-0.25` policy shift.
 
 Displayed event performance uses a separate hierarchical pair score:
 
@@ -193,9 +201,10 @@ perfect flag adds no hidden tier beyond its reported accuracy.
 
 ## Historical snapshot replay
 
-The following snapshot figures predate the 85/15 head-to-head blend and the
-current beta decay policy. They are retained only as historical context. The
-current model has not been rerun on that unavailable snapshot.
+The following snapshot figures predate the 85/15 head-to-head blend, the
+current beta decay policy, and the field correction. They are retained only as
+historical context. The current model has not been rerun on that unavailable
+snapshot.
 
 The supplied snapshot was read without modification. Its exact live/import
 first-submission merge contains 1,378 results, 29 observed users, and 442

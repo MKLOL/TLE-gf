@@ -11,6 +11,7 @@ from tle.util.akari_beta_rating import (
     compute_akari_beta_ratings,
 )
 from tle.util.queens_improved_rating import (
+    _FIELD_DEFLATION,
     _HEAD_TO_HEAD_WEIGHT,
     _hybrid_time_score,
     _soft_time_score,
@@ -238,7 +239,9 @@ def test_same_quality_uses_soft_time_margin_and_equal_results_tie():
         close_states['1'].rating - 1200
         < wide_states['1'].rating - 1200
     )
-    assert {state.rating for state in tied_states.values()} == {1200}
+    assert {state.rating for state in tied_states.values()} == {
+        1200 - _FIELD_DEFLATION
+    }
     assert {
         point.performance
         for history in tied_histories.values()
@@ -246,7 +249,7 @@ def test_same_quality_uses_soft_time_margin_and_equal_results_tie():
     } == {1200}
 
 
-def test_round_is_zero_sum_finite_and_deterministic():
+def test_round_has_fixed_field_deflation_and_is_deterministic():
     rows = [
         _row(1, seconds=80, perfect=True, accuracy=100),
         _row(2, seconds=15, perfect=False, accuracy=99),
@@ -260,7 +263,11 @@ def test_round_is_zero_sum_finite_and_deterministic():
 
     assert actual == expected
     assert actual_histories == expected_histories
-    assert abs(sum(state.rating - 1200 for state in actual.values())) < 1e-9
+    assert math.isclose(
+        sum(state.rating - 1200 for state in actual.values()),
+        -len(actual) * _FIELD_DEFLATION,
+        abs_tol=1e-9,
+    )
     assert all(math.isfinite(state.rating) for state in actual.values())
 
 

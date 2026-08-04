@@ -9,6 +9,7 @@ import pytest
 
 from tle.util.queens_improved_rating import (
     _ELO_SCALE,
+    _FIELD_DEFLATION,
     _HEAD_TO_HEAD_WEIGHT,
     _RATING_K,
     _TIME_MARGIN_LOGIT_LIMIT,
@@ -179,11 +180,19 @@ def test_equal_times_share_performance_and_stay_symmetric():
     histories = {}
     states = compute_queens_improved_ratings(rows, histories=histories)
 
-    assert {state.rating for state in states.values()} == {1200}
+    assert {state.rating for state in states.values()} == {
+        1200 - 5 * _FIELD_DEFLATION
+    }
     assert {state.games for state in states.values()} == {5}
     for points in histories.values():
-        assert all(point.rating == 1200 for point in points)
-        assert all(abs(point.performance - 1200) < 1e-9 for point in points)
+        assert [point.rating for point in points] == [
+            1200 - puzzle * _FIELD_DEFLATION
+            for puzzle in range(1, 6)
+        ]
+        assert [point.performance for point in points] == [
+            1200 - (puzzle - 1) * _FIELD_DEFLATION
+            for puzzle in range(1, 6)
+        ]
 
 
 def test_rating_delta_and_performance_follow_the_daily_result():
@@ -322,15 +331,18 @@ def test_one_changed_time_has_bounded_influence_on_every_other_player():
                 assert change <= _RATING_K / count + 1e-10
 
 
-def test_replay_conserves_starting_mean_as_players_enter():
+def test_replay_applies_only_fixed_field_deflation_as_players_enter():
     rng = random.Random(424242)
     rows = []
     next_message = 1
+    rated_participations = 0
     for puzzle in range(1, 31):
         # The observed pool grows, and some days deliberately have only one
-        # participant.  Neither entry nor a solo day may create rating drift.
+        # participant. Entry and solo days do not add any field correction.
         observed = min(12, 1 + puzzle // 2)
         field_size = 1 if puzzle % 7 == 0 else min(observed, 2 + puzzle % 8)
+        if field_size >= 2:
+            rated_participations += field_size
         for user_index in rng.sample(range(observed), field_size):
             rows.append(_row(
                 f'u{user_index}',
@@ -343,7 +355,12 @@ def test_replay_conserves_starting_mean_as_players_enter():
     states = compute_queens_improved_ratings(rows)
 
     assert len(states) == 12
-    assert abs(sum(state.rating for state in states.values()) - 12 * 1200) < 1e-9
+    expected_total = 12 * 1200 - rated_participations * _FIELD_DEFLATION
+    assert math.isclose(
+        sum(state.rating for state in states.values()),
+        expected_total,
+        abs_tol=1e-9,
+    )
 
 
 def test_malformed_times_are_quarantined_from_improved_replay():
@@ -373,7 +390,8 @@ def test_malformed_times_are_quarantined_from_improved_replay():
     assert states['u10'].rating > 1200
     assert states['u10'].games == 0
     assert math.isclose(
-        sum(state.rating for state in states.values()), 3600,
+        sum(state.rating for state in states.values()),
+        3600 - 2 * _FIELD_DEFLATION,
         abs_tol=1e-9,
     )
     with pytest.raises(ValueError):

@@ -5,6 +5,7 @@ import random
 
 from tle.util.akari_beta_rating import compute_akari_beta_ratings
 from tle.util.queens_improved_rating import (
+    _FIELD_DEFLATION,
     _RATING_K,
     _compute_round,
     _compute_round_from_pair_score,
@@ -233,8 +234,8 @@ def test_akari_replay_uses_the_same_blended_update_after_ratings_diverge():
 
     first_score = _hybrid_time_score(10, 30)
     first_delta = _RATING_K / 2 * (first_score - 0.5)
-    pre_one = 1200 + first_delta
-    pre_two = 1200 - first_delta
+    pre_one = 1200 + first_delta - _FIELD_DEFLATION
+    pre_two = 1200 - first_delta - _FIELD_DEFLATION
     second_score = _hybrid_time_score(30, 10)
     second_expected = _elo_expected(pre_one, pre_two)
     second_delta = (
@@ -244,11 +245,13 @@ def test_akari_replay_uses_the_same_blended_update_after_ratings_diverge():
     )
 
     assert math.isclose(
-        states['1'].rating, pre_one + second_delta,
+        states['1'].rating,
+        pre_one + second_delta - _FIELD_DEFLATION,
         rel_tol=0, abs_tol=1e-9,
     )
     assert math.isclose(
-        states['2'].rating, 2400 - states['1'].rating,
+        states['2'].rating,
+        2400 - 4 * _FIELD_DEFLATION - states['1'].rating,
         rel_tol=0, abs_tol=1e-9,
     )
 
