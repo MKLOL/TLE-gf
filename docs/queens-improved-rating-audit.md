@@ -15,8 +15,8 @@ The current player-facing parameters are:
 - time offset `0` seconds;
 - soft-margin width `0.35`;
 - pair-result blend: 85% continuous margin and 15% hard head-to-head result;
-- expectation scale `800 / ln(10)`;
-- K-factor `124`;
+- expectation scale `800 / ln(10)` and K-factor `124` for Queens;
+- expectation scale `700 / ln(10)` and K-factor `108.5` for Akari;
 - proper-score blend: 10% cross-entropy gradient and 90% Brier gradient;
 - field correction: `0.25` points per rated participant;
 - no field-size multiplier or post-hoc delta cap.
@@ -76,6 +76,20 @@ rules, following
 [Gneiting and Raftery (2007)](https://sites.stat.washington.edu/people/raftery/Research/PDF/Gneiting2007jasa.pdf).
 Accuracy alone cannot distinguish calibrated confidence from overconfidence.
 
+## Fixed point-scale calibration
+
+The display coordinates were checked across historical replay checkpoints,
+not chosen to make one final snapshot equal. Queens retains its established
+`2.0` coordinate (`800`-point 10:1 gap, K=`124`); Akari uses the rounded `1.75`
+coordinate (`700`-point gap, K=`108.5`). Across all exported participants in
+the supplied snapshots, replayed with production formula semantics on
+2026-08-05, normal versus beta population standard deviation was `151.81`
+versus `153.37` for Akari and `187.87` versus `188.72` for Queens. The Queens
+export lacks registration and ban state, so this is not a reconstruction of
+the public-board subset. Means and individual ratings still differ because the
+evidence, decay, and correction policies differ. No ongoing centering,
+variance matching, or leaderboard-dependent multiplier is applied.
+
 ## Exact model
 
 For a Queens field of `n` players, transform player `i`'s time:
@@ -112,12 +126,15 @@ slower one is never rewarded. Accuracy must be an integer from 0 through 100.
 Every nonzero accuracy difference uses the same tier rule, and the perfect
 flag adds no separate tier.
 
-For both games, expected score and robust update weight are:
+For Queens, expected score and robust update weight are:
 
 ```text
 E_ij = sigmoid((rating_i - rating_j) / (800 / ln(10)))
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
 ```
+
+Akari substitutes `700 / ln(10)` in the expectation. This is a fixed,
+rounded coordinate calibration rather than a replay-by-replay normalization.
 
 Lower time is better for Queens and within an Akari accuracy tier. Across
 Akari tiers, accuracy determines the winner and time determines the margin.
@@ -128,6 +145,12 @@ raw_delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
 c = -mean(raw_delta) - 0.25
 delta_i = raw_delta_i + c
 ```
+
+Akari substitutes the proportionally matched K-factor `108.5`. Within the raw
+contest model, moving the expectation gap, K-factor, performance search span,
+and ratings together preserves the latent probabilities and normalized update
+dynamics. The fixed `0.25` anti-churn policy remains a separate displayed-point
+shift.
 
 The weight is the rating-logit gradient of a 10% cross-entropy / 90% Brier
 blend of two strictly proper scoring losses. It equals `1` at an even matchup
@@ -197,12 +220,13 @@ Each pair residual lies strictly between `-1` and `1`, and there are `n - 1`
 non-self terms:
 
 ```text
-abs(delta_i + 0.25) < 124 * (n - 1) / n
+abs(delta_i + 0.25) < K * (n - 1) / n
 ```
 
-The raw component is below 113.7 points in a 12-player field and below 117.8
-in a 20-player field; final magnitude can be `0.25` larger. There is no
-post-processing delta clamp.
+Here `K` is `124` for Queens and `108.5` for Akari. The Queens raw component
+is below 113.7 points in a 12-player field and below 117.8 in a 20-player
+field; final magnitude can be `0.25` larger. There is no post-processing delta
+clamp.
 
 ### One-time contamination bound
 
@@ -211,13 +235,14 @@ fixed, every comparison not involving `k` is bit-for-bit unchanged. For any
 other player `i`, only one term can move:
 
 ```text
-abs(delta_i_after - delta_i_before) <= 124 / n
+abs(delta_i_after - delta_i_before) <= K / n
 ```
 
-The limit is 10.34 points at `n = 12` and 6.2 at `n = 20`. The changed player's
-own result affects `n - 1` terms, so their own update can move by almost the full
-natural daily bound. The formula protects the rest of the field more strongly
-than it protects the owner of a corrupt record.
+For Queens, the limit is 10.34 points at `n = 12` and 6.2 at `n = 20`; Akari's
+limits are proportionally smaller. The changed player's own result affects
+`n - 1` terms, so their own update can move by almost the full natural daily
+bound. The formula protects the rest of the field more strongly than it
+protects the owner of a corrupt record.
 
 These are immediate-day guarantees. A wrong rating can affect later
 expectations, so full-history corruption can propagate.
@@ -437,8 +462,8 @@ Future changes to `+beta` must retain:
 - concluded-active-day decay only above 1200, with current-day protection and
   equal redistribution to valid participants;
 - the 85% continuous-margin / 15% hard-result pair target;
-- the `124(n - 1)/n` raw contest-delta bound before field correction or decay;
-- the `124/n` one-opponent contamination bound;
+- the `K(n - 1)/n` raw contest-delta bound before field correction or decay;
+- the `K/n` one-opponent contamination bound;
 - contest-update rating-translation invariance before fixed-anchor decay;
 - unique, result-monotone event performance;
 - Akari accuracy validation and additive, complementary rating pair scores;

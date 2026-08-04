@@ -3,7 +3,11 @@
 import math
 import random
 
-from tle.util.akari_beta_rating import compute_akari_beta_ratings
+from tle.util.akari_beta_rating import (
+    _AKARI_RATING_K,
+    _AKARI_RATING_POINT_SCALE,
+    compute_akari_beta_ratings,
+)
 from tle.util.queens_improved_rating import (
     _FIELD_DEFLATION,
     _RATING_K,
@@ -233,13 +237,14 @@ def test_akari_replay_uses_the_same_blended_update_after_ratings_diverge():
     states = compute_akari_beta_ratings(rows)
 
     first_score = _hybrid_time_score(10, 30)
-    first_delta = _RATING_K / 2 * (first_score - 0.5)
+    first_delta = _AKARI_RATING_K / 2 * (first_score - 0.5)
     pre_one = 1200 + first_delta - _FIELD_DEFLATION
     pre_two = 1200 - first_delta - _FIELD_DEFLATION
     second_score = _hybrid_time_score(30, 10)
-    second_expected = _elo_expected(pre_one, pre_two)
+    second_expected = _elo_expected(
+        pre_one, pre_two, point_scale=_AKARI_RATING_POINT_SCALE)
     second_delta = (
-        _RATING_K / 2
+        _AKARI_RATING_K / 2
         * _blend_weight(second_expected)
         * (second_score - second_expected)
     )

@@ -55,12 +55,15 @@ The symmetric `±8` evidence limit activates only beyond a 16.4x raw-time
 ratio. It prevents numerical certainty and extreme long-run pair separation;
 it is not a cap on a player's rating change.
 
-Given the pre-day ratings, the expected pair score is:
+Given the pre-day ratings, the expected pair score is shown below for Queens:
 
 ```text
 E(r, rating_j) = sigmoid((r - rating_j) / (800 / ln(10)))
 E_ij = E(rating_i, rating_j)
 ```
+
+Akari uses the same latent model in a slightly tighter player-facing
+coordinate: `700 / ln(10)` here and a matching K-factor of `108.5` below.
 
 Each pair then receives a blended proper-score weight:
 
@@ -81,13 +84,17 @@ field lose exactly `0.25n` points. It is the lightweight field-wide part of
 Codeforces' anti-inflation policy; beta deliberately omits the strongest-player
 correction.
 
-The wider `800` expectation scale keeps sustained skill differences visible
-across the existing rank bands, while the `124` K-factor controls the weight
-of one noisy daily puzzle. Rating scales have arbitrary units—Microsoft's
+Queens' `800` expectation gap and `124` K-factor keep sustained skill
+differences visible across the existing rank bands. Akari's rounded `700` gap
+and matching `108.5` K-factor were selected from historical checkpoint
+replays; unlike per-snapshot normalization, they remain fixed. Rating scales
+have arbitrary units—Microsoft's
 [TrueSkill explanation](https://www.microsoft.com/en-us/research/project/trueskill-ranking-system/)
 likewise calculates on one scale and multiplies into a useful display range.
-Changing K affects convergence speed and day-to-day volatility, not the
-expectation curve or its long-run equilibrium.
+Within the raw contest model, changing the expectation gap and K together and
+applying the matching affine rating map is only a coordinate change: it
+preserves probabilities, normalized learning speed, and update ordering. The
+separate fixed `0.25` field policy is intentionally not rescaled.
 
 Consequences:
 
@@ -100,8 +107,9 @@ Consequences:
   and the resulting uplift of the visible active pool.
 - There is no post-processing cap. Every pair score and expectation is a
   probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  `|delta_i + 0.25| < 124(n - 1)/n`; final magnitude is therefore below that
-  natural bound plus `0.25`.
+  Queens has `|delta_i + 0.25| < 124(n - 1)/n`, while Akari uses `108.5` in
+  the same bound; final magnitude is below the applicable natural bound plus
+  `0.25`.
 - On each concluded puzzle day with at least one valid result, an above-1200
   absentee loses 4% of their gap to 1200 on the first skipped day and up to 8%
   as the streak grows. Below-start players freeze; the still-open Pacific-time
@@ -181,8 +189,9 @@ accuracy can approach a tie but never win, and taking longer can only worsen
 its score. Every nonzero accuracy difference is a tier boundary; the size of
 the percentage gap does not add another parameter. The rating target is then
 `S_ij = 0.85 * M_ij + 0.15 * H_ij`, where `H` is the hard accuracy-first,
-time-second result. Pair scores remain complementary, so the K=124 raw rating
-round remains exactly zero-sum before the common `-0.25` policy shift.
+time-second result. Pair scores remain complementary, so Akari's K=`108.5`
+raw rating round remains exactly zero-sum before the common `-0.25` policy
+shift.
 
 Displayed event performance uses a separate hierarchical pair score:
 

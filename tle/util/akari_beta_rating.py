@@ -3,6 +3,7 @@
 import math
 
 from tle.util.queens_improved_rating import (
+    _BASE_RATING_K,
     _blend_pair_score,
     _hybrid_time_score,
     _result_time_seconds,
@@ -10,6 +11,12 @@ from tle.util.queens_improved_rating import (
     _time_log,
     compute_queens_improved_ratings,
 )
+
+
+# A fixed rounded calibration from historical Akari checkpoints. Expectation,
+# K, and performance all use this coordinate; nothing is normalized per replay.
+_AKARI_RATING_POINT_SCALE = 1.75
+_AKARI_RATING_K = _AKARI_RATING_POINT_SCALE * _BASE_RATING_K
 
 
 # One downward step makes ``1 - score`` round back to exactly 0.5. Two keep
@@ -88,6 +95,7 @@ def _akari_beta_performance_pair_score(row, opponent):
 
 def compute_akari_beta_ratings(rows, **kwargs):
     """Replay Akari with additive rating evidence and hierarchical perf."""
+    kwargs.setdefault('rating_point_scale', _AKARI_RATING_POINT_SCALE)
     return compute_queens_improved_ratings(
         rows,
         pair_score_fn=_akari_beta_pair_score,

@@ -12,8 +12,8 @@ the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
 * complementary pair evidence is zero-sum before a small field correction;
 * each rated participant then contributes 0.25 points of deflation to offset
   rating parked by short-lived accounts and redistributed inactive decay;
-* player-facing rating points use a wider scale so sustained skill differences
-  span the existing minigame rank tiers.
+* each game's player-facing point scale is calibrated independently while the
+  shared latent proper-score model remains identical.
 
 Displayed performance uniquely inverts the common field expectation from the
 mean hybrid result. This keeps result order monotone even though the robust
@@ -51,11 +51,14 @@ from tle.util._beta_rating_time import (
 
 
 _START_RATING = 1200.0
-# Rating scales have arbitrary units.  The original beta's sound latent model
-# occupied only half of the rank bands used by Queens/Akari, so expose two
-# player-facing points per original beta point.  Scaling the expectation curve,
-# K, and performance search together preserves every probability and ordering.
-_RATING_K = _RATING_POINT_SCALE * 62.0
+# Rating scales have arbitrary units. Queens keeps the established 2x display
+# coordinate; Akari supplies its independently calibrated coordinate through
+# ``rating_point_scale``. Within a raw contest, scaling the expectation curve,
+# K, performance search, and ratings together preserves every probability,
+# normalized update, and ordering. The fixed field policy stays in display
+# points and is intentionally separate from that coordinate transformation.
+_BASE_RATING_K = 62.0
+_RATING_K = _RATING_POINT_SCALE * _BASE_RATING_K
 # The pairwise model is naturally zero-sum, but the visible active pool is not:
 # short-lived players can leave below the starting rating, while decay moves
 # points from inactive players to active ones.  Apply only the lightweight
@@ -97,7 +100,9 @@ def _apply_field_correction(updates):
     }
 
 
-def _compute_round(ratings, times, *, compute_performance=True):
+def _compute_round(
+        ratings, times, *, compute_performance=True,
+        rating_point_scale=_RATING_POINT_SCALE):
     """Return naturally bounded, zero-sum updates for one multiplayer day."""
     users = sorted(ratings)
     if set(users) != set(times):
@@ -123,12 +128,14 @@ def _compute_round(ratings, times, *, compute_performance=True):
                 normalized_times[user], normalized_times[opponent]),
         ),
         compute_performance=compute_performance,
+        rating_point_scale=rating_point_scale,
     )
 
 
 def _compute_round_from_pair_score(
         ratings, pair_score_fn, *, compute_performance=True,
-        performance_pair_score_fn=None):
+        performance_pair_score_fn=None,
+        rating_point_scale=_RATING_POINT_SCALE):
     """Convert update scores and optional display scores into one beta round."""
     users = sorted(ratings)
     if len(users) < 2:
@@ -137,6 +144,10 @@ def _compute_round_from_pair_score(
             for user in users
         }
 
+    rating_point_scale = float(rating_point_scale)
+    if not math.isfinite(rating_point_scale) or rating_point_scale <= 0:
+        raise ValueError('Beta rating point scale must be finite and positive.')
+    rating_k = rating_point_scale * _BASE_RATING_K
     field_ratings = [float(ratings[user]) for user in users]
     scores_by_user = {}
     residuals_by_user = {}
@@ -153,7 +164,9 @@ def _compute_round_from_pair_score(
                 raise ValueError(
                     f'Beta pair score must be in [0, 1], '
                     f'got {update_score}.')
-            expected = _elo_expected(ratings[user], ratings[opponent])
+            expected = _elo_expected(
+                ratings[user], ratings[opponent],
+                point_scale=rating_point_scale)
             residuals.append(_proper_residual(update_score, expected))
             performance_score = update_score
             if (compute_performance
@@ -172,11 +185,12 @@ def _compute_round_from_pair_score(
 
     return {
         user: _RoundUpdate(
-            delta=_RATING_K * sum(residuals_by_user[user]) / len(users),
+            delta=rating_k * sum(residuals_by_user[user]) / len(users),
             performance=(
                 _performance_rating(
                     field_ratings,
                     sum(scores_by_user[user]) / len(users),
+                    point_scale=rating_point_scale,
                 )
                 if compute_performance else None
             ),
@@ -187,7 +201,8 @@ def _compute_round_from_pair_score(
 
 def _compute_pair_round(
         ratings, rows, pair_score_fn, *, compute_performance=True,
-        performance_pair_score_fn=None):
+        performance_pair_score_fn=None,
+        rating_point_scale=_RATING_POINT_SCALE):
     """Run a beta round using a game-specific complementary pair score."""
     users = sorted(ratings)
     if set(users) != set(rows):
@@ -202,6 +217,7 @@ def _compute_pair_round(
             else lambda user, opponent: performance_pair_score_fn(
                 rows[user], rows[opponent])
         ),
+        rating_point_scale=rating_point_scale,
     )
 
 
@@ -250,7 +266,8 @@ def compute_queens_improved_ratings(
         include_decay_in_history=False, current_puzzle_number=None,
         rank_fn=None, start_rating=None, decay_base=None, decay_max=None,
         decay_grace=None, pair_score_fn=None, row_validator_fn=None,
-        performance_pair_score_fn=None, performance_puzzles=None, **_ignored):
+        performance_pair_score_fn=None, performance_puzzles=None,
+        rating_point_scale=_RATING_POINT_SCALE, **_ignored):
     """Replay Queens results with the experimental hybrid-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
@@ -265,6 +282,9 @@ def compute_queens_improved_ratings(
     affects deltas.
     """
     del rank_fn
+    rating_point_scale = float(rating_point_scale)
+    if not math.isfinite(rating_point_scale) or rating_point_scale <= 0:
+        raise ValueError('Beta rating point scale must be finite and positive.')
     if start_rating is None:
         start_rating = float(_START_RATING)
     if decay_base is None:
@@ -345,12 +365,14 @@ def compute_queens_improved_ratings(
             updates = (
                 _compute_round(
                     before, times,
-                    compute_performance=compute_performance)
+                    compute_performance=compute_performance,
+                    rating_point_scale=rating_point_scale)
                 if pair_score_fn is None
                 else _compute_pair_round(
                     before, day_rows, pair_score_fn,
                     compute_performance=compute_performance,
-                    performance_pair_score_fn=performance_pair_score_fn)
+                    performance_pair_score_fn=performance_pair_score_fn,
+                    rating_point_scale=rating_point_scale)
             )
             updates = _apply_field_correction(updates)
         else:
