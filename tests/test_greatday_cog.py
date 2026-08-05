@@ -1,5 +1,6 @@
 """Tests for the great day feature — cog logic (_send_greatday, timers)."""
 import asyncio
+from types import SimpleNamespace
 
 from tle.util import codeforces_common as cf_common
 
@@ -150,6 +151,26 @@ class TestSendGreatDayIntegration:
         assert f'<@{USER_B}>' in msg
         assert f'<@{USER_C}>' in msg
 
+    def test_dragos_marker_is_used_once(self, db, monkeypatch):
+        from tle.cogs.greatday import (
+            GreatDay, _DRAGOS_ID, _NEXT_DRAGOS_KEY_PREFIX,
+        )
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        db.greatday_signup(GUILD, USER_A)
+        key = f'{_NEXT_DRAGOS_KEY_PREFIX}{GUILD}'
+        db.kvs_set(key, str(_DRAGOS_ID))
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+        cog = GreatDay(bot=None)
+
+        assert self._run(cog._send_greatday(guild)) is True
+        assert channel.sent[0].count(f'<@{_DRAGOS_ID}>') == 5
+        assert db.kvs_get(key) is None
+
+        assert self._run(cog._send_greatday(guild)) is True
+        assert f'<@{_DRAGOS_ID}>' not in channel.sent[1]
+
 
 class TestTargetDatetime:
     """Test the _target_datetime helper."""
@@ -243,7 +264,7 @@ class TestPreciseSend:
 
 
 class TestBanIntegration:
-    """Test that banned users cannot sign up via the cog."""
+    """Test the disabled Great Day ban behavior."""
 
     def _run(self, coro):
         return asyncio.run(coro)
@@ -252,13 +273,11 @@ class TestBanIntegration:
         from tle.cogs.greatday import GreatDay
         return GreatDay(bot=None)
 
-    def test_banned_user_excluded_from_send(self, db, monkeypatch):
-        """Banned users should not appear in the daily pick."""
+    def test_disabled_ban_does_not_exclude_user(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(GUILD, 'greatday_channel', '999')
         db.greatday_signup(GUILD, USER_A)
         db.greatday_signup(GUILD, USER_B)
-        # Ban removes signup, so USER_A won't be in the pool
         db.greatday_ban(GUILD, USER_A)
 
         channel = _FakeChannel()
@@ -266,5 +285,40 @@ class TestBanIntegration:
         cog = self._make_cog(db)
         self._run(cog._send_greatday(guild))
         msg = channel.sent[0]
-        assert f'<@{USER_A}>' not in msg
+        assert f'<@{USER_A}>' in msg
         assert f'<@{USER_B}>' in msg
+
+    def test_ban_command_replies_without_mutating_bans(self, db, monkeypatch):
+        from tle.cogs.greatday import GreatDay, _BAN_REPLY
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        ctx = _BanCtx(author_id=123)
+        cog = GreatDay(bot=None)
+
+        self._run(cog.ban_user.__wrapped__(cog, ctx, _target='someone'))
+
+        assert ctx.sent == [_BAN_REPLY]
+        assert db.greatday_get_banned(GUILD) == []
+
+    def test_dragos_ban_attempt_arms_next_greatday(self, db, monkeypatch):
+        from tle.cogs.greatday import (
+            GreatDay, _BAN_REPLY, _DRAGOS_ID, _NEXT_DRAGOS_KEY_PREFIX,
+        )
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        ctx = _BanCtx(author_id=_DRAGOS_ID)
+        cog = GreatDay(bot=None)
+
+        self._run(cog.ban_user.__wrapped__(cog, ctx, _target='someone'))
+
+        key = f'{_NEXT_DRAGOS_KEY_PREFIX}{GUILD}'
+        assert ctx.sent == [_BAN_REPLY]
+        assert db.kvs_get(key) == str(_DRAGOS_ID)
+
+
+class _BanCtx:
+    def __init__(self, author_id):
+        self.author = SimpleNamespace(id=author_id)
+        self.guild = SimpleNamespace(id=int(GUILD))
+        self.sent = []
+
+    async def send(self, content):
+        self.sent.append(content)

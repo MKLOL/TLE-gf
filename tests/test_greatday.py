@@ -94,51 +94,28 @@ class TestSendGreatDay:
 
 
 class TestBan:
-    def test_ban_returns_true(self, db):
-        assert db.greatday_ban(GUILD, USER_A) is True
-
-    def test_duplicate_ban_returns_false(self, db):
-        db.greatday_ban(GUILD, USER_A)
+    def test_ban_is_disabled(self, db):
         assert db.greatday_ban(GUILD, USER_A) is False
 
-    def test_ban_removes_signup(self, db):
+    def test_ban_keeps_signup(self, db):
         db.greatday_signup(GUILD, USER_A)
         db.greatday_ban(GUILD, USER_A)
         rows = db.greatday_get_signups(GUILD)
-        assert len(rows) == 0
+        assert [row.user_id for row in rows] == [USER_A]
 
-    def test_is_banned(self, db):
-        db.greatday_ban(GUILD, USER_A)
-        assert db.greatday_is_banned(GUILD, USER_A) is True
-
-    def test_not_banned(self, db):
+    def test_no_user_is_banned(self, db):
         assert db.greatday_is_banned(GUILD, USER_A) is False
 
-    def test_unban_returns_true(self, db):
-        db.greatday_ban(GUILD, USER_A)
-        assert db.greatday_unban(GUILD, USER_A) is True
-
-    def test_unban_nonexistent_returns_false(self, db):
+    def test_unban_is_disabled(self, db):
         assert db.greatday_unban(GUILD, USER_A) is False
 
-    def test_unban_allows_signup(self, db):
-        db.greatday_ban(GUILD, USER_A)
-        db.greatday_unban(GUILD, USER_A)
+    def test_legacy_rows_are_ignored(self, db):
+        db.conn.execute(
+            'INSERT INTO greatday_ban (guild_id, user_id) VALUES (?, ?)',
+            (GUILD, USER_A))
+        db.conn.commit()
         assert db.greatday_is_banned(GUILD, USER_A) is False
-        assert db.greatday_signup(GUILD, USER_A) is True
-
-    def test_ban_guild_isolation(self, db):
-        db.greatday_ban('1', USER_A)
-        assert db.greatday_is_banned('1', USER_A) is True
-        assert db.greatday_is_banned('2', USER_A) is False
-
-    def test_ban_does_not_affect_other_signups(self, db):
-        db.greatday_signup(GUILD, USER_A)
-        db.greatday_signup(GUILD, USER_B)
-        db.greatday_ban(GUILD, USER_A)
-        rows = db.greatday_get_signups(GUILD)
-        assert len(rows) == 1
-        assert rows[0].user_id == USER_B
+        assert db.greatday_get_banned(GUILD) == []
 
 
 class TestUpgrade:

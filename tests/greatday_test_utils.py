@@ -57,6 +57,7 @@ class FakeGreatDayDb:
     greatday_ban = UserDbConn.greatday_ban
     greatday_unban = UserDbConn.greatday_unban
     greatday_is_banned = UserDbConn.greatday_is_banned
+    greatday_get_banned = UserDbConn.greatday_get_banned
     greatday_record_picks = UserDbConn.greatday_record_picks
     greatday_get_stats = UserDbConn.greatday_get_stats
     greatday_get_count = UserDbConn.greatday_get_count
