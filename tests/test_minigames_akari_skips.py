@@ -176,8 +176,10 @@ class TestAkariSkipsCommand(_QueensCommandsBase):
 
         _save_result(db, 1, alice.id, 446)
         db.unregister_akari_user(_GUILD, alice.id, 1.0)
-        with pytest.raises(MinigameCogError, match='has not opted in'):
-            asyncio.run(cog._cmd_akari_skips(ctx, alice))
+        captured = self._capture_pages(monkeypatch)
+        asyncio.run(cog._cmd_akari_skips(ctx, alice))
+        assert captured['pages'][0][1].title.endswith('(4 days)')
+        assert '**#450**' in captured['pages'][0][1].description
 
         db.register_akari_user(_GUILD, alice.id)
         db.ban_akari_user(_GUILD, alice.id, 2.0, 999, 'test')

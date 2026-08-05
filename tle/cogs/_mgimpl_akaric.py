@@ -114,11 +114,6 @@ class ImplAkariCMixin:
     async def _cmd_akari_skips(self, ctx, member):
         """List missing concluded puzzles since a user's first submission."""
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        if not cf_common.user_db.is_akari_registered(
-                ctx.guild.id, member.id):
-            raise MinigameCogError(
-                f'`{_safe_member_name(member)}` has not opted in to '
-                f'{AKARI_GAME.display_name} ratings (`;mg akari register`).')
         if cf_common.user_db.is_akari_banned(ctx.guild.id, member.id):
             raise MinigameCogError(
                 f'`{_safe_member_name(member)}` is banned from '
