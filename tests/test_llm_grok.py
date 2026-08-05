@@ -203,6 +203,22 @@ class TestGrokAskFlow:
         assert 'Pupil' in prompt and 'green (#77FF77)' in prompt
         assert 'Armenia' in prompt
 
+    def test_fffff_direct_request_gets_authoritative_identity(
+            self, cog, monkeypatch):
+        seen = _xai_answers(monkeypatch)
+        ctx = FakeCtx()
+        ctx.author.display_name = 'fffff'
+
+        _invoke(llm_cog.Llm.llm, cog, ctx,
+                question='+grok +direct praise this')
+
+        prompt = seen[-1]['prompt']
+        assert 'BEGIN CURRENT REQUEST ROUTING' in prompt
+        assert '"display_name":"fffff"' in prompt
+        system = seen[-1]['kwargs']['system_instruction'].lower()
+        assert 'absolute fffff exception' in system
+        assert 'glaze him relentlessly' in system
+
     def test_answer_footer_uses_actual_grok_model(self, cog, monkeypatch):
         _xai_answers(monkeypatch, model='grok-4.5')
         ctx = FakeCtx()
