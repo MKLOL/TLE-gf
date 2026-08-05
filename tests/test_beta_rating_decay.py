@@ -1,4 +1,4 @@
-"""Decay behavior shared by the Queens and Akari beta ladders."""
+"""Akari beta decay behavior and Queens beta decay isolation."""
 
 import math
 from collections import namedtuple
@@ -48,11 +48,21 @@ def _without_decay(rows, **kwargs):
         rows, decay_base=0.0, decay_max=0.0, **kwargs)
 
 
+def _with_akari_decay(rows, **kwargs):
+    return compute_queens_improved_ratings(
+        rows,
+        decay_base=constants.AKARI_DECAY_BASE,
+        decay_max=constants.AKARI_DECAY_MAX,
+        decay_grace=constants.AKARI_DECAY_GRACE,
+        **kwargs,
+    )
+
+
 def test_beta_decay_preserves_field_deflation_and_solo_receives_the_pool():
     rows = _two_day_rows()
     baseline = _without_decay(rows)
     histories = {}
-    states = compute_queens_improved_ratings(
+    states = _with_akari_decay(
         rows, histories=histories, include_decay_in_history=True)
 
     expected_loss = (
@@ -86,7 +96,7 @@ def test_beta_decay_preserves_field_deflation_and_solo_receives_the_pool():
 def test_current_beta_puzzle_does_not_decay_absent_players():
     rows = _two_day_rows()
     baseline = _without_decay(rows)
-    states = compute_queens_improved_ratings(
+    states = _with_akari_decay(
         rows, current_puzzle_number=2)
 
     assert states['fast'].rating == baseline['fast'].rating
@@ -99,7 +109,7 @@ def test_fully_invalid_beta_day_is_ignored_instead_of_triggering_decay():
     rows = _two_day_rows(malformed_second_day=True)
     first_day = _without_decay(rows[:2])
     histories = {}
-    states = compute_queens_improved_ratings(
+    states = _with_akari_decay(
         rows, histories=histories, include_decay_in_history=True)
 
     assert states == first_day
@@ -114,7 +124,7 @@ def test_sub_start_beta_absentee_freezes_but_streak_advances():
     ]
     baseline = _without_decay(rows)
     histories = {}
-    states = compute_queens_improved_ratings(
+    states = _with_akari_decay(
         rows, histories=histories, include_decay_in_history=True)
 
     assert states['slow'].rating == baseline['slow'].rating
@@ -139,7 +149,7 @@ def test_akari_beta_adapter_uses_the_shared_decay_engine():
     )
 
 
-def test_queens_beta_runtime_enables_decay_without_changing_canonical():
+def test_queens_beta_runtime_keeps_canonical_no_decay_policy():
     mixin = ImplRatingMixin()
     canonical = mixin._minigame_compute_kwargs(
         QUEENS_GAME, improved=False)
@@ -147,7 +157,14 @@ def test_queens_beta_runtime_enables_decay_without_changing_canonical():
 
     assert canonical['decay_base'] == 0.0
     assert canonical['decay_max'] == 0.0
-    assert beta['decay_base'] == constants.AKARI_DECAY_BASE
-    assert beta['decay_max'] == constants.AKARI_DECAY_MAX
-    assert beta['decay_grace'] == constants.AKARI_DECAY_GRACE
-    assert isinstance(beta['current_puzzle_number'], int)
+    assert beta == canonical
+    assert beta['decay_base'] == 0.0
+    assert beta['decay_max'] == 0.0
+    assert beta['decay_grace'] == 0
+    assert 'current_puzzle_number' not in beta
+
+
+def test_queens_beta_engine_defaults_to_no_decay():
+    rows = _two_day_rows()
+
+    assert compute_queens_improved_ratings(rows) == _without_decay(rows)

@@ -101,23 +101,21 @@ Consequences:
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
 - Pairwise contest evidence is zero-sum, after which every rated participant
-  contributes `0.25` points of field deflation. Decay remains zero-sum: points
-  removed from absentees are transferred to that day's valid participants.
-  The small contest correction offsets rating parked by short-lived accounts
-  and the resulting uplift of the visible active pool.
+  contributes `0.25` points of field deflation. The small contest correction
+  offsets rating parked by short-lived accounts.
 - There is no post-processing cap. Every pair score and expectation is a
-  probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  Queens has `|delta_i + 0.25| < 124(n - 1)/n`, while Akari uses `108.5` in
-  the same bound; final magnitude is below the applicable natural bound plus
-  `0.25`.
-- On each concluded puzzle day with at least one valid result, an above-1200
-  absentee loses 4% of their gap to 1200 on the first skipped day and up to 8%
-  as the streak grows. Below-start players freeze; the still-open Pacific-time
-  Queens puzzle is protected. Ordinary non-beta Queens remains decay-free.
+  probability and `0.1 <= W_ij <= 1`. Queens has
+  `|delta_i + 0.25| < 124(n - 1)/n`, while Akari uses `108.5` in the same
+  bound; final magnitude is below the applicable natural bound plus `0.25`.
+- Queens beta has no inactivity decay, matching ordinary Queens.
+- In Akari beta, an above-1200 absentee loses 4% of their gap to 1200 on the
+  first concluded skipped day and up to 8% as the streak grows. Below-start
+  players freeze. Removed points are transferred to that day's valid players,
+  so Akari decay remains zero-sum.
 - New players receive the same bounded update rule as established players.
 - Playing more days supplies more contest evidence and pays the same small
-  field correction each time; a solo participant pays none but can receive
-  points already removed from absentees.
+  field correction each time. A solo participant pays none; only Akari can
+  transfer previously removed decay points to one.
 - A malformed locked first time is quarantined from the beta replay after
   first-submission deduplication. It cannot become a zero-second win, promote a
   later retry, or break every `+beta` command.
@@ -210,15 +208,13 @@ perfect flag adds no hidden tier beyond its reported accuracy.
 
 ## Historical snapshot replay
 
-The following snapshot figures predate the 85/15 head-to-head blend, the
-current beta decay policy, and the field correction. They are retained only as
-historical context. The current model has not been rerun on that unavailable
-snapshot.
+The following snapshot figures predate the 85/15 head-to-head blend and field
+correction. They are retained only as historical context. The current model
+has not been rerun on that unavailable snapshot.
 
 The supplied snapshot was read without modification. Its exact live/import
 first-submission merge contains 1,378 results, 29 observed users, and 442
-puzzle days. Of those days, 384 are solo and provide no contest signal (under
-the current policy they can still receive a zero-sum decay transfer). The 58
+puzzle days. Of those days, 384 are solo and provide no contest signal. The 58
 rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |

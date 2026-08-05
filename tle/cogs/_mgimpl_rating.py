@@ -17,10 +17,6 @@ from tle.cogs._minigame_akari import (
 from tle.cogs._minigame_queens import (
     QUEENS_GAME,
 )
-from tle.cogs._minigame_queens_cog import (
-    _queens_current_puzzle_date,
-    _queens_puzzle_number_for_date,
-)
 from tle.cogs._minigame_helpers import (
     _mg,
 )
@@ -142,19 +138,10 @@ class ImplRatingMixin:
 
     def _minigame_compute_kwargs(
             self, game, extra_compute_kwargs=None, *, improved=False):
+        # Keep the flag in the shared call contract, but beta no longer changes
+        # a game's configured inactivity policy.
+        del improved
         kwargs = self._rating_compute_kwargs(game)
-        if improved and game.name == QUEENS_GAME.name:
-            # Canonical Queens deliberately has no inactivity decay. The beta
-            # ladder uses Akari's active-day decay profile and protects the
-            # still-open Pacific-time puzzle. Decay transfers remain zero-sum;
-            # rated beta contests separately apply their small field correction.
-            kwargs.update(
-                decay_base=constants.AKARI_DECAY_BASE,
-                decay_max=constants.AKARI_DECAY_MAX,
-                decay_grace=constants.AKARI_DECAY_GRACE,
-                current_puzzle_number=_queens_puzzle_number_for_date(
-                    _queens_current_puzzle_date()),
-            )
         if extra_compute_kwargs:
             kwargs.update(extra_compute_kwargs)
         return kwargs

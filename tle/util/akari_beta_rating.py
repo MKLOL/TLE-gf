@@ -2,6 +2,7 @@
 
 import math
 
+from tle import constants
 from tle.util.queens_improved_rating import (
     _BASE_RATING_K,
     _blend_pair_score,
@@ -96,6 +97,9 @@ def _akari_beta_performance_pair_score(row, opponent):
 def compute_akari_beta_ratings(rows, **kwargs):
     """Replay Akari with additive rating evidence and hierarchical perf."""
     kwargs.setdefault('rating_point_scale', _AKARI_RATING_POINT_SCALE)
+    kwargs.setdefault('decay_base', constants.AKARI_DECAY_BASE)
+    kwargs.setdefault('decay_max', constants.AKARI_DECAY_MAX)
+    kwargs.setdefault('decay_grace', constants.AKARI_DECAY_GRACE)
     return compute_queens_improved_ratings(
         rows,
         pair_score_fn=_akari_beta_pair_score,

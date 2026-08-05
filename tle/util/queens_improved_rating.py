@@ -11,7 +11,7 @@ the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
   leverage without a post-hoc delta cap;
 * complementary pair evidence is zero-sum before a small field correction;
 * each rated participant then contributes 0.25 points of deflation to offset
-  rating parked by short-lived accounts and redistributed inactive decay;
+  rating parked by short-lived accounts and, for Akari, redistributed decay;
 * each game's player-facing point scale is calibrated independently while the
   shared latent proper-score model remains identical.
 
@@ -25,7 +25,6 @@ other player by only ``1 / field_size``.
 import math
 from dataclasses import dataclass
 
-from tle import constants
 from tle.util.akari_rating import HistoryPoint, RatingState, _decay_rate
 from tle.util._beta_rating_performance import (
     _BRIER_BLEND,
@@ -60,9 +59,9 @@ _START_RATING = 1200.0
 _BASE_RATING_K = 62.0
 _RATING_K = _RATING_POINT_SCALE * _BASE_RATING_K
 # The pairwise model is naturally zero-sum, but the visible active pool is not:
-# short-lived players can leave below the starting rating, while decay moves
-# points from inactive players to active ones.  Apply only the lightweight
-# field-wide part of the Codeforces correction.  There is deliberately no
+# short-lived players can leave below the starting rating, while Akari's decay
+# moves points from inactive players to active ones. Apply only the lightweight
+# field-wide part of the Codeforces correction. There is deliberately no
 # strongest-player correction in the beta ladder.
 _FIELD_DEFLATION = 0.25
 
@@ -272,14 +271,15 @@ def compute_queens_improved_ratings(
 
     The return and history shapes match :func:`compute_ratings`, so every
     existing ``+beta`` table and graph can use this engine without storing
-    a second rating snapshot. Above-start absentees decay toward
-    ``start_rating`` on concluded active days, and their lost points are split
-    equally among that day's valid participants. Each rated update is centered
-    and then reduced by 0.25 points per participant before that zero-sum decay
-    transfer; the stronger-participant Codeforces correction is not used. A
-    custom ``performance_pair_score_fn`` can decouple event-performance ordering
-    from rating evidence, but requires a custom ``pair_score_fn`` and never
-    affects deltas.
+    a second rating snapshot. Queens leaves inactivity decay disabled; Akari's
+    adapter supplies its own decay parameters. When enabled, above-start
+    absentees decay toward ``start_rating`` on concluded active days and their
+    lost points are split equally among that day's valid participants. Each
+    rated update is centered and then reduced by 0.25 points per participant;
+    the stronger-participant Codeforces correction is not used. A custom
+    ``performance_pair_score_fn`` can decouple event-performance ordering from
+    rating evidence, but requires a custom ``pair_score_fn`` and never affects
+    deltas.
     """
     del rank_fn
     rating_point_scale = float(rating_point_scale)
@@ -288,11 +288,12 @@ def compute_queens_improved_ratings(
     if start_rating is None:
         start_rating = float(_START_RATING)
     if decay_base is None:
-        decay_base = constants.AKARI_DECAY_BASE
+        decay_base = 0.0
     if decay_max is None:
-        decay_max = constants.AKARI_DECAY_MAX
+        decay_max = 0.0
     if decay_grace is None:
-        decay_grace = constants.AKARI_DECAY_GRACE
+        decay_grace = 0
+    decay_enabled = decay_base > 0 and decay_max > 0
     if performance_pair_score_fn is not None and pair_score_fn is None:
         raise ValueError(
             'A performance pair score requires a rating pair score.')
@@ -387,7 +388,7 @@ def compute_queens_improved_ratings(
         )
         absent_changes = {}
         decay_pool = 0.0
-        if day_concluded:
+        if day_concluded and decay_enabled:
             for user_id in sorted(players):
                 if user_id in day_rows:
                     continue

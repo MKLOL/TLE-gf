@@ -84,7 +84,7 @@ not chosen to make one final snapshot equal. Queens retains its established
 coordinate (`700`-point gap, K=`108.5`). Across all exported participants in
 the supplied snapshots, replayed with production formula semantics on
 2026-08-05, normal versus beta population standard deviation was `151.81`
-versus `153.37` for Akari and `187.87` versus `188.72` for Queens. The Queens
+versus `153.37` for Akari and `187.87` versus `200.43` for Queens. The Queens
 export lacks registration and ban state, so this is not a reconstruction of
 the public-board subset. Means and individual ratings still differ because the
 evidence, decay, and correction policies differ. No ongoing centering,
@@ -418,7 +418,7 @@ The formula cannot by itself prevent:
 - the visible mean rising when low-rated accounts become hidden or inactive;
 - a player submitting only unusually good days;
 - sybil or colluding accounts donating their starting points;
-- peak fields remaining historical maxima even while current rating decays;
+- peak fields remaining historical maxima even where current rating decays;
 - historical rewrites when current registration filters old fields;
 - the whole community improving together on an absolute scale.
 
@@ -431,9 +431,9 @@ bad days still create selection bias.
 
 Stronger defenses require product policy—mandatory capture, activity
 requirements, identity trust, or stable anonymized historical competitors.
-The beta's active-day decay now limits above-start current-rating parking, but
+Queens beta intentionally has no inactivity decay, matching ordinary Queens.
+Akari beta's active-day decay limits above-start current-rating parking, but
 does not solve selective submission, sybils, or historical peak parking.
-Ordinary Queens remains deliberately unaffected.
 
 This is also why richer systems were not transplanted. TrueSkill tracks
 uncertainty and handles multiplayer rankings through approximate message
@@ -453,18 +453,20 @@ Future changes to `+beta` must retain:
 - ordinary Queens isolation and no rating-table writes;
 - deterministic first-submission locking;
 - invalid-time quarantine after that lock;
-- solo days producing no contest delta while remaining eligible to receive a
-  zero-sum decay transfer;
+- solo days producing no contest delta; Akari may still redistribute an
+  already-removed zero-sum decay pool to the solo participant;
 - exact ties and tied performance;
 - pair complement and raw round point conservation;
 - exactly `0.25` field deflation per rated participant, with no
   strongest-player correction;
-- concluded-active-day decay only above 1200, with current-day protection and
-  equal redistribution to valid participants;
+- no inactivity decay in either ordinary or beta Queens;
+- Akari concluded-active-day decay only above 1200, with current-day protection
+  and equal redistribution to valid participants;
 - the 85% continuous-margin / 15% hard-result pair target;
 - the `K(n - 1)/n` raw contest-delta bound before field correction or decay;
 - the `K/n` one-opponent contamination bound;
-- contest-update rating-translation invariance before fixed-anchor decay;
+- contest-update rating-translation invariance before Akari's fixed-anchor
+  decay;
 - unique, result-monotone event performance;
 - Akari accuracy validation and additive, complementary rating pair scores;
 - Akari hierarchical performance ordered by accuracy, then time;

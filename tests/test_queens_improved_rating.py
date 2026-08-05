@@ -146,7 +146,7 @@ def test_replay_is_deterministic_and_dedupes_by_first_message():
     assert len(histories_a['u2']) == 6
 
 
-def test_solo_days_seed_players_and_track_concluded_absences():
+def test_solo_days_seed_players_without_queens_absence_tracking():
     histories = {}
     states = compute_queens_improved_ratings(
         [_row('u1', 1, 18), _row('u2', 2, 12)],
@@ -165,11 +165,9 @@ def test_solo_days_seed_players_and_track_concluded_absences():
         assert point.delta == 0
         assert point.performance is None
         assert point.is_decay is False
-    assert states['u1'].skip_streak == 1
+    assert states['u1'].skip_streak == 0
     assert states['u2'].skip_streak == 0
-    assert len(histories['u1']) == 2
-    assert histories['u1'][-1].is_decay is True
-    assert histories['u1'][-1].delta == 0
+    assert len(histories['u1']) == 1
     assert len(histories['u2']) == 1
 
 
@@ -377,8 +375,8 @@ def test_malformed_times_are_quarantined_from_improved_replay():
         _row('u8', 2, None, message_id=8),
         _row('u9', 2, 'not-a-time', message_id=9),
         _row('u12', 2, Decimal('1.5'), message_id=12),
-        # Quarantining u11 leaves a valid solo day. It remains uncontested but
-        # can receive the zero-sum pool from an above-start absentee.
+        # Quarantining u11 leaves a valid solo day. Queens has no inactivity
+        # decay, so that uncontested player receives no transfer.
         _row('u10', 3, 15, message_id=10),
         _row('u11', 3, -1, message_id=11),
     ]
@@ -387,7 +385,7 @@ def test_malformed_times_are_quarantined_from_improved_replay():
 
     assert set(states) == {'u2', 'u3', 'u10'}
     assert states['u2'].rating > 1200 > states['u3'].rating
-    assert states['u10'].rating > 1200
+    assert states['u10'].rating == 1200
     assert states['u10'].games == 0
     assert math.isclose(
         sum(state.rating for state in states.values()),
@@ -401,7 +399,7 @@ def test_malformed_times_are_quarantined_from_improved_replay():
     assert math.isfinite(_time_log(10 ** 10_000))
 
 
-def test_history_contract_and_inactivity_state():
+def test_history_contract_omits_queens_inactivity_points():
     rows = _day(1, [('u1', 10), ('u2', 30)])
     rows.extend(_day(2, [('u2', 10), ('u3', 30)]))
     histories = {}
@@ -411,15 +409,13 @@ def test_history_contract_and_inactivity_state():
         include_decay_in_history=True,
     )
 
-    # Above-start inactivity is a visible, optional history point.
-    assert states['u1'].rating == histories['u1'][-1].rating
-    assert states['u1'].rating < histories['u1'][0].rating
-    assert states['u1'].last_delta == histories['u1'][-1].delta < 0
-    assert states['u1'].skip_streak == 1
+    # Queens inactivity neither changes state nor creates a history point.
+    assert states['u1'].rating == histories['u1'][0].rating
+    assert states['u1'].last_delta == histories['u1'][0].delta > 0
+    assert states['u1'].skip_streak == 0
     assert states['u1'].last_puzzle == 1
-    assert len(histories['u1']) == 2
+    assert len(histories['u1']) == 1
     assert histories['u1'][0].is_decay is False
-    assert histories['u1'][-1].is_decay is True
 
     for user_id, points in histories.items():
         assert sum(not point.is_decay for point in points) == states[user_id].games
