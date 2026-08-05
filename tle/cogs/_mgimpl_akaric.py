@@ -14,7 +14,9 @@ import logging
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 
-from tle.cogs._minigame_akari import AKARI_GAME, puzzle_date_for
+from tle.cogs._minigame_akari import (
+    AKARI_GAME, puzzle_date_for, _split_akari_time_filter,
+)
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg, _safe_member_name,
 )
@@ -209,13 +211,13 @@ class ImplAkariCMixin:
         of ``;queens results``.
         """
         args, beta = _split_queens_improved_filter(args)
-        sort_by_time = '+time' in args
-        args = [arg for arg in args if arg != '+time']
+        args, time_only = _split_akari_time_filter(args)
         (remaining, include_decay, excluded_ids, included_ids,
          _include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
         self._validate_akari_beta(
-            beta, include_decay=include_decay, test_decay=test_decay)
+            beta, include_decay=include_decay, test_decay=test_decay,
+            time_only=time_only)
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;akari results [date|#number] [+beta] [+test] '
@@ -231,8 +233,8 @@ class ImplAkariCMixin:
             ctx, selector, show_all=show_all,
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
-            beta=beta,
+            beta=beta, time_only=time_only,
             sort_key_fn=(
-                _akari_results_time_sort_key if sort_by_time else None),
+                _akari_results_time_sort_key if time_only else None),
             rank_key_fn=(
-                _akari_results_time_rank_key if sort_by_time else None))
+                _akari_results_time_rank_key if time_only else None))

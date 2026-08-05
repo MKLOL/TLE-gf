@@ -260,6 +260,32 @@ def akari_raw_score_matchup(row1, row2):
     return 0.5, 0.5
 
 
+def rank_akari_time_participants(rows):
+    """Rank an Akari field by ascending time, ignoring accuracy entirely."""
+    ordered = sorted(rows, key=lambda row: int(row.time_seconds))
+    ranks = {}
+    previous_time = None
+    for index, row in enumerate(ordered):
+        time_seconds = int(row.time_seconds)
+        if previous_time is None or time_seconds != previous_time:
+            rank = index + 1
+            previous_time = time_seconds
+        ranks[str(row.user_id)] = rank
+    return ranks
+
+
+def _split_akari_time_filter(args):
+    """Remove every exact ``+time`` flag and report whether one was present."""
+    remaining = []
+    time_only = False
+    for arg in args:
+        if str(arg).strip().casefold() == '+time':
+            time_only = True
+        else:
+            remaining.append(arg)
+    return remaining, time_only
+
+
 def akari_raw_is_eligible_winner(_row):
     return True
 

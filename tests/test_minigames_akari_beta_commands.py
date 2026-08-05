@@ -249,7 +249,7 @@ class TestAkariBetaRouting:
         Minigames._validate_akari_beta(
             beta=True, include_decay=True)
 
-    def test_every_akari_rating_slash_view_exposes_beta(self):
+    def test_every_akari_rating_slash_view_exposes_beta_and_time_only(self):
         methods = (
             Minigames.slash_akari_results,
             Minigames.slash_akari_ratings,
@@ -258,6 +258,6 @@ class TestAkariBetaRouting:
             Minigames.slash_akari_history,
         )
         assert all(
-            'beta' in inspect.signature(method).parameters
+            {'beta', 'time_only'} <= set(inspect.signature(method).parameters)
             for method in methods
         )

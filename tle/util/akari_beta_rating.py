@@ -94,12 +94,14 @@ def _akari_beta_performance_pair_score(row, opponent):
     return _hybrid_time_score(time_seconds, opponent_time_seconds)
 
 
-def compute_akari_beta_ratings(rows, **kwargs):
-    """Replay Akari with additive rating evidence and hierarchical perf."""
+def compute_akari_beta_ratings(rows, *, time_only=False, **kwargs):
+    """Replay Akari beta ratings, optionally using only completion time."""
     kwargs.setdefault('rating_point_scale', _AKARI_RATING_POINT_SCALE)
     kwargs.setdefault('decay_base', constants.AKARI_DECAY_BASE)
     kwargs.setdefault('decay_max', constants.AKARI_DECAY_MAX)
     kwargs.setdefault('decay_grace', constants.AKARI_DECAY_GRACE)
+    if time_only:
+        return compute_queens_improved_ratings(rows, **kwargs)
     return compute_queens_improved_ratings(
         rows,
         pair_score_fn=_akari_beta_pair_score,

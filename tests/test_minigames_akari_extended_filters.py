@@ -362,7 +362,7 @@ class TestAkariResultsCommand(_AkariFilterBase):
             asyncio.run(Minigames.akari_results.__wrapped__(
                 cog, ctx, f'#{_FRI}', '+dow=weekend'))
 
-    def test_results_time_sorts_display_without_changing_rating_deltas(
+    def test_results_time_sorts_and_replays_rating_deltas_by_time(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.get_handle = lambda _user_id, _guild_id: None
@@ -397,10 +397,19 @@ class TestAkariResultsCommand(_AkariFilterBase):
         stats_time_rows = rendered[-1]
         assert [str(row[1]).split(' (', 1)[0] for row in stats_time_rows] == [
             'Alice', 'Bob']
-        assert {
+        accuracy_deltas = {
             str(row[1]).split(' (', 1)[0]: row[-1]
             for row in accuracy_rows
-        } == {
+        }
+        time_deltas = {
             str(row[1]).split(' (', 1)[0]: row[-1]
             for row in stats_time_rows
         }
+        assert time_deltas == {
+            str(row[1]).split(' (', 1)[0]: row[-1]
+            for row in time_rows
+        }
+        assert accuracy_deltas['Alice'].startswith('-')
+        assert accuracy_deltas['Bob'].startswith('+')
+        assert time_deltas['Alice'].startswith('+')
+        assert time_deltas['Bob'].startswith('-')

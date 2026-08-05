@@ -32,7 +32,8 @@ class ImplAkariBMixin:
                                 include_decay=False, excluded_ids=None,
                                 included_ids=None, test_decay=False,
                                 weekdays=None, date_bounds=None,
-                                recalculate=False, beta=False):
+                                recalculate=False, beta=False,
+                                time_only=False):
         """Per-user rating graph (``;plot rating`` style).
 
         ``members`` is a list of one-or-more members.  With a single member
@@ -56,7 +57,8 @@ class ImplAkariBMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         self._validate_akari_beta(
-            beta, include_decay=include_decay, test_decay=test_decay)
+            beta, include_decay=include_decay, test_decay=test_decay,
+            time_only=time_only)
         if require_registered:
             for member in members:
                 if not cf_common.user_db.is_akari_registered(
@@ -77,6 +79,7 @@ class ImplAkariBMixin:
         # rows.  Weekday filters always force a fresh (ad-hoc) replay.
         replay_date_bounds = date_bounds if recalculate else None
         filtered = bool(excluded_ids or included_ids or test_decay or beta
+                        or time_only
                         or weekdays is not None
                         or replay_date_bounds is not None)
         per_member = []
@@ -87,7 +90,8 @@ class ImplAkariBMixin:
                     include_decay=include_decay,
                     excluded_ids=excluded_ids, included_ids=included_ids,
                     test_decay=test_decay, weekdays=weekdays,
-                    date_bounds=replay_date_bounds, beta=beta)
+                    date_bounds=replay_date_bounds, beta=beta,
+                    time_only=time_only)
             else:
                 row = cf_common.user_db.get_akari_rating(
                     ctx.guild.id, member.id)
@@ -111,6 +115,7 @@ class ImplAkariBMixin:
         discord_file = _mg().plot_akari_rating(series)
 
         title_suffix = _queens_improved_title_suffix(beta)
+        title_suffix += ' [time only]' if time_only else ''
         title_suffix += ' [test decay]' if test_decay else ''
         title_suffix += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
@@ -167,7 +172,8 @@ class ImplAkariBMixin:
     async def _cmd_akari_performance(self, ctx, members, *, require_registered=True,
                                      excluded_ids=None, included_ids=None,
                                      test_decay=False, weekdays=None,
-                                     date_bounds=None, beta=False):
+                                     date_bounds=None, beta=False,
+                                     time_only=False):
         """Per-user performance graph.
 
         Performance is the rating that, given the day's field, would seed the
@@ -186,7 +192,8 @@ class ImplAkariBMixin:
         those users so their presence doesn't shape this player's performance.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        self._validate_akari_beta(beta, test_decay=test_decay)
+        self._validate_akari_beta(
+            beta, test_decay=test_decay, time_only=time_only)
         if require_registered:
             for member in members:
                 if not cf_common.user_db.is_akari_registered(
@@ -203,6 +210,7 @@ class ImplAkariBMixin:
                         f'{AKARI_GAME.display_name}.')
 
         filtered = bool(excluded_ids or included_ids or test_decay or beta
+                        or time_only
                         or weekdays is not None)
         per_member = []
         for member in members:
@@ -210,7 +218,8 @@ class ImplAkariBMixin:
                 row, history = self._akari_user_data(
                     ctx.guild.id, member.id,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    test_decay=test_decay, weekdays=weekdays, beta=beta)
+                    test_decay=test_decay, weekdays=weekdays, beta=beta,
+                    time_only=time_only)
             else:
                 row = cf_common.user_db.get_akari_rating(
                     ctx.guild.id, member.id)
@@ -239,6 +248,7 @@ class ImplAkariBMixin:
         discord_file = _mg().plot_akari_performance(series)
 
         title_suffix = _queens_improved_title_suffix(beta)
+        title_suffix += ' [time only]' if time_only else ''
         title_suffix += ' [test decay]' if test_decay else ''
         title_suffix += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
@@ -287,7 +297,7 @@ class ImplAkariBMixin:
                                         include_inactive=False,
                                         test_decay=False, weekly=False,
                                         weekdays=None, date_bounds=None,
-                                        beta=False):
+                                        beta=False, time_only=False):
         """Admin view: leaderboard image including shadow-rated (unopted-in) users.
 
         Same image as ``;mg akari ratings`` but without the registration filter —
@@ -297,8 +307,10 @@ class ImplAkariBMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         self._validate_akari_beta(
-            beta, test_decay=test_decay, weekly=weekly)
+            beta, test_decay=test_decay, weekly=weekly,
+            time_only=time_only)
         filtered = bool(excluded_ids or included_ids or test_decay or beta
+                        or time_only
                         or weekdays is not None or date_bounds is not None)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
@@ -309,7 +321,8 @@ class ImplAkariBMixin:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
                 included_ids=included_ids, test_decay=test_decay,
-                weekdays=weekdays, date_bounds=date_bounds, beta=beta)
+                weekdays=weekdays, date_bounds=date_bounds, beta=beta,
+                time_only=time_only)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
         if not rows and not (weekly and standings):
@@ -334,6 +347,7 @@ class ImplAkariBMixin:
         if weekly:
             title += ' [weekly preview]'
         title += _queens_improved_title_suffix(beta)
+        title += ' [time only]' if time_only else ''
         title += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
         if shown:
@@ -349,7 +363,8 @@ class ImplAkariBMixin:
     async def _cmd_akari_history(self, ctx, member, *, require_registered=True,
                                  excluded_ids=None, included_ids=None,
                                  test_decay=False, weekdays=None,
-                                 date_bounds=None, beta=False):
+                                 date_bounds=None, beta=False,
+                                 time_only=False):
         """Per-user paginated rating delta history (``;handles updates`` style).
 
         One line per contest the user played, newest first.  Solo days (single
@@ -360,7 +375,8 @@ class ImplAkariBMixin:
         those users so each delta reflects the contest minus them.
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        self._validate_akari_beta(beta, test_decay=test_decay)
+        self._validate_akari_beta(
+            beta, test_decay=test_decay, time_only=time_only)
         if require_registered:
             if not cf_common.user_db.is_akari_registered(
                     ctx.guild.id, member.id):
@@ -376,7 +392,7 @@ class ImplAkariBMixin:
             ctx.guild.id, member.id,
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
-            beta=beta)
+            beta=beta, time_only=time_only)
         contest_history = [h for h in history if h.performance is not None]
         if not contest_history:
             raise MinigameCogError(
@@ -385,6 +401,7 @@ class ImplAkariBMixin:
 
         lines = [_format_akari_history_line(h) for h in reversed(contest_history)]
         title_suffix = _queens_improved_title_suffix(beta)
+        title_suffix += ' [time only]' if time_only else ''
         title_suffix += ' [test decay]' if test_decay else ''
         title_suffix += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)

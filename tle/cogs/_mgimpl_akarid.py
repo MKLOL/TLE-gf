@@ -17,6 +17,9 @@ from tle.cogs._minigame_stats import (
     plot_guessgame_stats,
 )
 from tle.cogs._minigame_tables import _maybe_parse_puzzle_selector
+from tle.cogs._minigame_result_rows import (
+    _akari_results_time_rank_key, _akari_results_time_sort_key,
+)
 
 
 def _akari_beta_performance_keys(puzzle_info):
@@ -42,9 +45,13 @@ def _akari_beta_performance_keys(puzzle_info):
 class ImplAkariDMixin:
     @staticmethod
     def _validate_akari_beta(
-            beta, *, include_decay=False, test_decay=False, weekly=False):
+            beta, *, include_decay=False, test_decay=False, weekly=False,
+            time_only=False):
         """Reject alternate rating modes that beta cannot represent."""
         del include_decay
+        if weekly and time_only:
+            raise MinigameCogError(
+                '`+time` cannot be combined with `+weekly`.')
         conflicts = []
         if test_decay:
             conflicts.append('`+test`')
@@ -57,50 +64,54 @@ class ImplAkariDMixin:
     def _akari_user_history(self, guild_id, user_id, *, include_decay=False,
                             excluded_ids=None, included_ids=None,
                             test_decay=False, weekdays=None, date_bounds=None,
-                            beta=False):
+                            beta=False, time_only=False):
         """Replay the guild's results and return one user's per-day history."""
         state, history = self._akari_user_data(
             guild_id, user_id, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
-            beta=beta)
+            beta=beta, time_only=time_only)
         del state
         return history
 
     def _akari_user_data(self, guild_id, user_id, *, include_decay=False,
                          excluded_ids=None, included_ids=None,
                          test_decay=False, weekdays=None, date_bounds=None,
-                         beta=False):
+                         beta=False, time_only=False):
         """Return one user's replayed state and history in a single pass."""
         return self._minigame_user_data(
             guild_id, AKARI_GAME, user_id, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
-            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay),
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(
+                test_decay, beta=beta, time_only=time_only),
             improved=beta)
 
     def _akari_filtered_rating_rows(self, guild_id, *, excluded_ids=None,
                                     included_ids=None, test_decay=False,
                                     weekdays=None, date_bounds=None,
-                                    beta=False):
+                                    beta=False, time_only=False):
         """Return transient leaderboard states for an ad-hoc filtered replay."""
         return self._minigame_rating_rows(
             guild_id, AKARI_GAME,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
-            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay),
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(
+                test_decay, beta=beta, time_only=time_only),
             improved=beta)
 
     def _akari_puzzle_change_info(self, guild_id, puzzle_number, *,
                                   excluded_ids=None, included_ids=None,
                                   test_decay=False, weekdays=None,
-                                  date_bounds=None, beta=False):
+                                  date_bounds=None, beta=False,
+                                  time_only=False):
         """Return pre-rating, delta, and performance for one Akari puzzle."""
         return self._minigame_puzzle_change_info(
             guild_id, AKARI_GAME, puzzle_number,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
-            extra_compute_kwargs=self._akari_extra_compute_kwargs(test_decay),
+            extra_compute_kwargs=self._akari_extra_compute_kwargs(
+                test_decay, beta=beta, time_only=time_only),
             improved=beta)
 
     async def _extract_akari_filters(self, ctx, args):
@@ -166,10 +177,11 @@ class ImplAkariDMixin:
                                       included_ids=None, test_decay=False,
                                       weekdays=None, date_bounds=None,
                                       sort_key_fn=None, rank_key_fn=None,
-                                      beta=False):
+                                      beta=False, time_only=False):
         """Render one puzzle's results with pre-puzzle rating annotations."""
         self._require_enabled(ctx.guild.id, AKARI_GAME)
-        self._validate_akari_beta(beta, test_decay=test_decay)
+        self._validate_akari_beta(
+            beta, test_decay=test_decay, time_only=time_only)
         selector = _maybe_parse_puzzle_selector(selector_arg)
         if selector is None:
             raise MinigameCogError(
@@ -207,19 +219,23 @@ class ImplAkariDMixin:
                 ctx.guild.id, next(iter(puzzle_numbers)),
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 test_decay=test_decay, weekdays=weekdays,
-                date_bounds=date_bounds, beta=beta)
+                date_bounds=date_bounds, beta=beta, time_only=time_only)
             registrants = (
                 set(puzzle_info)
                 if show_all
                 else cf_common.user_db.get_akari_registrants(ctx.guild.id)
             )
-        if beta and sort_key_fn is None:
+        if time_only and sort_key_fn is None:
+            sort_key_fn = _akari_results_time_sort_key
+            rank_key_fn = _akari_results_time_rank_key
+        elif beta and sort_key_fn is None:
             sort_key_fn, rank_key_fn = _akari_beta_performance_keys(
                 puzzle_info or {})
 
         if test_decay:
             title += ' [test decay]'
         title += _queens_improved_title_suffix(beta)
+        title += ' [time only]' if time_only else ''
         title += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
         discord_file = _mg()._get_akari_puzzle_table_image_file(

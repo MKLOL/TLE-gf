@@ -17,7 +17,7 @@ from tle.cogs._minigame_common import (
     format_duration,
 )
 from tle.cogs._minigame_akari import (
-    AKARI_GAME, puzzle_date_for,
+    AKARI_GAME, puzzle_date_for, rank_akari_time_participants,
 )
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _mg, _safe_member_name,
@@ -112,7 +112,8 @@ class ImplAkariAMixin:
     async def _cmd_akari_ratings(self, ctx, *, excluded_ids=None,
                                   included_ids=None, include_inactive=False,
                                   test_decay=False, weekly=False,
-                                  weekdays=None, date_bounds=None, beta=False):
+                                  weekdays=None, date_bounds=None, beta=False,
+                                  time_only=False):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -128,13 +129,15 @@ class ImplAkariAMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         self._validate_akari_beta(
-            beta, test_decay=test_decay, weekly=weekly)
+            beta, test_decay=test_decay, weekly=weekly,
+            time_only=time_only)
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         # Banned players stay rated (forward-only ban) but are hidden from
         # public boards at display time, like Queens'; debug shows them.
         banned_ids = self._akari_banned_user_ids(ctx.guild.id)
         visible = registrants - banned_ids
         filtered = bool(excluded_ids or included_ids or test_decay or beta
+                        or time_only
                         or weekdays is not None or date_bounds is not None)
         if weekly:
             rows, standings = await self._akari_weekly_preview(
@@ -151,7 +154,8 @@ class ImplAkariAMixin:
             rows = self._akari_filtered_rating_rows(
                 ctx.guild.id, excluded_ids=excluded_ids,
                 included_ids=included_ids, test_decay=test_decay,
-                weekdays=weekdays, date_bounds=date_bounds, beta=beta)
+                weekdays=weekdays, date_bounds=date_bounds, beta=beta,
+                time_only=time_only)
         else:
             rows = cf_common.user_db.get_akari_ratings(ctx.guild.id)
         if not rows and not (weekly and standings):
@@ -181,6 +185,7 @@ class ImplAkariAMixin:
         if weekly:
             title += ' [weekly preview]'
         title += _queens_improved_title_suffix(beta)
+        title += ' [time only]' if time_only else ''
         title += _queens_filter_suffix(
             weekdays=weekdays, date_bounds=date_bounds)
         if shown:
@@ -288,7 +293,8 @@ class ImplAkariAMixin:
             'decay_max': constants.AKARI_DECAY_BASE,
         }
 
-    def _akari_extra_compute_kwargs(self, test_decay=False):
+    def _akari_extra_compute_kwargs(
+            self, test_decay=False, *, beta=False, time_only=False):
         """Akari overrides for the generic minigame replay helpers.
 
         Pins ``current_puzzle_number``/``max_puzzle`` through the
@@ -297,8 +303,12 @@ class ImplAkariAMixin:
         unpatched module function) and folds in the ``+test`` decay kwargs.
         """
         current_puzzle = _mg().expected_puzzle_number(dt.date.today())
-        return {
+        kwargs = {
             'current_puzzle_number': current_puzzle,
             'max_puzzle': current_puzzle + constants.AKARI_MAX_PUZZLE_LOOKAHEAD,
             **self._akari_test_decay_kwargs(test_decay),
         }
+        if time_only:
+            key = 'time_only' if beta else 'rank_fn'
+            kwargs[key] = True if beta else rank_akari_time_participants
+        return kwargs
