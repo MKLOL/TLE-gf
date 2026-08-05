@@ -170,11 +170,10 @@ class TestGrokAskFlow:
         assert 'rating may fuel one occasional personal jab' in prompt
         assert 'too bad to reach the next rank' in prompt
         assert 'lgm-or-higher or unrated' in prompt
-        assert 'country and nationality are neutral context only' in prompt
-        assert 'never insult, rank, or stereotype' in prompt
+        assert 'country and nationality should also be used for insults' in prompt
+        assert 'you should use them quite often' in prompt
         assert 'in most low-stakes answers' in prompt
-        assert 'no slurs' in prompt and 'threats' in prompt
-        assert 'sensitive or high-stakes subjects' in prompt
+        assert 'you can use slurs' in prompt
         assert 'direct personal insults are only allowed' not in \
             llm_context.SYSTEM_INSTRUCTION.lower()
         assert 'competitive programmers' in prompt
