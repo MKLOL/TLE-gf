@@ -248,10 +248,7 @@ async def ask_grok(cog, ctx, question):
             db(), ctx.guild.id, ctx.author, [referenced, *window],
             focused=referenced)
         routing = ''
-        requester_name = str(
-            getattr(ctx.author, 'display_name', '') or '')
-        if (referenced is not None or window
-                or requester_name.casefold() == 'fffff'):
+        if referenced is not None or window:
             routing = llm_identity.build_request_routing(
                 ctx.author, ctx.message, referenced)
         prompt = llm_pipeline.build_prompt(
