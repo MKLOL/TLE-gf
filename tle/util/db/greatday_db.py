@@ -59,12 +59,23 @@ class GreatdayDbMixin:
             (str(guild_id),)).fetchall()
 
     def greatday_ban(self, guild_id, user_id):
-        """Retained for compatibility; Great Day bans are disabled."""
-        return False
+        """Ban a user from great day. Also removes their signup. Returns True if newly banned."""
+        rc = self.conn.execute(
+            'INSERT OR IGNORE INTO greatday_ban (guild_id, user_id) VALUES (?, ?)',
+            (str(guild_id), str(user_id))).rowcount
+        self.conn.execute(
+            'DELETE FROM greatday_signup WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id)))
+        self.conn.commit()
+        return rc > 0
 
     def greatday_unban(self, guild_id, user_id):
-        """Retained for compatibility; Great Day bans are disabled."""
-        return False
+        """Unban a user from great day. Returns True if was banned."""
+        rc = self.conn.execute(
+            'DELETE FROM greatday_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))).rowcount
+        self.conn.commit()
+        return rc > 0
 
     def greatday_record_picks(self, guild_id, user_ids, message_id, picked_at):
         """Insert one row per picked user. Idempotent on (guild, user, message)."""
@@ -118,9 +129,16 @@ class GreatdayDbMixin:
         ).fetchall()
 
     def greatday_is_banned(self, guild_id, user_id):
-        """Great Day bans are disabled."""
-        return False
+        """Check if a user is banned from great day."""
+        row = self.conn.execute(
+            'SELECT 1 FROM greatday_ban WHERE guild_id = ? AND user_id = ?',
+            (str(guild_id), str(user_id))).fetchone()
+        return row is not None
 
     def greatday_get_banned(self, guild_id):
-        """Great Day bans are disabled."""
-        return []
+        """Return all banned user_ids for the guild."""
+        return self.conn.execute(
+            'SELECT user_id FROM greatday_ban WHERE guild_id = ? '
+            'ORDER BY rowid ASC',
+            (str(guild_id),)
+        ).fetchall()

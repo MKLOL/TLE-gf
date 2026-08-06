@@ -31,9 +31,6 @@ _PRECISE_WINDOW = 300  # schedule precise timer when within 5 minutes
 _DEFAULT_TIME = '10:00'
 _DEFAULT_TZ = 'US/Eastern'
 _PICK_COUNT = 5
-_DRAGOS_ID = 450089497263341586
-_NEXT_DRAGOS_KEY_PREFIX = 'greatday_next_dragos:'
-_BAN_REPLY = 'No. How about we stop doing this? 😊'
 _STATS_PER_PAGE = 15
 _HISTORY_PER_PAGE = 15
 # Edit the backfill progress embed every N scanned messages. Discord rate-
@@ -136,15 +133,10 @@ class GreatDay(commands.Cog):
                     if guild.get_member(int(r.user_id)) is not None]
         if not user_ids:
             return False
-        dragos_key = f'{_NEXT_DRAGOS_KEY_PREFIX}{guild.id}'
-        tag_dragos = cf_common.user_db.kvs_get(dragos_key) == str(_DRAGOS_ID)
-        picked = ([str(_DRAGOS_ID)] * _PICK_COUNT if tag_dragos else
-                  random.sample(user_ids, min(_PICK_COUNT, len(user_ids))))
+        picked = random.sample(user_ids, min(_PICK_COUNT, len(user_ids)))
         mentions = ' '.join(f'<@{uid}>' for uid in picked)
         verb = 'is' if len(picked) == 1 else 'are'
         msg = await channel.send(f'I hope {mentions} {verb} having a great day!')
-        if tag_dragos:
-            cf_common.user_db.kvs_delete(dragos_key)
         # Record picks best-effort. Once the message is sent, the day is
         # 'done' from the user's perspective — if recording fails the caller
         # must still stamp the kvs sentinel, otherwise the 60s scheduler
@@ -166,6 +158,8 @@ class GreatDay(commands.Cog):
 
     @greatday.command(name='signup', brief='Sign up for daily great day pings')
     async def signup(self, ctx):
+        if cf_common.user_db.greatday_is_banned(ctx.guild.id, ctx.author.id):
+            raise GreatDayCogError('You are banned from great day.')
         added = cf_common.user_db.greatday_signup(ctx.guild.id, ctx.author.id)
         if added:
             await ctx.send(embed=discord_common.embed_success(
@@ -188,6 +182,10 @@ class GreatDay(commands.Cog):
                       usage='@user')
     @commands.has_role(constants.TLE_ADMIN)
     async def add_user(self, ctx, member: discord.Member):
+        if cf_common.user_db.greatday_is_banned(ctx.guild.id, member.id):
+            name = discord.utils.escape_mentions(member.display_name)
+            raise GreatDayCogError(
+                f'`{name}` is banned from great day. Unban them first.')
         added = cf_common.user_db.greatday_signup(ctx.guild.id, member.id)
         name = discord.utils.escape_mentions(member.display_name)
         if added:
@@ -212,11 +210,16 @@ class GreatDay(commands.Cog):
 
     @greatday.command(name='ban', brief='Ban a user from great day (admin)',
                       usage='@user')
-    async def ban_user(self, ctx, *, _target: str = ''):
-        if ctx.author.id == _DRAGOS_ID:
-            key = f'{_NEXT_DRAGOS_KEY_PREFIX}{ctx.guild.id}'
-            cf_common.user_db.kvs_set(key, str(_DRAGOS_ID))
-        await ctx.send(_BAN_REPLY)
+    @commands.has_role(constants.TLE_ADMIN)
+    async def ban_user(self, ctx, member: discord.Member):
+        banned = cf_common.user_db.greatday_ban(ctx.guild.id, member.id)
+        name = discord.utils.escape_mentions(member.display_name)
+        if banned:
+            await ctx.send(embed=discord_common.embed_success(
+                f'`{name}` has been banned from great day.'))
+        else:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'`{name}` is already banned.'))
 
     @greatday.command(name='unban', brief='Unban a user from great day (admin)',
                       usage='@user')
