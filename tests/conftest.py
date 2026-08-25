@@ -228,6 +228,7 @@ _dc.random_cf_color = lambda: 0
 _dc.cf_color_embed = lambda **kw: None
 _dc.set_author_footer = lambda embed, user: None
 _dc.attach_image = lambda embed, img_file: None
+_dc._SUCCESS_GREEN = 0x28A745
 _dc._ALERT_AMBER = 0xFFBF00
 _dc.FeatureDisabledSilent = type('FeatureDisabledSilent', (Exception,), {})
 _dc.requires_guild_feature = lambda feature: (lambda f: f)

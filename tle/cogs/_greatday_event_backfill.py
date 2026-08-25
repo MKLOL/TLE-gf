@@ -102,8 +102,9 @@ def _pick_command(pending, result, audit, window_seconds):
     if result.reference_id is not None:
         referenced = [command for command in candidates
                       if command.message_id == result.reference_id]
-        if referenced:
-            candidates = referenced
+        if not referenced:
+            return None
+        candidates = referenced
     if not candidates:
         return None
     if len(candidates) > 1:

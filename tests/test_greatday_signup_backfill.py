@@ -9,8 +9,9 @@ from tle.cogs import _greatday_events as events
 from tle.util import codeforces_common as cf_common
 
 from tests.greatday_test_utils import (  # noqa: F401
-    GUILD, USER_A, USER_B, DiscordAuthor, DiscordEmbed, DiscordGuild,
-    DiscordMessage, HistoryChannel, bot_result, db,
+    GUILD, GREATDAY_ALERT_COLOR, GREATDAY_SUCCESS_COLOR, LLM_ANSWER_COLOR,
+    USER_A, USER_B, DiscordAuthor, DiscordEmbed, DiscordGuild, DiscordMessage,
+    HistoryChannel, bot_result, db,
 )
 
 
@@ -19,9 +20,9 @@ SIGNUP_OK = 'You have been signed up for great day pings!'
 REMOVE_OK = 'You have been removed from great day pings.'
 
 
-def command(content, author_id, message_id, at):
+def command(content, author_id, message_id, at, **kwargs):
     return DiscordMessage(
-        content, DiscordAuthor(author_id), message_id, at)
+        content, DiscordAuthor(author_id), message_id, at, **kwargs)
 
 
 def scan(messages, **kwargs):
@@ -60,6 +61,16 @@ class TestCommandParsing:
         assert events.parse_signup_command(msg, BOT_ID) == ('signup', USER_A)
         assert events.parse_signup_command(msg, 8) is None
 
+    def test_rejects_edited_command_content(self):
+        msg = command(
+            ';greatday signup', USER_A, 1, 10, edited_at=12)
+        assert backfill.parse_membership_command(msg, BOT_ID) is None
+
+    def test_rejects_commands_authored_by_another_bot(self):
+        msg = DiscordMessage(
+            ';greatday signup', DiscordAuthor(USER_A, bot=True), 1, 10)
+        assert backfill.parse_membership_command(msg, BOT_ID) is None
+
 
 class TestResultParsing:
     @pytest.mark.parametrize('description,kind,success,outcome,name', [
@@ -78,7 +89,8 @@ class TestResultParsing:
     def test_classifies_exact_bot_results(self, description, kind, success,
                                           outcome, name):
         parsed = backfill.parse_membership_result(
-            bot_result(description, 2, 11, target_id=USER_B), BOT_ID)
+            bot_result(description, 2, 11, target_id=USER_B,
+                       reference_id=1), BOT_ID)
         assert (parsed.kind, parsed.success, parsed.outcome,
                 parsed.display_name) == (kind, success, outcome, name)
         assert parsed.target_id == USER_B
@@ -90,6 +102,45 @@ class TestResultParsing:
 
     def test_rejects_substring_instead_of_exact_result(self):
         msg = bot_result('FYI: ' + SIGNUP_OK, 2, 11)
+        assert backfill.parse_membership_result(msg, BOT_ID) is None
+
+    def test_accepts_legacy_result_embed_without_footer_or_reference(self):
+        parsed = backfill.parse_membership_result(
+            bot_result(SIGNUP_OK, 2, 11), BOT_ID)
+        assert parsed.success
+        assert parsed.target_id is None
+        assert parsed.reference_id is None
+
+    def test_rejects_exact_text_in_llm_answer_embed(self):
+        msg = bot_result(
+            SIGNUP_OK, 2, 11, reference_id=1, color=LLM_ANSWER_COLOR,
+            footer_text='gemini-3-flash-preview • Direct',
+            author_name='Asked by someone')
+        assert backfill.parse_membership_result(msg, BOT_ID) is None
+
+    @pytest.mark.parametrize('message', [
+        DiscordMessage(
+            SIGNUP_OK, DiscordAuthor(BOT_ID, bot=True), 2, 11),
+        DiscordMessage(
+            '', DiscordAuthor(BOT_ID, bot=True), 2, 11,
+            [DiscordEmbed(SIGNUP_OK, color=GREATDAY_ALERT_COLOR)]),
+        DiscordMessage(
+            '', DiscordAuthor(BOT_ID, bot=True), 2, 11,
+            [DiscordEmbed(
+                SIGNUP_OK, color=GREATDAY_SUCCESS_COLOR,
+                footer_text='gemini-3-flash-preview')],
+            reference_id=1),
+        DiscordMessage(
+            '', DiscordAuthor(BOT_ID, bot=True), 2, 11,
+            [DiscordEmbed(SIGNUP_OK, color=GREATDAY_SUCCESS_COLOR),
+             DiscordEmbed('second page', color=GREATDAY_SUCCESS_COLOR)]),
+    ])
+    def test_rejects_non_greatday_result_envelopes(self, message):
+        assert backfill.parse_membership_result(message, BOT_ID) is None
+
+    def test_rejects_edited_bot_result(self):
+        msg = bot_result(SIGNUP_OK, 2, 11)
+        msg.edited_at = msg.created_at
         assert backfill.parse_membership_result(msg, BOT_ID) is None
 
 
@@ -140,7 +191,8 @@ class TestChronologicalMatching:
         result = scan([
             command(';greatday signup', USER_A, 1, 10),
             command(';greatday signup', USER_B, 2, 11),
-            bot_result(SIGNUP_OK, 3, 12, reference_id=1),
+            bot_result(SIGNUP_OK, 3, 12, target_id=USER_A,
+                       reference_id=1),
         ])
         assert result.events == [
             (GUILD, USER_A, 'signup', 10.0, '1')]
@@ -150,10 +202,47 @@ class TestChronologicalMatching:
         result = scan([
             command(';greatday signup', USER_A, 1, 10),
             bot_result('`Dragos` has been added to great day pings.', 2, 11,
-                       target_id=USER_B),
+                       target_id=USER_B, reference_id=1),
         ])
         assert result.events == []
         assert result.audit.unmatched_results == 1
+
+    def test_reply_reference_cannot_fall_back_to_another_command(self):
+        result = scan([
+            command(';greatday signup', USER_A, 1, 10),
+            bot_result(SIGNUP_OK, 2, 11, target_id=USER_A,
+                       reference_id=999),
+        ])
+        assert result.events == []
+        assert result.audit.unmatched_results == 1
+
+    @pytest.mark.parametrize('first,first_result,second,second_result', [
+        (';greatday signup', SIGNUP_OK,
+         ';greatday remove', REMOVE_OK),
+        (';greatday add <@200>', '`target` has been added to great day pings.',
+         ';greatday kick <@200>',
+         '`target` has been removed from great day pings.'),
+    ])
+    def test_llm_replies_to_edited_prompts_cannot_fabricate_history(
+            self, first, first_result, second, second_result):
+        def llm_result(description, message_id, at, reference_id):
+            return bot_result(
+                description, message_id, at, reference_id=reference_id,
+                color=LLM_ANSWER_COLOR,
+                footer_text='gemini-3-flash-preview • Direct',
+                author_name='Asked by someone')
+
+        result = scan([
+            command(first, USER_A, 1, 10, edited_at=12),
+            llm_result(first_result, 2, 11, 1),
+            command(second, USER_A, 3, 20, edited_at=22),
+            llm_result(second_result, 4, 21, 3),
+        ], current_signup_ids=set(), current_ban_ids=set())
+        assert result.events == []
+        assert result.audit.commands == 0
+        assert result.audit.bot_results == 0
+        assert result.audit.matched_successes == 0
+        assert result.audit.trustworthy
 
     def test_progress_reports_scanned_and_success_counts(self):
         seen = []

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from tle.util import discord_common
+
 
 _COMMAND_RE = re.compile(
     r'^greatday\s+(signup|remove|add|kick|ban|unban)(?:\s+(.*))?$',
@@ -96,6 +98,15 @@ def _first_argument(rest):
 
 def parse_membership_command(message, bot_user_id):
     """Parse an actually prefixed membership command without checking roles."""
+    # discord.py does not re-run prefix commands when their message is edited.
+    # The edited content therefore cannot prove which command, if any, the bot
+    # originally executed. This also prevents a user from obtaining a reply
+    # from another cog and later editing its prompt into a Great Day command.
+    if getattr(message, 'edited_at', None) is not None:
+        return None
+    author = getattr(message, 'author', None)
+    if getattr(author, 'bot', False):
+        return None
     author_id = _message_author_id(message)
     if author_id is None or author_id == str(bot_user_id):
         return None
@@ -117,25 +128,57 @@ def parse_membership_command(message, bot_user_id):
         str(message.id))
 
 
-def _embed_descriptions(message):
-    content = getattr(message, 'content', '') or ''
-    if content:
-        yield content
-    for embed in getattr(message, 'embeds', None) or ():
-        description = getattr(embed, 'description', None)
-        if description:
-            yield description
+def _embed_color_value(embed):
+    color = getattr(embed, 'colour', None)
+    if color is None:
+        color = getattr(embed, 'color', None)
+    color = getattr(color, 'value', color)
+    try:
+        return int(color)
+    except (TypeError, ValueError):
+        return None
 
 
-def _result_target_id(message):
-    for embed in getattr(message, 'embeds', None) or ():
-        footer = getattr(embed, 'footer', None)
-        text = footer.get('text') if isinstance(footer, dict) else None
-        if text is None:
-            text = getattr(footer, 'text', None)
-        match = _TARGET_FOOTER_RE.match(text or '')
-        if match is not None:
-            return match.group(1)
+def _proxy_value(value, name):
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _embed_footer(embed):
+    footer = getattr(embed, 'footer', None)
+    return _proxy_value(footer, 'text'), _proxy_value(footer, 'icon_url')
+
+
+def _embed_has_extra_metadata(embed):
+    """Reject embeds that cannot have been emitted by the Great Day cog."""
+    if any((getattr(embed, 'title', None), getattr(embed, 'url', None),
+            getattr(embed, 'timestamp', None), getattr(embed, 'fields', None))):
+        return True
+    author = getattr(embed, 'author', None)
+    if _proxy_value(author, 'name'):
+        return True
+    author_data = getattr(embed, 'author_data', None)  # Test/stub shape.
+    if _proxy_value(author_data, 'name'):
+        return True
+    for name in ('image', 'thumbnail', 'video', 'provider'):
+        value = getattr(embed, name, None)
+        if _proxy_value(value, 'url') or _proxy_value(value, 'name'):
+            return True
+    return False
+
+
+def _parse_result_text(text):
+    if not isinstance(text, str):
+        return None
+    simple = _SELF_RESULTS.get(text)
+    if simple is not None:
+        return (*simple, None)
+    if not text.startswith('`'):
+        return None
+    for suffix, kind, success, outcome in _NAMED_RESULTS:
+        if text.endswith(suffix):
+            return kind, success, outcome, text[1:-len(suffix)]
     return None
 
 
@@ -147,29 +190,43 @@ def _result_reference_id(message):
 
 def parse_membership_result(message, bot_user_id):
     """Classify one exact terminal response emitted by the Great Day cog."""
-    if _message_author_id(message) != str(bot_user_id):
+    if (_message_author_id(message) != str(bot_user_id)
+            or getattr(message, 'edited_at', None) is not None):
         return None
-    parsed = None
-    for raw_text in _embed_descriptions(message):
-        text = str(raw_text).strip()
-        simple = _SELF_RESULTS.get(text)
-        if simple is not None:
-            parsed = (*simple, None)
-            break
-        if not text.startswith('`'):
-            continue
-        for suffix, kind, success, outcome in _NAMED_RESULTS:
-            if text.endswith(suffix):
-                parsed = (kind, success, outcome, text[1:-len(suffix)])
-                break
-        if parsed is not None:
-            break
+    # Great Day has always sent exactly one embed with no message content.
+    # Legacy results are bare green/amber embeds; current results additionally
+    # carry a Great Day target footer and reply to the invoking command.
+    if getattr(message, 'content', ''):
+        return None
+    embeds = list(getattr(message, 'embeds', None) or ())
+    if len(embeds) != 1:
+        return None
+    embed = embeds[0]
+    parsed = _parse_result_text(getattr(embed, 'description', None))
     if parsed is None:
         return None
     kind, success, outcome, display_name = parsed
+    expected_color = (discord_common._SUCCESS_GREEN if success
+                      else discord_common._ALERT_AMBER)
+    if (_embed_color_value(embed) != expected_color
+            or _embed_has_extra_metadata(embed)):
+        return None
+
+    footer_text, footer_icon = _embed_footer(embed)
+    footer_match = _TARGET_FOOTER_RE.fullmatch(footer_text or '')
+    if footer_text and footer_match is None:
+        return None
+    if footer_icon:
+        return None
+    target_id = footer_match.group(1) if footer_match is not None else None
+    reference_id = _result_reference_id(message)
+    # A footer/reference pair identifies current Great Day replies. Neither is
+    # present on genuine legacy results or on GreatDayCogError responses.
+    if (target_id is None) != (reference_id is None):
+        return None
     return MembershipResult(
-        kind, success, outcome, display_name, _result_target_id(message),
-        message_time(message), str(message.id), _result_reference_id(message))
+        kind, success, outcome, display_name, target_id,
+        message_time(message), str(message.id), reference_id)
 
 
 def _normalized_name(value):

@@ -103,12 +103,16 @@ GUILD = '111'
 USER_A = '100'
 USER_B = '200'
 USER_C = '300'
+GREATDAY_SUCCESS_COLOR = 0x28A745
+GREATDAY_ALERT_COLOR = 0xFFBF00
+LLM_ANSWER_COLOR = 0x4285F4
 
 
 class DiscordAuthor:
     def __init__(self, user_id, display_name='someone', *, username=None,
-                 nick=None):
+                 nick=None, bot=False):
         self.id = int(user_id)
+        self.bot = bot
         self.name = username or display_name
         self.global_name = None
         self.nick = nick
@@ -120,11 +124,24 @@ class DiscordAuthor:
 
 
 class DiscordEmbed:
-    def __init__(self, description='', title='', target_id=None):
+    def __init__(self, description='', title='', target_id=None, *, color=None,
+                 footer_text=None, author_name=None, fields=()):
         self.description = description
         self.title = title
-        self.footer = ({'text': f'Great Day user ID: {target_id}'}
-                       if target_id is not None else None)
+        self.color = color
+        self.fields = list(fields)
+        self.author = (SimpleNamespace(name=author_name)
+                       if author_name is not None else None)
+        self.url = None
+        self.timestamp = None
+        self.image = None
+        self.thumbnail = None
+        self.video = None
+        self.provider = None
+        if target_id is not None:
+            footer_text = f'Great Day user ID: {target_id}'
+        self.footer = ({'text': footer_text}
+                       if footer_text is not None else None)
 
     def set_footer(self, *, text=None, **kwargs):
         self.footer = {'text': text}
@@ -132,7 +149,7 @@ class DiscordEmbed:
 
 class DiscordMessage:
     def __init__(self, content, author=None, msg_id=1, at=0.0, embeds=(),
-                 reference_id=None):
+                 reference_id=None, edited_at=None):
         self.content = content
         self.author = author
         self.id = msg_id
@@ -145,6 +162,12 @@ class DiscordMessage:
             def timestamp(_self):
                 return at
         self.created_at = _Created()
+        self.edited_at = None
+        if edited_at is not None:
+            class _Edited:
+                def timestamp(_self):
+                    return edited_at
+            self.edited_at = _Edited()
 
     async def edit(self, **kwargs):
         self.edits.append(kwargs)
@@ -204,10 +227,19 @@ class HistoryChannel:
 
 
 def bot_result(description, message_id, at, *, bot_id=7, target_id=None,
-               reference_id=None):
-    embed = DiscordEmbed(description, target_id=target_id)
+               reference_id=None, color=None, footer_text=None,
+               author_name=None):
+    if color is None:
+        success = (description.startswith('You have been ')
+                   or ' has been ' in description)
+        color = (GREATDAY_SUCCESS_COLOR if success
+                 else GREATDAY_ALERT_COLOR)
+    embed = DiscordEmbed(
+        description, target_id=target_id, color=color,
+        footer_text=footer_text, author_name=author_name)
     return DiscordMessage(
-        '', DiscordAuthor(bot_id), message_id, at, [embed], reference_id)
+        '', DiscordAuthor(bot_id, bot=True), message_id, at, [embed],
+        reference_id)
 
 
 class _FakeMessage:
