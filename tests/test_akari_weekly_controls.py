@@ -57,15 +57,20 @@ def test_weekly_announcement_posts_once_to_configured_target(db, monkeypatch):
     monkeypatch.setattr(cf_common, 'user_db', db)
     db.set_guild_config(1, 'akari', '1')
     db.set_guild_config(1, 'akari_weekly_post_channel', '123')
-    monkeypatch.setattr(db, 'get_akari_registrants', lambda _guild: {'10'})
+    monkeypatch.setattr(
+        db, 'get_akari_registrants',
+        lambda _guild: {'10', '11', '12', '13'})
     target = _FakeChannel(123)
     cog = minigames_module.Minigames(bot=None)
     Standing = namedtuple(
         'Standing',
         'user_id score days_played perfects total_time week_start week_end')
     start = dt.date(2026, 8, 24)
-    standings = [Standing('10', 6.0, 7, 7, 420, start,
-                          start + dt.timedelta(days=6))]
+    standings = [
+        Standing(str(user_id), 16.0 - user_id, 7, 7, 420, start,
+                 start + dt.timedelta(days=6))
+        for user_id in range(10, 14)
+    ]
     ratings = [RatingState('10', 1600, 1, 1600, 100, 0, 500)]
 
     async def preview(*_args, **_kwargs):
@@ -81,7 +86,8 @@ def test_weekly_announcement_posts_once_to_configured_target(db, monkeypatch):
                         lambda rows, **_kwargs: rows)
     monkeypatch.setattr(
         minigames_module, '_get_akari_weekly_table_image_file',
-        lambda *_args, **kwargs: ('top3', kwargs['title']))
+        lambda _guild, rows, **kwargs:
+            ('standings', [row.user_id for row in rows], kwargs['title']))
     monkeypatch.setattr(
         minigames_module, '_get_akari_rating_table_image_file',
         lambda *_args, **kwargs: ('ratings', kwargs['title']))
@@ -91,5 +97,7 @@ def test_weekly_announcement_posts_once_to_configured_target(db, monkeypatch):
     assert asyncio.run(cog._check_akari_weekly_announcement(
         _FakeGuild(1), start)) is False
     assert len(target.sent) == 1
-    assert [item[0] for item in target.sent[0]['kwargs']['files']] == [
-        'top3', 'ratings']
+    files = target.sent[0]['kwargs']['files']
+    assert [item[0] for item in files] == ['standings', 'ratings']
+    assert files[0][1] == ['10', '11', '12', '13']
+    assert 'Final standings' in target.sent[0]['content']

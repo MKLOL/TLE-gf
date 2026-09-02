@@ -222,8 +222,9 @@ class ImplAkariWeeklyMixin:
 
         completed_end = completed_start + dt.timedelta(days=6)
         files = [_mg()._get_akari_weekly_table_image_file(
-            guild, standings[:3],
-            title=(f'Daily Akari Weekly Top 3 · {completed_start:%b %d}–'
+            guild, standings,
+            title=(f'Daily Akari Final Weekly Standings · '
+                   f'{completed_start:%b %d}–'
                    f'{completed_end:%b %d}'))]
         if ratings:
             files.append(_mg()._get_akari_rating_table_image_file(
@@ -233,5 +234,5 @@ class ImplAkariWeeklyMixin:
         await channel.send(
             f'🏆 **Daily Akari week complete · '
             f'{completed_start:%b %d}–{completed_end:%b %d}**\n'
-            'Final top 3 and updated weekly ratings:', files=files)
+            'Final standings and updated weekly ratings:', files=files)
         return True
