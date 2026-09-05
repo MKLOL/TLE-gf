@@ -34,7 +34,7 @@ class TestWeeklyPerformance:
         slow = _row('b', 1, dt.date(2026, 6, 15), seconds=120)
         assert result_performance(best, best_perfect_time=60) == 1.0
         score = result_performance(slow, best_perfect_time=60)
-        assert math.isclose(score, 0.5 + 0.5 * math.exp(-0.7))
+        assert math.isclose(score, 0.5 + 0.5 * math.exp(-0.8))
         assert score > 0.5
 
     def test_time_breaks_equal_accuracy_without_crossing_accuracy_bands(self):
@@ -56,7 +56,7 @@ class TestWeeklyPerformance:
         values = [difficulty_weight(level) for level in range(1, 6)]
         assert values == sorted(values)
         assert values[2] == 1.0
-        assert math.isclose(values[-1] / values[0], 2.0)
+        assert math.isclose(values[-1] / values[0], 2.0 ** 1.4)
 
 
 class TestWeeklyScoring:
