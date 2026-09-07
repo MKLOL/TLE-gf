@@ -55,6 +55,24 @@ def pick_video_attachment(message):
     return None
 
 
+def _missing_ffmpeg_tool():
+    """Name of the first of ffmpeg/ffprobe the decoder cannot locate, or None."""
+    from tle.util.queens_video_decode import find_tool
+    for tool in ('ffmpeg', 'ffprobe'):
+        if find_tool(tool) is None:
+            return tool
+    return None
+
+
+def _ffmpeg_missing_error(tool):
+    # The PATH goes to the log only; it is for the operator, not the channel.
+    logger.error('queens time: %s not found on PATH=%r nor in the usual directories; '
+                 'install ffmpeg or set FFMPEG_DIR', tool, os.environ.get('PATH'))
+    return MinigameCogError(
+        f'Video analysis is unavailable: `{tool}` was not found by the bot process. '
+        f'Install ffmpeg on the bot host, or point `FFMPEG_DIR` at its directory.')
+
+
 def _safe_video_filename(attachment):
     base = os.path.basename(getattr(attachment, 'filename', None) or 'video')
     root, ext = os.path.splitext(base)
@@ -139,6 +157,9 @@ class ImplQueensTimeMixin:
             raise MinigameCogError(
                 f'That video is {size / (1024 * 1024):.0f} MiB; the limit is '
                 f'{_QUEENS_VIDEO_MAX_BYTES // (1024 * 1024)} MiB.')
+        missing = _missing_ffmpeg_tool()
+        if missing is not None:
+            raise _ffmpeg_missing_error(missing)
         gate = self._queens_video_gate()
         if gate.locked():
             await ctx.send(embed=discord_common.embed_neutral(
@@ -191,9 +212,7 @@ class ImplQueensTimeMixin:
                 f'{exc.max_frames:,} (roughly {exc.max_frames // 1800} minutes at 30 fps). '
                 f'Trim it to the solve, or record at a lower frame rate.')
         except FileNotFoundError as exc:
-            logger.error('queens time: ffmpeg/ffprobe missing: %s', exc)
-            raise MinigameCogError(
-                'Video analysis is unavailable: ffmpeg is not installed on the bot host.')
+            raise _ffmpeg_missing_error(exc.filename or 'ffmpeg')
         except VideoDecodeError as exc:
             raise MinigameCogError(f'Could not decode that video: {exc}.')
         except Exception:

@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -25,6 +26,33 @@ BLOCK = 4               # block size at analysis scale (16 px at full res)
 BLOCK_CHANGE = 10.0     # mean abs gray diff for a block to count as "changed"
 
 _PTS_RE = re.compile(rb'\bpts:\s*(-?\d+)')
+# Where to look for ffmpeg/ffprobe when they are not on the process's PATH.  The
+# bot's service unit starts it with a PATH lacking /usr/bin, so a plain
+# ``Popen(['ffmpeg', ...])`` raised FileNotFoundError while the host had ffmpeg
+# all along.  ``FFMPEG_DIR`` overrides for unusual installs.
+_TOOL_DIRS = ('/usr/bin', '/usr/local/bin', '/opt/homebrew/bin', '/snap/bin', '/bin')
+
+
+def find_tool(name):
+    """Absolute path of ``ffmpeg``/``ffprobe`` or None: ``$FFMPEG_DIR``, then PATH,
+    then the usual system directories."""
+    override = os.environ.get('FFMPEG_DIR')
+    candidates = [os.path.join(override, name)] if override else []
+    found = shutil.which(name)
+    if found:
+        candidates.append(found)
+    candidates.extend(os.path.join(d, name) for d in _TOOL_DIRS)
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def _tool(name):
+    path = find_tool(name)
+    if path is None:
+        raise FileNotFoundError(2, 'not found on PATH or in the usual directories', name)
+    return path
 
 
 class VideoDecodeError(RuntimeError):
@@ -45,6 +73,7 @@ def _remaining(deadline):
 
 
 def run(cmd, deadline=None):
+    cmd = [_tool(cmd[0]), *cmd[1:]]
     try:
         return subprocess.run(cmd, check=True, capture_output=True,
                               timeout=_remaining(deadline)).stdout
@@ -52,7 +81,8 @@ def run(cmd, deadline=None):
         raise VideoDecodeTimeout('analysis deadline passed') from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b'')[-400:].decode('utf-8', 'replace').strip()
-        raise VideoDecodeError(f'{cmd[0]} failed ({exc.returncode}): {tail}') from exc
+        raise VideoDecodeError(
+            f'{os.path.basename(cmd[0])} failed ({exc.returncode}): {tail}') from exc
 
 
 def probe_stream(path, deadline=None):
@@ -182,6 +212,7 @@ def decode(path, width=SCALE_W, chunk_frames=64, on_progress=None, strip_geo=Non
     cmd = _decode_command(path, width, h, strip_geo,
                           strip_file.name if strip_file else None)
     try:
+        cmd[0] = _tool(cmd[0])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError:
         if strip_file:

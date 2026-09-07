@@ -8,6 +8,7 @@ from tle.cogs import _mgimpl_queenstime as queenstime_module
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs.minigames import Minigames, MinigameCogError
 from tle.util import queens_video_analyze
+from tle.util import queens_video_decode
 from tle.util.queens_video_decode import (
     VideoDecodeError, VideoDecodeTimeout, VideoTooLongError,
 )
@@ -99,6 +100,10 @@ class TestPickVideoAttachment:
 
 
 class TestQueensTimeCommand:
+    @pytest.fixture(autouse=True)
+    def _ffmpeg_present(self, monkeypatch):
+        monkeypatch.setattr(queens_video_decode, 'find_tool', lambda tool: '/usr/bin/' + tool)
+
     def _patch_analyze(self, monkeypatch, result=None, exc=None, seen=None):
         def fake_analyze(path, deadline=None, max_frames=None, **kwargs):
             if seen is not None:
@@ -111,6 +116,16 @@ class TestQueensTimeCommand:
                 raise exc
             return dict(result or _OK_RESULT)
         monkeypatch.setattr(queens_video_analyze, 'analyze', fake_analyze)
+
+    def test_missing_ffmpeg_detected_before_download(self, monkeypatch):
+        seen = {}
+        self._patch_analyze(monkeypatch, seen=seen)
+        monkeypatch.setattr(queens_video_decode, 'find_tool',
+                            lambda tool: None if tool == 'ffprobe' else '/usr/bin/' + tool)
+        ctx = _make_ctx(reply_to=_source_message([_VideoAttachment()]))
+        with pytest.raises(MinigameCogError, match='`ffprobe` was not found'):
+            _run(Minigames(bot=None), ctx)
+        assert seen == {}
 
     def test_reply_with_video_reports_time(self, monkeypatch):
         seen = {}
@@ -172,7 +187,7 @@ class TestQueensTimeCommand:
         assert 'last seen at 31s' in str(info.value)
 
     @pytest.mark.parametrize('exc, needle', [
-        (FileNotFoundError('ffmpeg'), 'ffmpeg is not installed'),
+        (FileNotFoundError(2, 'No such file', 'ffprobe'), '`ffprobe` was not found'),
         (VideoDecodeError('ffmpeg failed (1)'), 'Could not decode'),
         (VideoDecodeTimeout('deadline'), 'Gave up'),
         (VideoTooLongError(19_000, 10_000), r'19,000 frames; the limit is 10,000'),
@@ -257,3 +272,31 @@ class TestFrameGuard:
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError('decoded')))
         with pytest.raises(RuntimeError, match='decoded'):
             queens_video_analyze.analyze('x.mp4')
+
+
+class TestFindTool:
+    """ffmpeg is located even when the bot service's PATH lacks /usr/bin."""
+
+    def _fs(self, monkeypatch, present):
+        monkeypatch.setattr(queens_video_decode.os.path, 'isfile', lambda p: p in present)
+        monkeypatch.setattr(queens_video_decode.os, 'access', lambda p, mode: p in present)
+
+    def test_empty_path_falls_back_to_usr_bin(self, monkeypatch):
+        monkeypatch.setenv('PATH', '/opt/tle/.venv/bin')
+        monkeypatch.delenv('FFMPEG_DIR', raising=False)
+        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: None)
+        self._fs(monkeypatch, {'/usr/bin/ffmpeg'})
+        assert queens_video_decode.find_tool('ffmpeg') == '/usr/bin/ffmpeg'
+        assert queens_video_decode.find_tool('ffprobe') is None
+
+    def test_ffmpeg_dir_override_wins(self, monkeypatch):
+        monkeypatch.setenv('FFMPEG_DIR', '/opt/ffmpeg')
+        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: '/usr/bin/' + n)
+        self._fs(monkeypatch, {'/opt/ffmpeg/ffmpeg', '/usr/bin/ffmpeg'})
+        assert queens_video_decode.find_tool('ffmpeg') == '/opt/ffmpeg/ffmpeg'
+
+    def test_path_hit_is_used(self, monkeypatch):
+        monkeypatch.delenv('FFMPEG_DIR', raising=False)
+        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: '/usr/local/bin/' + n)
+        self._fs(monkeypatch, {'/usr/local/bin/ffprobe'})
+        assert queens_video_decode.find_tool('ffprobe') == '/usr/local/bin/ffprobe'
