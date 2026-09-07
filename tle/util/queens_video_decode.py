@@ -28,13 +28,9 @@ BLOCK_CHANGE = 10.0     # mean abs gray diff for a block to count as "changed"
 
 _PTS_RE = re.compile(rb'\bpts:\s*(-?\d+)')
 logger = logging.getLogger(__name__)
-# Where to look for ffmpeg/ffprobe when they are not on the process's PATH.  The
-# bot process could not see the host's /usr/bin/ffmpeg at all (its environment
-# is isolated from the operator's shell, as the Playwright scraper's in-bot
-# ``pip install`` showed), so after ``$FFMPEG_DIR``, PATH and the usual
-# directories the last resort is the ``static-ffmpeg`` package, which downloads
-# static ffmpeg+ffprobe builds into the bot's own site-packages on first use —
-# the same shape as ``playwright install chromium``.
+# A service's PATH can omit system directories. Containers also have their own
+# filesystem: a host install is not necessarily visible to the bot. Only fetch
+# the static build after checking every local candidate.
 _TOOL_DIRS = ('/usr/bin', '/usr/local/bin', '/opt/homebrew/bin', '/snap/bin', '/bin')
 
 
@@ -42,7 +38,8 @@ def _bundled_tool(name):
     """ffmpeg/ffprobe from the ``static-ffmpeg`` package (fetched on first use), or None."""
     try:
         from static_ffmpeg import run as static_run
-    except ImportError:
+    except ImportError as exc:
+        logger.warning('static-ffmpeg is unavailable for %s: %s', name, exc)
         return None
     try:
         ffmpeg, ffprobe = static_run.get_or_fetch_platform_executables_else_raise()
@@ -62,12 +59,12 @@ def find_tool(name):
     if found:
         candidates.append(found)
     candidates.extend(os.path.join(d, name) for d in _TOOL_DIRS)
-    bundled = _bundled_tool(name)
-    if bundled:
-        candidates.append(bundled)
     for path in candidates:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
+    bundled = _bundled_tool(name)
+    if bundled and os.path.isfile(bundled) and os.access(bundled, os.X_OK):
+        return bundled
     return None
 
 

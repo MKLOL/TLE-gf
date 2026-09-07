@@ -75,11 +75,19 @@ Additionally TLE uses pillow for graphics, which requires the following packages
 apt-get install libjpeg-dev zlib1g-dev
 ```
 
-`;queens time` reads a solve time off a screen recording with `ffmpeg`/`ffprobe`. A system install is used when present; otherwise the `static-ffmpeg` Python dependency downloads a static build into the bot's environment the first time the command runs, so nothing is strictly required. Installing it system-wide avoids that one-time download:
+`;queens time` reads a solve time off a screen recording with `ffmpeg`/`ffprobe`. A system install is used when present; otherwise the `static-ffmpeg` Python dependency attempts to download a static build on first use. That fallback needs network access and a writable package directory. Installing ffmpeg in the bot's runtime avoids the download:
 
 ```bash
 apt-get install ffmpeg
 ```
+
+Run `ffmpeg -version` and `ffprobe -version` in the same host/container and as
+the same user that runs the bot. Installing on a Docker host does not install
+inside its containers; rebuild the bot image or install inside the running
+container. A Python virtual environment alone does not hide `/usr/bin`.
+`FFMPEG_DIR` can select another directory containing both executables, but that
+directory must be visible to the bot. If discovery fails, the bot log records
+its hostname, Python executable, working directory, and search settings.
 
 ### Final steps
 

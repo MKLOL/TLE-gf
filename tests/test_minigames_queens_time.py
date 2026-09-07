@@ -277,6 +277,24 @@ class TestFrameGuard:
 class TestFindTool:
     """ffmpeg is located even when the bot service's PATH lacks /usr/bin."""
 
+    @pytest.mark.parametrize('source', ['override', 'path', 'system'])
+    @pytest.mark.parametrize('tool', ['ffmpeg', 'ffprobe'])
+    def test_local_install_never_fetches_bundle(self, monkeypatch, source, tool):
+        paths = {'override': '/opt/video', 'path': '/custom/bin', 'system': '/usr/bin'}
+        path = paths[source] + '/' + tool
+        monkeypatch.delenv('FFMPEG_DIR', raising=False)
+        if source == 'override':
+            monkeypatch.setenv('FFMPEG_DIR', paths[source])
+        monkeypatch.setattr(queens_video_decode.shutil, 'which',
+                            lambda n: path if source == 'path' else None)
+        self._fs(monkeypatch, {path})
+
+        def unexpected_fetch(name):
+            pytest.fail('local ffmpeg must work without a bundled download')
+
+        monkeypatch.setattr(queens_video_decode, '_bundled_tool', unexpected_fetch)
+        assert queens_video_decode.find_tool(tool) == path
+
     def _fs(self, monkeypatch, present, bundled=None):
         monkeypatch.setattr(queens_video_decode.os.path, 'isfile', lambda p: p in present)
         monkeypatch.setattr(queens_video_decode.os, 'access', lambda p, mode: p in present)
@@ -330,7 +348,20 @@ class TestFindTool:
         fake.get_or_fetch_platform_executables_else_raise = boom
         assert queens_video_decode._bundled_tool('ffmpeg') is None
 
-    def test_bundled_tool_without_package(self, monkeypatch):
+    def test_bundled_tool_without_package(self, monkeypatch, caplog):
         import sys
         monkeypatch.setitem(sys.modules, 'static_ffmpeg', None)
         assert queens_video_decode._bundled_tool('ffmpeg') is None
+        assert 'static-ffmpeg is unavailable' in caplog.text
+
+
+def test_missing_tool_logs_runtime_details_without_posting_them(monkeypatch, caplog):
+    monkeypatch.setattr(queenstime_module.platform, 'node', lambda: 'bot-container')
+    monkeypatch.setattr(queenstime_module.sys, 'executable', '/venv/bin/python')
+    monkeypatch.setenv('FFMPEG_DIR', '/opt/video')
+    error = queenstime_module._ffmpeg_missing_error('ffprobe')
+    assert 'ffprobe' in str(error)
+    assert 'inside its container' in str(error)
+    for detail in ('bot-container', '/venv/bin/python', '/opt/video'):
+        assert detail in caplog.text
+        assert detail not in str(error)

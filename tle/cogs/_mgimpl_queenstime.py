@@ -9,7 +9,9 @@ result as an embed.
 import asyncio
 import logging
 import os
+import platform
 import shutil
+import sys
 import tempfile
 import time
 
@@ -65,14 +67,18 @@ def _missing_ffmpeg_tool():
 
 
 def _ffmpeg_missing_error(tool):
-    # The PATH goes to the log only; it is for the operator, not the channel.
-    logger.error('queens time: %s not found on PATH=%r, in the usual directories, or via '
-                 'static-ffmpeg (see the warning above); install ffmpeg or set FFMPEG_DIR',
-                 tool, os.environ.get('PATH'))
+    # Runtime details belong in the operator log, not the channel. Identify the
+    # actual bot environment so a working install on another host is not misleading.
+    logger.error('queens time: %s not found; host=%r python=%r cwd=%r '
+                 'FFMPEG_DIR=%r PATH=%r; checked system directories and static-ffmpeg '
+                 '(see warning above). Install ffmpeg in this runtime.',
+                 tool, platform.node(), sys.executable, os.getcwd(),
+                 os.environ.get('FFMPEG_DIR'), os.environ.get('PATH'))
     return MinigameCogError(
         f'Video analysis is unavailable: `{tool}` was not found by the bot process and the '
-        f'bundled build could not be fetched. See the bot log; install ffmpeg on the bot '
-        f'host or point `FFMPEG_DIR` at its directory.')
+        f'bundled fallback is unavailable. Install ffmpeg in the environment running '
+        f'the bot (inside its container if applicable), or set `FFMPEG_DIR` to a '
+        f'directory visible there. The bot log identifies that environment.')
 
 
 def _safe_video_filename(attachment):
