@@ -12,6 +12,8 @@ import numpy as np
 
 SCENE_FRACTION = 0.25   # >25% of blocks changed => scene transition, not a flip
 MIN_FLIPS = 3           # events in a ~1 s chain (a 2-second solve shows 0:00, 0:01, 0:02)
+QUIET_FRACTION = 0.02       # pooled pass: a tick never changes more of the frame than this
+QUIET_SCALE_BLOCKS = 20     # pooled pass: score halves per this many frame-wide changed blocks
 
 DIGIT_SHAPE = (24, 16)      # rows, cols of the normalised digit crops
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -44,34 +46,99 @@ def longest_chain(t, tol=0.3, max_step=3):
     return best                      # (start index, number of good intervals)
 
 
-def find_timer_blocks(changed, ts, scene, min_chain=None):
+def dilate_blocks(changed):
+    """OR every block with its 8 neighbours (3x3 max-pool over the block grid)."""
+    out = changed.copy()
+    out[:, 1:, :] |= changed[:, :-1, :]
+    out[:, :-1, :] |= changed[:, 1:, :]
+    rows = out.copy()
+    out[:, :, 1:] |= rows[:, :, :-1]
+    out[:, :, :-1] |= rows[:, :, 1:]
+    return out
+
+
+def _repaints_neighbourhood(changed, chain, y, x, limit=8):
+    """True if any event of the chain changed (almost) the whole 3x3 neighbourhood of
+    block (y, x): board clicks repaint a cell plus auto-placed X marks and the result
+    screen's confetti repaints everything, whereas a digit tick touches a few blocks."""
+    n1 = changed.shape[0]
+    ys, xs = slice(max(0, y - 1), y + 2), slice(max(0, x - 1), x + 2)
+    for i in chain:
+        hit = changed[i, ys, xs] | changed[min(i + 1, n1 - 1), ys, xs]
+        if hit.sum() >= limit:
+            return True
+    return False
+
+
+def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False):
     """Blocks with the longest chain of ~1 s spaced change events (the seconds digit).
-    With min_chain set, return nothing unless the best chain has at least that many flips."""
+    With min_chain set, return nothing unless the best chain has at least that many flips.
+
+    ``dilate`` searches each block's 3x3 neighbourhood instead: on low-resolution
+    recordings a digit is only ~2 px at analysis scale, so successive digit
+    transitions (0->1, 1->2, ...) land in different blocks and no single block sees
+    the whole chain, while the board's clicks do form chains and win.  Pooling the
+    neighbourhood gives the units digit one series again; the returned mask is
+    eroded back to the original blocks that changed at the chain's ticks."""
     n1, hb, wb = changed.shape
+    series = dilate_blocks(changed) if dilate else changed
+    # In the pooled pass a short solve's timer (3 ticks) is no longer than the
+    # board's click chains, so chains are scored by regularity as well: timer
+    # ticks sit within a frame or two of exact seconds, clicks do not.
+    tol = 0.2 if dilate else 0.3
     length = np.zeros((hb, wb), int)
-    counts = changed.sum(axis=0)
+    score = np.zeros((hb, wb), float)
+    chains = {}
+    counts = series.sum(axis=0)
+    # Pooled pass only: how much of the whole frame changed at each event.  A tick
+    # alone changes ~5 blocks; a board click repaints a cell plus auto-placed X
+    # marks (tens), and the result screen / confetti hundreds to thousands.
+    frame_change = changed.sum(axis=(1, 2)) if dilate else None
+    quiet_limit = QUIET_FRACTION * hb * wb
     for y in range(hb):
         for x in range(wb):
             if counts[y, x] < MIN_FLIPS:
                 continue
-            idx = np.nonzero(changed[:, y, x] & ~scene)[0]
+            idx = np.nonzero(series[:, y, x] & ~scene)[0]
             ev = merge_runs(idx)
             if len(ev) < MIN_FLIPS:
                 continue
             t = ts[np.array(ev) + 1]
-            st, ln = longest_chain(t)
+            st, ln = longest_chain(t, tol=tol)
             if ln + 1 >= MIN_FLIPS and np.median(np.diff(t[st:st + ln + 1])) < 1.5:
+                chain = ev[st:st + ln + 1]
+                if dilate:
+                    if _repaints_neighbourhood(changed, chain, y, x):
+                        continue                # a whole-cell repaint, not a digit tick
+                    busy = float(np.median([
+                        max(frame_change[i], frame_change[min(i + 1, n1 - 1)]) for i in chain]))
+                    if busy > quiet_limit:
+                        continue                # screen-wide animation, not a digit tick
+                    dt = np.diff(t[st:st + ln + 1])
+                    dev = float(np.mean(np.abs(dt - np.round(dt))))
+                    score[y, x] = ln * (1 - dev / tol) / (1 + busy / QUIET_SCALE_BLOCKS)
+                else:
+                    score[y, x] = ln
                 length[y, x] = ln
+                chains[y, x] = chain
     best = length.max()
     if best == 0 or (min_chain is not None and best < min_chain):
         return np.zeros((hb, wb), bool)
-    good = length >= max(MIN_FLIPS - 1, int(np.ceil(0.7 * best)))
+    by, bx = np.unravel_index(np.argmax(score), score.shape)
+    if score[by, bx] <= 0:
+        return np.zeros((hb, wb), bool)
+    good = length >= max(MIN_FLIPS - 1, int(np.ceil(0.7 * length[by, bx])))
     # keep only the connected cluster around the strongest block (the digit), drop stray board cells
-    by, bx = np.unravel_index(np.argmax(length), length.shape)
     ys, xs = np.nonzero(good)
     near = (np.abs(ys - by) <= 3) & (np.abs(xs - bx) <= 3)
     out = np.zeros((hb, wb), bool)
     out[ys[near], xs[near]] = True
+    if dilate:
+        ticks = np.array(chains[by, bx])
+        hits = changed[ticks].any(axis=0) | changed[np.minimum(ticks + 1, n1 - 1)].any(axis=0)
+        eroded = out & hits
+        if eroded.any():
+            out = eroded
     return out
 
 

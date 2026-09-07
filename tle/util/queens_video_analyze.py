@@ -134,6 +134,11 @@ def _anchor_flips(strip, flip_idx, flip_t, k, x_units, unit):
     return sec_at_flip, kind, leftmost, x_units, anchor
 
 
+# Failures that mean "the timer was not where we looked", worth a second pass with
+# the neighbourhood-pooled timer search (see ``find_timer_blocks(dilate=True)``).
+_RETRY_ERRORS = ('no timer-like region found', 'timer flips found', 'no usable timer flips')
+
+
 def analyze(path, debug=False, _return_strip=False, templates_path=None, use_ocr=True,
             deadline=None, max_frames=None):
     """Return a result dict; on failure it carries an ``error`` key instead of ``time_s``.
@@ -144,9 +149,20 @@ def analyze(path, debug=False, _return_strip=False, templates_path=None, use_ocr
         frames = probe_frame_count(path, deadline)
         if frames is not None and frames > max_frames:
             raise VideoTooLongError(frames, max_frames)
+    result = _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline)
+    if 'error' in result and any(k in result['error'] for k in _RETRY_ERRORS):
+        retry = _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline,
+                         dilate=True)
+        if 'error' not in retry:
+            retry['anchor'] = 'small digits (pooled timer search); ' + retry['anchor']
+            return retry
+    return result
+
+
+def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dilate=False):
     changed, ts, (w0, h0), strip, early_geo = _decode_with_timer(path, deadline)
     scene = changed.mean(axis=(1, 2)) > SCENE_FRACTION       # per transition
-    timer = find_timer_blocks(changed, ts, scene)
+    timer = find_timer_blocks(changed, ts, scene, dilate=dilate)
     if timer.sum() == 0:
         return {'file': path, 'error': 'no timer-like region found'}
 
