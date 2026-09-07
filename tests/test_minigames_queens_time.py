@@ -277,9 +277,10 @@ class TestFrameGuard:
 class TestFindTool:
     """ffmpeg is located even when the bot service's PATH lacks /usr/bin."""
 
-    def _fs(self, monkeypatch, present):
+    def _fs(self, monkeypatch, present, bundled=None):
         monkeypatch.setattr(queens_video_decode.os.path, 'isfile', lambda p: p in present)
         monkeypatch.setattr(queens_video_decode.os, 'access', lambda p, mode: p in present)
+        monkeypatch.setattr(queens_video_decode, '_bundled_tool', lambda n: bundled)
 
     def test_empty_path_falls_back_to_usr_bin(self, monkeypatch):
         monkeypatch.setenv('PATH', '/opt/tle/.venv/bin')
@@ -300,3 +301,36 @@ class TestFindTool:
         monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: '/usr/local/bin/' + n)
         self._fs(monkeypatch, {'/usr/local/bin/ffprobe'})
         assert queens_video_decode.find_tool('ffprobe') == '/usr/local/bin/ffprobe'
+
+    def test_bundled_static_ffmpeg_is_last_resort(self, monkeypatch):
+        monkeypatch.setenv('PATH', '/opt/tle/.venv/bin')
+        monkeypatch.delenv('FFMPEG_DIR', raising=False)
+        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: None)
+        bundled = '/venv/lib/site-packages/static_ffmpeg/bin/linux/ffmpeg'
+        self._fs(monkeypatch, {bundled}, bundled=bundled)
+        assert queens_video_decode.find_tool('ffmpeg') == bundled
+        # a system install still wins over the bundled build
+        self._fs(monkeypatch, {bundled, '/usr/bin/ffmpeg'}, bundled=bundled)
+        assert queens_video_decode.find_tool('ffmpeg') == '/usr/bin/ffmpeg'
+
+    def test_bundled_tool_uses_static_ffmpeg_package(self, monkeypatch):
+        import sys
+        import types
+        fake = types.ModuleType('static_ffmpeg.run')
+        fake.get_or_fetch_platform_executables_else_raise = lambda: ('/s/ffmpeg', '/s/ffprobe')
+        pkg = types.ModuleType('static_ffmpeg')
+        pkg.run = fake
+        monkeypatch.setitem(sys.modules, 'static_ffmpeg', pkg)
+        monkeypatch.setitem(sys.modules, 'static_ffmpeg.run', fake)
+        assert queens_video_decode._bundled_tool('ffprobe') == '/s/ffprobe'
+        assert queens_video_decode._bundled_tool('ffmpeg') == '/s/ffmpeg'
+
+        def boom():
+            raise RuntimeError('offline')
+        fake.get_or_fetch_platform_executables_else_raise = boom
+        assert queens_video_decode._bundled_tool('ffmpeg') is None
+
+    def test_bundled_tool_without_package(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, 'static_ffmpeg', None)
+        assert queens_video_decode._bundled_tool('ffmpeg') is None

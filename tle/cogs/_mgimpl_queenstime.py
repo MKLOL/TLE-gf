@@ -66,11 +66,13 @@ def _missing_ffmpeg_tool():
 
 def _ffmpeg_missing_error(tool):
     # The PATH goes to the log only; it is for the operator, not the channel.
-    logger.error('queens time: %s not found on PATH=%r nor in the usual directories; '
-                 'install ffmpeg or set FFMPEG_DIR', tool, os.environ.get('PATH'))
+    logger.error('queens time: %s not found on PATH=%r, in the usual directories, or via '
+                 'static-ffmpeg (see the warning above); install ffmpeg or set FFMPEG_DIR',
+                 tool, os.environ.get('PATH'))
     return MinigameCogError(
-        f'Video analysis is unavailable: `{tool}` was not found by the bot process. '
-        f'Install ffmpeg on the bot host, or point `FFMPEG_DIR` at its directory.')
+        f'Video analysis is unavailable: `{tool}` was not found by the bot process and the '
+        f'bundled build could not be fetched. See the bot log; install ffmpeg on the bot '
+        f'host or point `FFMPEG_DIR` at its directory.')
 
 
 def _safe_video_filename(attachment):
@@ -157,14 +159,17 @@ class ImplQueensTimeMixin:
             raise MinigameCogError(
                 f'That video is {size / (1024 * 1024):.0f} MiB; the limit is '
                 f'{_QUEENS_VIDEO_MAX_BYTES // (1024 * 1024)} MiB.')
-        missing = _missing_ffmpeg_tool()
-        if missing is not None:
-            raise _ffmpeg_missing_error(missing)
         gate = self._queens_video_gate()
         if gate.locked():
             await ctx.send(embed=discord_common.embed_neutral(
                 'Another recording is being analysed; yours is queued.'))
         async with gate:
+            # Resolving the tools may fetch the bundled ffmpeg on first use (tens of
+            # MB), so it runs off the loop like the analysis itself.
+            missing = await asyncio.get_running_loop().run_in_executor(
+                None, _missing_ffmpeg_tool)
+            if missing is not None:
+                raise _ffmpeg_missing_error(missing)
             result = await self._queens_time_analyze_attachment(ctx, attachment)
         if 'error' in result:
             extra = ''

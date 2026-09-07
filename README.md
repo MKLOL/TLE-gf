@@ -75,7 +75,7 @@ Additionally TLE uses pillow for graphics, which requires the following packages
 apt-get install libjpeg-dev zlib1g-dev
 ```
 
-`;queens time` reads a solve time off a screen recording and needs `ffmpeg` (which provides `ffprobe`); the command reports that it is unavailable if the binary is missing:
+`;queens time` reads a solve time off a screen recording with `ffmpeg`/`ffprobe`. A system install is used when present; otherwise the `static-ffmpeg` Python dependency downloads a static build into the bot's environment the first time the command runs, so nothing is strictly required. Installing it system-wide avoids that one-time download:
 
 ```bash
 apt-get install ffmpeg

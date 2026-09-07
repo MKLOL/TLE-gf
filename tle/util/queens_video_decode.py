@@ -9,6 +9,7 @@ so exact per-frame timestamps come from ``showinfo`` (integer pts times the
 stream time base) rather than an assumed fps.
 """
 import json
+import logging
 import os
 import queue
 import re
@@ -26,22 +27,44 @@ BLOCK = 4               # block size at analysis scale (16 px at full res)
 BLOCK_CHANGE = 10.0     # mean abs gray diff for a block to count as "changed"
 
 _PTS_RE = re.compile(rb'\bpts:\s*(-?\d+)')
+logger = logging.getLogger(__name__)
 # Where to look for ffmpeg/ffprobe when they are not on the process's PATH.  The
-# bot's service unit starts it with a PATH lacking /usr/bin, so a plain
-# ``Popen(['ffmpeg', ...])`` raised FileNotFoundError while the host had ffmpeg
-# all along.  ``FFMPEG_DIR`` overrides for unusual installs.
+# bot process could not see the host's /usr/bin/ffmpeg at all (its environment
+# is isolated from the operator's shell, as the Playwright scraper's in-bot
+# ``pip install`` showed), so after ``$FFMPEG_DIR``, PATH and the usual
+# directories the last resort is the ``static-ffmpeg`` package, which downloads
+# static ffmpeg+ffprobe builds into the bot's own site-packages on first use —
+# the same shape as ``playwright install chromium``.
 _TOOL_DIRS = ('/usr/bin', '/usr/local/bin', '/opt/homebrew/bin', '/snap/bin', '/bin')
+
+
+def _bundled_tool(name):
+    """ffmpeg/ffprobe from the ``static-ffmpeg`` package (fetched on first use), or None."""
+    try:
+        from static_ffmpeg import run as static_run
+    except ImportError:
+        return None
+    try:
+        ffmpeg, ffprobe = static_run.get_or_fetch_platform_executables_else_raise()
+    except Exception as exc:  # network down, unwritable site-packages, unsupported platform
+        logger.warning('static-ffmpeg could not provide %s: %s', name, exc)
+        return None
+    return ffmpeg if name == 'ffmpeg' else ffprobe
 
 
 def find_tool(name):
     """Absolute path of ``ffmpeg``/``ffprobe`` or None: ``$FFMPEG_DIR``, then PATH,
-    then the usual system directories."""
+    then the usual system directories, then the bundled ``static-ffmpeg`` build.
+    May block on a one-time download; call it off the event loop."""
     override = os.environ.get('FFMPEG_DIR')
     candidates = [os.path.join(override, name)] if override else []
     found = shutil.which(name)
     if found:
         candidates.append(found)
     candidates.extend(os.path.join(d, name) for d in _TOOL_DIRS)
+    bundled = _bundled_tool(name)
+    if bundled:
+        candidates.append(bundled)
     for path in candidates:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
