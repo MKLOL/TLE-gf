@@ -70,7 +70,8 @@ def _repaints_neighbourhood(changed, chain, y, x, limit=8):
     return False
 
 
-def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False):
+def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False, min_events=MIN_FLIPS,
+                      ranked=False, max_candidates=5):
     """Blocks with the longest chain of ~1 s spaced change events (the seconds digit).
     With min_chain set, return nothing unless the best chain has at least that many flips.
 
@@ -79,7 +80,11 @@ def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False):
     transitions (0->1, 1->2, ...) land in different blocks and no single block sees
     the whole chain, while the board's clicks do form chains and win.  Pooling the
     neighbourhood gives the units digit one series again; the returned mask is
-    eroded back to the original blocks that changed at the chain's ticks."""
+    eroded back to the original blocks that changed at the chain's ticks.
+    ``min_events`` (default ``MIN_FLIPS``) may be lowered to 2 for a two-tick solve;
+    the caller must then confirm the count independently (OCR).  ``ranked=True``
+    returns up to ``max_candidates`` distinct clusters best-first (a list of masks)
+    instead of a single mask, so the caller can try the next one when OCR rejects."""
     n1, hb, wb = changed.shape
     series = dilate_blocks(changed) if dilate else changed
     # In the pooled pass a short solve's timer (3 ticks) is no longer than the
@@ -97,15 +102,15 @@ def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False):
     quiet_limit = QUIET_FRACTION * hb * wb
     for y in range(hb):
         for x in range(wb):
-            if counts[y, x] < MIN_FLIPS:
+            if counts[y, x] < min_events:
                 continue
             idx = np.nonzero(series[:, y, x] & ~scene)[0]
             ev = merge_runs(idx)
-            if len(ev) < MIN_FLIPS:
+            if len(ev) < min_events:
                 continue
             t = ts[np.array(ev) + 1]
             st, ln = longest_chain(t, tol=tol)
-            if ln + 1 >= MIN_FLIPS and np.median(np.diff(t[st:st + ln + 1])) < 1.5:
+            if ln + 1 >= min_events and np.median(np.diff(t[st:st + ln + 1])) < 1.5:
                 chain = ev[st:st + ln + 1]
                 if dilate:
                     if _repaints_neighbourhood(changed, chain, y, x):
@@ -123,23 +128,28 @@ def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False):
                 chains[y, x] = chain
     best = length.max()
     if best == 0 or (min_chain is not None and best < min_chain):
-        return np.zeros((hb, wb), bool)
-    by, bx = np.unravel_index(np.argmax(score), score.shape)
-    if score[by, bx] <= 0:
-        return np.zeros((hb, wb), bool)
-    good = length >= max(MIN_FLIPS - 1, int(np.ceil(0.7 * length[by, bx])))
-    # keep only the connected cluster around the strongest block (the digit), drop stray board cells
-    ys, xs = np.nonzero(good)
-    near = (np.abs(ys - by) <= 3) & (np.abs(xs - bx) <= 3)
-    out = np.zeros((hb, wb), bool)
-    out[ys[near], xs[near]] = True
-    if dilate:
-        ticks = np.array(chains[by, bx])
-        hits = changed[ticks].any(axis=0) | changed[np.minimum(ticks + 1, n1 - 1)].any(axis=0)
-        eroded = out & hits
-        if eroded.any():
-            out = eroded
-    return out
+        return [] if ranked else np.zeros((hb, wb), bool)
+    if score.max() <= 0:
+        return [] if ranked else np.zeros((hb, wb), bool)
+    clusters = []
+    score = score.copy()
+    while len(clusters) < (max_candidates if ranked else 1) and score.max() > 0:
+        by, bx = np.unravel_index(np.argmax(score), score.shape)
+        good = length >= max(min_events - 1, int(np.ceil(0.7 * length[by, bx])))
+        # keep only the connected cluster around the strongest block (the digit), drop stray cells
+        ys, xs = np.nonzero(good)
+        near = (np.abs(ys - by) <= 3) & (np.abs(xs - bx) <= 3)
+        out = np.zeros((hb, wb), bool)
+        out[ys[near], xs[near]] = True
+        if dilate:
+            ticks = np.array(chains[by, bx])
+            hits = changed[ticks].any(axis=0) | changed[np.minimum(ticks + 1, n1 - 1)].any(axis=0)
+            eroded = out & hits
+            if eroded.any():
+                out = eroded
+        clusters.append(out)
+        score[max(0, by - 3):by + 4, max(0, bx - 3):bx + 4] = 0     # next distinct cluster
+    return clusters if ranked else clusters[0]
 
 
 def normalise_polarity(strip):

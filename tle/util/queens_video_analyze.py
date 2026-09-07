@@ -156,16 +156,43 @@ def analyze(path, debug=False, _return_strip=False, templates_path=None, use_ocr
         if 'error' not in retry:
             retry['anchor'] = 'small digits (pooled timer search); ' + retry['anchor']
             return retry
+        # A 2-second solve has exactly two ticks (0:00 appears inside the board's
+        # own scene transition), one short of a chain.  Accept a two-event chain
+        # only when the digit OCR independently reads the same count.
+        if use_ocr and any(k in retry['error'] for k in _RETRY_ERRORS):
+            two = _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline,
+                           dilate=True, min_events=2)
+            if 'error' not in two:
+                two['anchor'] = 'two-tick solve (OCR-confirmed); ' + two['anchor']
+                return two
     return result
 
 
-def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dilate=False):
-    changed, ts, (w0, h0), strip, early_geo = _decode_with_timer(path, deadline)
+def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dilate=False,
+             min_events=MIN_FLIPS):
+    decoded = _decode_with_timer(path, deadline)
+    changed, ts, _, _, _ = decoded
     scene = changed.mean(axis=(1, 2)) > SCENE_FRACTION       # per transition
-    timer = find_timer_blocks(changed, ts, scene, dilate=dilate)
-    if timer.sum() == 0:
-        return {'file': path, 'error': 'no timer-like region found'}
+    if min_events >= MIN_FLIPS:
+        candidates = [find_timer_blocks(changed, ts, scene, dilate=dilate)]
+    else:   # two-event chains rank poorly (the status bar clock ticks too): try several
+        candidates = find_timer_blocks(changed, ts, scene, dilate=dilate,
+                                       min_events=min_events, ranked=True)
+    result = {'file': path, 'error': 'no timer-like region found'}
+    for timer in candidates:
+        if timer.sum() == 0:
+            continue
+        result = _measure(path, decoded, scene, timer, debug, _return_strip, templates_path,
+                          use_ocr, deadline, min_events)
+        if 'error' not in result:
+            break
+    return result
 
+
+def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, use_ocr,
+             deadline, min_events):
+    """Everything after the timer blocks are known: flips, anchoring, finish, OCR."""
+    changed, ts, (w0, h0), strip, early_geo = decoded
     # full-resolution strip of the timer row; flips are detected on it (pixel-accurate).
     # `unit` = one analysis block in source pixels ~ one timer digit width; every pixel
     # distance below is expressed in it so the script is independent of screen resolution.
@@ -194,7 +221,7 @@ def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dila
         hi -= 1
     flip_t = flip_t[lo:hi]
     flip_idx = flip_idx[lo:hi]
-    if len(flip_t) < MIN_FLIPS:
+    if len(flip_t) < min_events:
         return {'file': path, 'error': f'only {len(flip_t)} timer flips found'}
     steps = np.concatenate([[0], np.round(np.diff(flip_t)).astype(int)])
     k = np.cumsum(steps)                       # 0,1,2,... seconds relative to first kept flip
@@ -268,6 +295,9 @@ def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dila
     ocr_last = read_timer(strip[last_i2], x_units, unit, templates) if templates else None
     counted = int(sec_at_flip[-1])
     method = 'last flip + delta'
+    if min_events < MIN_FLIPS and not (ocr is not None and ocr == ocr_last == counted):
+        return {'file': path, 'error': f'only {len(flip_t)} timer flips found and OCR '
+                                       f'({ocr}) does not confirm {counted}s'}
     if ocr is not None and ocr == ocr_last:
         if ocr != counted:
             anchor += f'; OCR reads {ocr}s (counted {counted}s) -> using OCR'
