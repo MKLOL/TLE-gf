@@ -269,6 +269,15 @@ class QueensCmdsMixin:
     async def queens_import_orphans(self, ctx):
         await self._cmd_import_orphans(ctx, QUEENS_GAME)
 
+    @queens.command(name='time', aliases=['video'],
+                    brief='Read the exact solve time from a screen recording',
+                    usage='(reply to a message with a video, or attach one)')
+    async def queens_time(self, ctx):
+        """Reply to a message carrying a screen recording of a Queens solve
+        (or attach one to the command) and the bot reads the solve time with
+        decimals off the on-screen timer."""
+        await self._cmd_queens_time(ctx, QUEENS_GAME)
+
     @queens.command(name='export', brief='(Mod) Download a snapshot of the result tables')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def queens_export(self, ctx):

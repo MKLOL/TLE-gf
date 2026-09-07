@@ -103,6 +103,7 @@ from tle.cogs._mgimpl_queenscmdb import ImplQueensCmdBMixin
 from tle.cogs._mgimpl_queensbackfill import ImplQueensBackfillMixin
 from tle.cogs._mgimpl_queenstext import ImplQueensTextMixin
 from tle.cogs._mgimpl_queenstextb import ImplQueensTextBMixin
+from tle.cogs._mgimpl_queenstime import ImplQueensTimeMixin
 from tle.cogs._mgimpl_ingest import ImplIngestMixin
 from tle.cogs._mgimpl_import import ImplImportMixin
 from tle.cogs._mgimpl_sharedcmd import ImplSharedCmdMixin
@@ -160,6 +161,7 @@ class Minigames(
     ImplQueensBackfillMixin,
     ImplQueensTextMixin,
     ImplQueensTextBMixin,
+    ImplQueensTimeMixin,
     ImplIngestMixin,
     ImplImportMixin,
     ImplSharedCmdMixin,
