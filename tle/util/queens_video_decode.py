@@ -9,11 +9,9 @@ so exact per-frame timestamps come from ``showinfo`` (integer pts times the
 stream time base) rather than an assumed fps.
 """
 import json
-import logging
 import os
 import queue
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -27,52 +25,6 @@ BLOCK = 4               # block size at analysis scale (16 px at full res)
 BLOCK_CHANGE = 10.0     # mean abs gray diff for a block to count as "changed"
 
 _PTS_RE = re.compile(rb'\bpts:\s*(-?\d+)')
-logger = logging.getLogger(__name__)
-# A service's PATH can omit system directories. Containers also have their own
-# filesystem: a host install is not necessarily visible to the bot. Only fetch
-# the static build after checking every local candidate.
-_TOOL_DIRS = ('/usr/bin', '/usr/local/bin', '/opt/homebrew/bin', '/snap/bin', '/bin')
-
-
-def _bundled_tool(name):
-    """ffmpeg/ffprobe from the ``static-ffmpeg`` package (fetched on first use), or None."""
-    try:
-        from static_ffmpeg import run as static_run
-    except ImportError as exc:
-        logger.warning('static-ffmpeg is unavailable for %s: %s', name, exc)
-        return None
-    try:
-        ffmpeg, ffprobe = static_run.get_or_fetch_platform_executables_else_raise()
-    except Exception as exc:  # network down, unwritable site-packages, unsupported platform
-        logger.warning('static-ffmpeg could not provide %s: %s', name, exc)
-        return None
-    return ffmpeg if name == 'ffmpeg' else ffprobe
-
-
-def find_tool(name):
-    """Absolute path of ``ffmpeg``/``ffprobe`` or None: ``$FFMPEG_DIR``, then PATH,
-    then the usual system directories, then the bundled ``static-ffmpeg`` build.
-    May block on a one-time download; call it off the event loop."""
-    override = os.environ.get('FFMPEG_DIR')
-    candidates = [os.path.join(override, name)] if override else []
-    found = shutil.which(name)
-    if found:
-        candidates.append(found)
-    candidates.extend(os.path.join(d, name) for d in _TOOL_DIRS)
-    for path in candidates:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
-    bundled = _bundled_tool(name)
-    if bundled and os.path.isfile(bundled) and os.access(bundled, os.X_OK):
-        return bundled
-    return None
-
-
-def _tool(name):
-    path = find_tool(name)
-    if path is None:
-        raise FileNotFoundError(2, 'not found on PATH or in the usual directories', name)
-    return path
 
 
 class VideoDecodeError(RuntimeError):
@@ -93,7 +45,6 @@ def _remaining(deadline):
 
 
 def run(cmd, deadline=None):
-    cmd = [_tool(cmd[0]), *cmd[1:]]
     try:
         return subprocess.run(cmd, check=True, capture_output=True,
                               timeout=_remaining(deadline)).stdout
@@ -101,8 +52,7 @@ def run(cmd, deadline=None):
         raise VideoDecodeTimeout('analysis deadline passed') from exc
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or b'')[-400:].decode('utf-8', 'replace').strip()
-        raise VideoDecodeError(
-            f'{os.path.basename(cmd[0])} failed ({exc.returncode}): {tail}') from exc
+        raise VideoDecodeError(f'{cmd[0]} failed ({exc.returncode}): {tail}') from exc
 
 
 def probe_stream(path, deadline=None):
@@ -232,7 +182,6 @@ def decode(path, width=SCALE_W, chunk_frames=64, on_progress=None, strip_geo=Non
     cmd = _decode_command(path, width, h, strip_geo,
                           strip_file.name if strip_file else None)
     try:
-        cmd[0] = _tool(cmd[0])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError:
         if strip_file:

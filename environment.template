@@ -87,10 +87,3 @@ export LLM_CONTEXT_RECENT_MAX_AGE_SECONDS="21600"
 
 # Set to enable automatic venv usage.
 export VENV_DIR=""
-
-# ;queens time shells out to ffmpeg/ffprobe. They are looked up on PATH, then in
-# /usr/bin, /usr/local/bin, /opt/homebrew/bin, /snap/bin, and finally the
-# static-ffmpeg package downloads a static build into the bot's site-packages
-# on first use. Set this only to force a specific install (the directory
-# containing both binaries).
-# export FFMPEG_DIR=""

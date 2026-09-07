@@ -9,9 +9,7 @@ result as an embed.
 import asyncio
 import logging
 import os
-import platform
 import shutil
-import sys
 import tempfile
 import time
 
@@ -55,30 +53,6 @@ def pick_video_attachment(message):
         if _is_video_attachment(attachment):
             return attachment
     return None
-
-
-def _missing_ffmpeg_tool():
-    """Name of the first of ffmpeg/ffprobe the decoder cannot locate, or None."""
-    from tle.util.queens_video_decode import find_tool
-    for tool in ('ffmpeg', 'ffprobe'):
-        if find_tool(tool) is None:
-            return tool
-    return None
-
-
-def _ffmpeg_missing_error(tool):
-    # Runtime details belong in the operator log, not the channel. Identify the
-    # actual bot environment so a working install on another host is not misleading.
-    logger.error('queens time: %s not found; host=%r python=%r cwd=%r '
-                 'FFMPEG_DIR=%r PATH=%r; checked system directories and static-ffmpeg '
-                 '(see warning above). Install ffmpeg in this runtime.',
-                 tool, platform.node(), sys.executable, os.getcwd(),
-                 os.environ.get('FFMPEG_DIR'), os.environ.get('PATH'))
-    return MinigameCogError(
-        f'Video analysis is unavailable: `{tool}` was not found by the bot process and the '
-        f'bundled fallback is unavailable. Install ffmpeg in the environment running '
-        f'the bot (inside its container if applicable), or set `FFMPEG_DIR` to a '
-        f'directory visible there. The bot log identifies that environment.')
 
 
 def _safe_video_filename(attachment):
@@ -170,12 +144,6 @@ class ImplQueensTimeMixin:
             await ctx.send(embed=discord_common.embed_neutral(
                 'Another recording is being analysed; yours is queued.'))
         async with gate:
-            # Resolving the tools may fetch the bundled ffmpeg on first use (tens of
-            # MB), so it runs off the loop like the analysis itself.
-            missing = await asyncio.get_running_loop().run_in_executor(
-                None, _missing_ffmpeg_tool)
-            if missing is not None:
-                raise _ffmpeg_missing_error(missing)
             result = await self._queens_time_analyze_attachment(ctx, attachment)
         if 'error' in result:
             extra = ''
@@ -223,7 +191,9 @@ class ImplQueensTimeMixin:
                 f'{exc.max_frames:,} (roughly {exc.max_frames // 1800} minutes at 30 fps). '
                 f'Trim it to the solve, or record at a lower frame rate.')
         except FileNotFoundError as exc:
-            raise _ffmpeg_missing_error(exc.filename or 'ffmpeg')
+            logger.error('queens time: ffmpeg/ffprobe missing: %s', exc)
+            raise MinigameCogError(
+                'Video analysis is unavailable: ffmpeg is not installed on the bot host.')
         except VideoDecodeError as exc:
             raise MinigameCogError(f'Could not decode that video: {exc}.')
         except Exception:

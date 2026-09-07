@@ -8,7 +8,6 @@ from tle.cogs import _mgimpl_queenstime as queenstime_module
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs.minigames import Minigames, MinigameCogError
 from tle.util import queens_video_analyze
-from tle.util import queens_video_decode
 from tle.util.queens_video_decode import (
     VideoDecodeError, VideoDecodeTimeout, VideoTooLongError,
 )
@@ -100,10 +99,6 @@ class TestPickVideoAttachment:
 
 
 class TestQueensTimeCommand:
-    @pytest.fixture(autouse=True)
-    def _ffmpeg_present(self, monkeypatch):
-        monkeypatch.setattr(queens_video_decode, 'find_tool', lambda tool: '/usr/bin/' + tool)
-
     def _patch_analyze(self, monkeypatch, result=None, exc=None, seen=None):
         def fake_analyze(path, deadline=None, max_frames=None, **kwargs):
             if seen is not None:
@@ -116,16 +111,6 @@ class TestQueensTimeCommand:
                 raise exc
             return dict(result or _OK_RESULT)
         monkeypatch.setattr(queens_video_analyze, 'analyze', fake_analyze)
-
-    def test_missing_ffmpeg_detected_before_download(self, monkeypatch):
-        seen = {}
-        self._patch_analyze(monkeypatch, seen=seen)
-        monkeypatch.setattr(queens_video_decode, 'find_tool',
-                            lambda tool: None if tool == 'ffprobe' else '/usr/bin/' + tool)
-        ctx = _make_ctx(reply_to=_source_message([_VideoAttachment()]))
-        with pytest.raises(MinigameCogError, match='`ffprobe` was not found'):
-            _run(Minigames(bot=None), ctx)
-        assert seen == {}
 
     def test_reply_with_video_reports_time(self, monkeypatch):
         seen = {}
@@ -187,7 +172,7 @@ class TestQueensTimeCommand:
         assert 'last seen at 31s' in str(info.value)
 
     @pytest.mark.parametrize('exc, needle', [
-        (FileNotFoundError(2, 'No such file', 'ffprobe'), '`ffprobe` was not found'),
+        (FileNotFoundError('ffmpeg'), 'ffmpeg is not installed'),
         (VideoDecodeError('ffmpeg failed (1)'), 'Could not decode'),
         (VideoDecodeTimeout('deadline'), 'Gave up'),
         (VideoTooLongError(19_000, 10_000), r'19,000 frames; the limit is 10,000'),
@@ -272,96 +257,3 @@ class TestFrameGuard:
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError('decoded')))
         with pytest.raises(RuntimeError, match='decoded'):
             queens_video_analyze.analyze('x.mp4')
-
-
-class TestFindTool:
-    """ffmpeg is located even when the bot service's PATH lacks /usr/bin."""
-
-    @pytest.mark.parametrize('source', ['override', 'path', 'system'])
-    @pytest.mark.parametrize('tool', ['ffmpeg', 'ffprobe'])
-    def test_local_install_never_fetches_bundle(self, monkeypatch, source, tool):
-        paths = {'override': '/opt/video', 'path': '/custom/bin', 'system': '/usr/bin'}
-        path = paths[source] + '/' + tool
-        monkeypatch.delenv('FFMPEG_DIR', raising=False)
-        if source == 'override':
-            monkeypatch.setenv('FFMPEG_DIR', paths[source])
-        monkeypatch.setattr(queens_video_decode.shutil, 'which',
-                            lambda n: path if source == 'path' else None)
-        self._fs(monkeypatch, {path})
-
-        def unexpected_fetch(name):
-            pytest.fail('local ffmpeg must work without a bundled download')
-
-        monkeypatch.setattr(queens_video_decode, '_bundled_tool', unexpected_fetch)
-        assert queens_video_decode.find_tool(tool) == path
-
-    def _fs(self, monkeypatch, present, bundled=None):
-        monkeypatch.setattr(queens_video_decode.os.path, 'isfile', lambda p: p in present)
-        monkeypatch.setattr(queens_video_decode.os, 'access', lambda p, mode: p in present)
-        monkeypatch.setattr(queens_video_decode, '_bundled_tool', lambda n: bundled)
-
-    def test_empty_path_falls_back_to_usr_bin(self, monkeypatch):
-        monkeypatch.setenv('PATH', '/opt/tle/.venv/bin')
-        monkeypatch.delenv('FFMPEG_DIR', raising=False)
-        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: None)
-        self._fs(monkeypatch, {'/usr/bin/ffmpeg'})
-        assert queens_video_decode.find_tool('ffmpeg') == '/usr/bin/ffmpeg'
-        assert queens_video_decode.find_tool('ffprobe') is None
-
-    def test_ffmpeg_dir_override_wins(self, monkeypatch):
-        monkeypatch.setenv('FFMPEG_DIR', '/opt/ffmpeg')
-        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: '/usr/bin/' + n)
-        self._fs(monkeypatch, {'/opt/ffmpeg/ffmpeg', '/usr/bin/ffmpeg'})
-        assert queens_video_decode.find_tool('ffmpeg') == '/opt/ffmpeg/ffmpeg'
-
-    def test_path_hit_is_used(self, monkeypatch):
-        monkeypatch.delenv('FFMPEG_DIR', raising=False)
-        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: '/usr/local/bin/' + n)
-        self._fs(monkeypatch, {'/usr/local/bin/ffprobe'})
-        assert queens_video_decode.find_tool('ffprobe') == '/usr/local/bin/ffprobe'
-
-    def test_bundled_static_ffmpeg_is_last_resort(self, monkeypatch):
-        monkeypatch.setenv('PATH', '/opt/tle/.venv/bin')
-        monkeypatch.delenv('FFMPEG_DIR', raising=False)
-        monkeypatch.setattr(queens_video_decode.shutil, 'which', lambda n: None)
-        bundled = '/venv/lib/site-packages/static_ffmpeg/bin/linux/ffmpeg'
-        self._fs(monkeypatch, {bundled}, bundled=bundled)
-        assert queens_video_decode.find_tool('ffmpeg') == bundled
-        # a system install still wins over the bundled build
-        self._fs(monkeypatch, {bundled, '/usr/bin/ffmpeg'}, bundled=bundled)
-        assert queens_video_decode.find_tool('ffmpeg') == '/usr/bin/ffmpeg'
-
-    def test_bundled_tool_uses_static_ffmpeg_package(self, monkeypatch):
-        import sys
-        import types
-        fake = types.ModuleType('static_ffmpeg.run')
-        fake.get_or_fetch_platform_executables_else_raise = lambda: ('/s/ffmpeg', '/s/ffprobe')
-        pkg = types.ModuleType('static_ffmpeg')
-        pkg.run = fake
-        monkeypatch.setitem(sys.modules, 'static_ffmpeg', pkg)
-        monkeypatch.setitem(sys.modules, 'static_ffmpeg.run', fake)
-        assert queens_video_decode._bundled_tool('ffprobe') == '/s/ffprobe'
-        assert queens_video_decode._bundled_tool('ffmpeg') == '/s/ffmpeg'
-
-        def boom():
-            raise RuntimeError('offline')
-        fake.get_or_fetch_platform_executables_else_raise = boom
-        assert queens_video_decode._bundled_tool('ffmpeg') is None
-
-    def test_bundled_tool_without_package(self, monkeypatch, caplog):
-        import sys
-        monkeypatch.setitem(sys.modules, 'static_ffmpeg', None)
-        assert queens_video_decode._bundled_tool('ffmpeg') is None
-        assert 'static-ffmpeg is unavailable' in caplog.text
-
-
-def test_missing_tool_logs_runtime_details_without_posting_them(monkeypatch, caplog):
-    monkeypatch.setattr(queenstime_module.platform, 'node', lambda: 'bot-container')
-    monkeypatch.setattr(queenstime_module.sys, 'executable', '/venv/bin/python')
-    monkeypatch.setenv('FFMPEG_DIR', '/opt/video')
-    error = queenstime_module._ffmpeg_missing_error('ffprobe')
-    assert 'ffprobe' in str(error)
-    assert 'inside its container' in str(error)
-    for detail in ('bot-container', '/venv/bin/python', '/opt/video'):
-        assert detail in caplog.text
-        assert detail not in str(error)
