@@ -4,6 +4,8 @@ Populates author_id, star_count, channel_id, and reactors for existing
 starboard entries by fetching them from Discord.  Uses author_id IS NULL
 as a checkpoint — already-processed messages are skipped on restart.
 Unfetchable messages get an __UNKNOWN__ sentinel to prevent infinite retries.
+Startup reads only pending metadata through a partial index; completed history
+is neither fetched into Python nor scanned by the pending-work query.
 """
 import asyncio
 import logging
@@ -46,16 +48,13 @@ class BackfillMixin:
             # Phase 1: collect all work, skipping already-backfilled entries
             guild_work = {}
             for guild in guilds:
-                all_messages = cf_common.user_db.get_all_starboard_messages_for_guild(str(guild.id))
-                # Skip entries that are fully backfilled (have both author_id and channel_id)
-                pending = [m for m in all_messages
-                           if m.author_id is None or
-                           (m.channel_id is None and m.author_id != _BACKFILL_UNKNOWN)]
+                pending = cf_common.user_db.get_pending_starboard_messages_for_guild(
+                    guild.id)
                 if pending:
                     guild_work[guild] = pending
                 self.backfill_total += len(pending)
                 logger.info(f'Backfill: guild={guild.name} ({guild.id}) has {len(pending)} '
-                            f'pending messages (of {len(all_messages)} total)')
+                            f'pending messages')
 
             if self.backfill_total == 0:
                 logger.info('Backfill: no starboard messages to backfill')

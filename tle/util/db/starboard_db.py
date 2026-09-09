@@ -18,10 +18,14 @@ from tle.util.db._starboard_db_config import GuildConfigDbMixin
 from tle.util.db._starboard_db_narcissus import StarboardNarcissusDbMixin
 from tle.util.db._starboard_db_proxy import StarboardProxyDbMixin
 from tle.util.db._starboard_db_queries import StarboardQueriesDbMixin
+from tle.util.db._starboard_db_backfill import (
+    StarboardBackfillDbMixin, create_pending_backfill_index,
+)
 
 
 class StarboardDbMixin(StarboardQueriesDbMixin, StarboardProxyDbMixin,
-                       StarboardNarcissusDbMixin, GuildConfigDbMixin):
+                       StarboardNarcissusDbMixin, GuildConfigDbMixin,
+                       StarboardBackfillDbMixin):
     """Mixin providing all starboard DB methods. Expects self.conn to be a sqlite3 connection.
 
     Leaderboard, alias and per-user-default methods are inherited from
@@ -119,6 +123,7 @@ class StarboardDbMixin(StarboardQueriesDbMixin, StarboardProxyDbMixin,
             )
         ''')
         self._create_narcissus_tables()
+        create_pending_backfill_index(self.conn)
 
     # --- Old starboard methods (kept for migration compatibility) ---
 

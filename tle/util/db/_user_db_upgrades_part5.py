@@ -5,6 +5,7 @@ import logging
 from tle.util.db._user_db_upgrade_registry import registry
 from tle.util.db.counting_db import create_counting_schema
 from tle.util.db.greatday_db import create_greatday_signup_event_table
+from tle.util.db._starboard_db_backfill import create_pending_backfill_index
 
 
 logger = logging.getLogger(__name__)
@@ -60,3 +61,11 @@ def upgrade_1_57_0(db):
             "WHERE game = 'queens'")
     db.commit()
     logger.info('1.57.0: Upgrade complete')
+
+
+@registry.register('1.58.0', 'Index pending starboard backfill work')
+def upgrade_1_58_0(db):
+    """Keep restart queries independent of completed starboard history."""
+    create_pending_backfill_index(db)
+    db.commit()
+    logger.info('1.58.0: Pending starboard backfill index created')
