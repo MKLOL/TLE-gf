@@ -30,6 +30,8 @@ def format_counting_stats(stats, *, max_description_chars=512,
             f'{_BASE_LABELS.get(item.radix, f"base {item.radix}")} '
             f'{item.count:,}' for item in stats.base_usage), True),
         ('⏱️ Pace', _format_pace(stats.gaps), False),
+        ('🔥 Current same-user streak', _format_streak(
+            stats.current_same_user_streak), False),
         ('🔥 Longest same-user streak', _format_streak(
             stats.longest_same_user_streak), False),
     )
@@ -57,6 +59,8 @@ def render_counting_stats(stats, *, max_chars=1800):
             f'{_BASE_LABELS.get(item.radix, f"base {item.radix}")} '
             f'{item.count:,}' for item in stats.base_usage),
         '**Pace:** ' + _format_pace(stats.gaps),
+        '**Current same-user streak:** ' + _format_streak(
+            stats.current_same_user_streak),
         '**Same-user streak:** ' + _format_streak(
             stats.longest_same_user_streak),
     ]

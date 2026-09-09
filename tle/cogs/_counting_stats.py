@@ -58,7 +58,7 @@ class GapSummary:
 
 @dataclass(frozen=True)
 class SameUserStreak:
-    """Longest run of consecutive successful numbers from one author."""
+    """A run of consecutive successful numbers from one author."""
 
     user_id: str
     author_name: str
@@ -81,6 +81,7 @@ class CountingStats:
     base_usage: Tuple[BaseTotal, ...]
     gaps: GapSummary
     longest_same_user_streak: Optional[SameUserStreak]
+    current_same_user_streak: Optional[SameUserStreak] = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,7 @@ def summarize_counting_attempts(attempts, current_count=None, *,
     base_counts = Counter(
         row.radix for row in successes if row.radix in _BASE_LABELS)
     ordered = sorted(successes, key=_success_order_key)
+    longest_streak, current_streak = _same_user_streaks(ordered, names)
 
     total_attempts = len(rows)
     total_successes = len(successes)
@@ -148,7 +150,8 @@ def summarize_counting_attempts(attempts, current_count=None, *,
         base_usage=tuple(
             BaseTotal(radix, base_counts[radix]) for radix in _BASE_ORDER),
         gaps=_summarize_gaps(ordered),
-        longest_same_user_streak=_longest_same_user_streak(ordered, names),
+        longest_same_user_streak=longest_streak,
+        current_same_user_streak=current_streak,
     )
 
 
@@ -292,7 +295,8 @@ def _summarize_gaps(successes):
         sum(gap.seconds for gap in gaps) / len(gaps))
 
 
-def _longest_same_user_streak(successes, names):
+def _same_user_streaks(successes, names):
+    """Return the longest and current runs, ignoring unsuccessful attempts."""
     best = None
     current = []
     for row in successes:
@@ -311,7 +315,7 @@ def _longest_same_user_streak(successes, names):
     candidate = _make_streak(current, names)
     if candidate is not None and (best is None or candidate.length > best.length):
         best = candidate
-    return best
+    return best, candidate
 
 
 def _make_streak(rows, names):

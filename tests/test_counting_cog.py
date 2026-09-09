@@ -355,4 +355,6 @@ class TestCountingStatsCommand:
         assert 'fastest 10s (#1→#2)' in pace
         assert 'average 15s' in pace
         assert 'longest 20s (#2→#3)' in pace
+        assert fields['🔥 Current same-user streak'] == 'Bob — 1 (#3–#3)'
+        assert fields['🔥 Longest same-user streak'] == 'Alice — 2 (#1–#2)'
         assert embed.footer == {'text': 'Next number: 4', 'icon_url': None}
