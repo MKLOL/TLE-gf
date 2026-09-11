@@ -73,6 +73,27 @@ def _is_forward_reference(reference):
         _FORWARD_REFERENCE_VALUE
 
 
+def _attachment_is_spoiler(attachment):
+    """Return whether an attachment must be uploaded as a spoiler.
+
+    Discord encodes spoiler attachments with a ``SPOILER_`` filename prefix.
+    ``Attachment.is_spoiler`` is the normal API, but snapshots and lightweight
+    attachment implementations do not always expose that method.  Checking
+    the wire-format marker as a fallback prevents those messages from being
+    re-uploaded as visible media.
+    """
+    filename = getattr(attachment, 'filename', '') or ''
+    if filename.startswith('SPOILER_'):
+        return True
+    checker = getattr(attachment, 'is_spoiler', None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
 def _starboard_content(emoji_str, count, jump_url):
     """Build the header line for a starboard message.
 
@@ -200,7 +221,7 @@ async def build_starboard_message(message, emoji_str, count, color):
     for att in rendered.attachments:
         ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
         if ext in _IMAGE_EXTENSIONS:
-            if att.is_spoiler():
+            if _attachment_is_spoiler(att):
                 spoiler_image_attachments.append(att)
             else:
                 image_urls.append(att.url)
@@ -211,7 +232,6 @@ async def build_starboard_message(message, emoji_str, count, color):
         else:
             other_attachments.append(att)
     image_url = image_urls[0] if image_urls else None
-
     has_video = bool(video_attachments)
     has_audio = bool(audio_attachments)
     has_spoiler_image = bool(spoiler_image_attachments)
@@ -226,14 +246,14 @@ async def build_starboard_message(message, emoji_str, count, color):
             f'{emoji_str} **{count}** \u00b7 **{safe_name}** '
             f'| {message.jump_url}'
         )
-        # `spoiler=att.is_spoiler()` is required, not optional: discord.py
+        # An explicit spoiler flag is required, not optional: discord.py
         # 2.4's Attachment.to_file() defaults spoiler=False and passes it
         # explicitly to File(), which suppresses File's SPOILER_-filename
         # auto-detection. A bare to_file() therefore silently strips the
         # spoiler and the media gets posted un-spoilered.
         for att in video_attachments + audio_attachments + spoiler_image_attachments:
             try:
-                files.append(await att.to_file(spoiler=att.is_spoiler()))
+                files.append(await att.to_file(spoiler=_attachment_is_spoiler(att)))
             except Exception:
                 logger.debug(f'Failed to download attachment {att.filename}')
 
@@ -265,7 +285,7 @@ async def build_starboard_message(message, emoji_str, count, color):
             for att in ref_msg.attachments:
                 ext = att.filename.lower().rsplit('.', 1)[-1] if '.' in att.filename else ''
                 if ext in _IMAGE_EXTENSIONS:
-                    if att.is_spoiler():
+                    if _attachment_is_spoiler(att):
                         ref_other_attachments.append(att)
                     elif ref_image_url is None:
                         ref_image_url = att.url
