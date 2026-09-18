@@ -43,7 +43,7 @@ _AKARI_IMAGE_COLUMN_MARGIN = 10
 # and Time columns; Queens omits Result because the day leaderboard is ranked
 # by time only.  Widths sum to ``_AKARI_IMAGE_WIDTH − 2 × MARGIN`` (860).
 _AKARI_RATING_COLS = (54, 300, 260, 150, 96)
-_AKARI_WEEKLY_COLS = (54, 360, 340, 106)
+_AKARI_WEEKLY_COLS = (54, 300, 300, 110, 96)
 _AKARI_PUZZLE_COLS = (54, 300, 260, 150, 96)
 _AKARI_PUZZLE_DELTA_COLS = (54, 280, 190, 90, 80, 100, 66)
 _QUEENS_RESULTS_COLS = (54, 360, 340, 106)
@@ -366,7 +366,7 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
 
 def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
                              name_fn=None):
-    """Compact current-week rows: rank, player, handle, rounded score."""
+    """Weekly rows: rank, player, handle, rounded score, submitted days."""
     if identity_fn is None:
         identity_fn = lambda g, row: _safe_cf_handle(g, row.user_id)
     if name_fn is None:
@@ -384,6 +384,7 @@ def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
             name_fn(guild, standing),
             identity_fn(guild, standing),
             rounded_score,
+            standing.days_played,
         ))
     return rows
 
@@ -391,19 +392,21 @@ def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
 def _get_akari_weekly_table_image_file(
         guild, standings, *, title, identity_label='Handle',
         identity_fn=None, name_fn=None,
-        filename='akari-weekly-scores.png'):
-    displayed = standings[:_AKARI_IMAGE_MAX_ROWS]
+        filename='akari-weekly-scores.png', start_index=0):
+    # Rank before slicing so ties and positions survive page boundaries.
     table_rows = _akari_weekly_table_rows(
-        guild, displayed, identity_fn=identity_fn, name_fn=name_fn)
+        guild, standings, identity_fn=identity_fn, name_fn=name_fn)
+    table_rows = table_rows[start_index:start_index + _AKARI_IMAGE_MAX_ROWS]
     footer = None
-    if len(standings) > len(displayed):
-        footer = f'Showing top {len(displayed)} of {len(standings)} players'
+    if len(standings) > len(table_rows):
+        footer = (f'Players {start_index + 1}–{start_index + len(table_rows)} '
+                  f'of {len(standings)}')
     return _mg()._get_akari_puzzle_table_image(
         table_rows,
         title=title,
         footer=footer,
-        header=('#', 'Player', identity_label, 'Score'),
+        header=('#', 'Player', identity_label, 'Score', 'Days'),
         cols=_AKARI_WEEKLY_COLS,
-        right_align_cols=(0, 3),
+        right_align_cols=(0, 3, 4),
         filename=filename,
     )

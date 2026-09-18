@@ -13,6 +13,7 @@ from tle.util import discord_common, tasks
 from tle.util.akari_weekly import week_start
 from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_helpers import ChannelOrThread, MinigameCogError, _mg
+from tle.cogs._minigame_tables import _AKARI_IMAGE_MAX_ROWS
 
 
 logger = logging.getLogger(__name__)
@@ -222,16 +223,22 @@ class ImplAkariWeeklyMixin:
 
         completed_end = completed_start + dt.timedelta(days=6)
         files = [_mg()._get_akari_weekly_table_image_file(
-            guild, standings[:3],
-            title=(f'Daily Akari Weekly Top 3 · {completed_start:%b %d}–'
-                   f'{completed_end:%b %d}'))]
+            guild, standings, start_index=start_index,
+            filename=(f'akari-weekly-final-'
+                      f'{start_index // _AKARI_IMAGE_MAX_ROWS + 1}.png'),
+            title=(f'Daily Akari Weekly Final Rankings · {completed_start:%b %d}–'
+                   f'{completed_end:%b %d}'))
+            for start_index in range(0, len(standings), _AKARI_IMAGE_MAX_ROWS)]
         if ratings:
             files.append(_mg()._get_akari_rating_table_image_file(
                 guild, ratings, registrants,
                 title='Daily Akari Weekly Ratings', mark_registered=False,
                 games_label='Weeks'))
-        await channel.send(
-            f'🏆 **Daily Akari week complete · '
-            f'{completed_start:%b %d}–{completed_end:%b %d}**\n'
-            'Final top 3 and updated weekly ratings:', files=files)
+        for offset in range(0, len(files), 10):
+            content = (
+                f'🏆 **Daily Akari week complete · '
+                f'{completed_start:%b %d}–{completed_end:%b %d}**\n'
+                'Final rankings and updated weekly ratings:'
+                if offset == 0 else 'Daily Akari weekly results (continued):')
+            await channel.send(content, files=files[offset:offset + 10])
         return True
