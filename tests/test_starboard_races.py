@@ -21,6 +21,10 @@ def db():
 # =====================================================================
 
 class TestNarcissusLeaderboard:
+    """Narcissus is sticky-mark based: a live self-react on a tracked message
+    records a permanent mark via the count-update hook (as the live reaction
+    path does), so these tests trigger the hook after adding reactors."""
+
     def _setup_starboard(self, db):
         db.add_starboard_emoji(GUILD_A, STAR, 3, 0xffaa10)
 
@@ -28,15 +32,18 @@ class TestNarcissusLeaderboard:
         self._setup_starboard(db)
         db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
         db.add_reactor('100', STAR, 'user1')  # self-star
+        db.update_starboard_star_count('100', STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert len(rows) == 1
         assert rows[0].user_id == 'user1'
         assert rows[0].self_stars == 1
+        assert rows[0].unreacted == 0
 
     def test_non_self_star_not_counted(self, db):
         self._setup_starboard(db)
         db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='user1')
         db.add_reactor('100', STAR, 'user2')  # not self-star
+        db.update_starboard_star_count('100', STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert len(rows) == 0
 
@@ -46,6 +53,8 @@ class TestNarcissusLeaderboard:
         db.add_starboard_message_v1('101', '201', GUILD_A, STAR, author_id='user1')
         db.add_reactor('100', STAR, 'user1')
         db.add_reactor('101', STAR, 'user1')
+        db.update_starboard_star_count('100', STAR, 1)
+        db.update_starboard_star_count('101', STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert len(rows) == 1
         assert rows[0].self_stars == 2
@@ -58,6 +67,8 @@ class TestNarcissusLeaderboard:
         db.add_reactor('100', STAR, 'user1')
         db.add_reactor('101', STAR, 'user2')
         db.add_reactor('102', STAR, 'user2')
+        for msg in ('100', '101', '102'):
+            db.update_starboard_star_count(msg, STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert rows[0].user_id == 'user2'
         assert rows[0].self_stars == 2
@@ -68,6 +79,7 @@ class TestNarcissusLeaderboard:
         self._setup_starboard(db)
         db.add_starboard_message_v1('100', '200', GUILD_A, STAR, author_id='__UNKNOWN__')
         db.add_reactor('100', STAR, '__UNKNOWN__')
+        db.update_starboard_star_count('100', STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert len(rows) == 0
 
@@ -83,6 +95,8 @@ class TestNarcissusLeaderboard:
         db.add_starboard_message_v1('101', '201', GUILD_B, STAR, author_id='user1')
         db.add_reactor('100', STAR, 'user1')
         db.add_reactor('101', STAR, 'user1')
+        db.update_starboard_star_count('100', STAR, 1)
+        db.update_starboard_star_count('101', STAR, 1)
         rows = db.get_narcissus_leaderboard(GUILD_A, STAR)
         assert len(rows) == 1
         assert rows[0].self_stars == 1

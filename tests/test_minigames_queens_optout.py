@@ -52,10 +52,10 @@ class TestQueensOptOut(_QueensCommandsBase):
             100, 'queens', _NORM_BOB, 'Bob LinkedIn', 200, num,
             '2026-06-08', 100, 6, 1, 'raw')
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn', _NORM_ALICE, None, 1.0, 300)
+            100, 'linkedin', 300, 'Alice LinkedIn', _NORM_ALICE, None, 1.0, 300)
         db.set_minigame_player_link(
-            100, 'queens', 301, 'Bob LinkedIn', _NORM_BOB, None, 1.0, 301)
-        cog._sync_queens_materialized_results(100)
+            100, 'linkedin', 301, 'Bob LinkedIn', _NORM_BOB, None, 1.0, 301)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
     @staticmethod
@@ -76,7 +76,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         asyncio.run(Minigames.queens_unregister.__wrapped__(cog, ctx, None))
 
         # Link and projections are gone, but unlinking is not a sticky opt-out.
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is None
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is False
         assert self._rated_ids(db) == {'301'}
         # The stored source data remains keyed by the LinkedIn name.
@@ -84,9 +84,9 @@ class TestQueensOptOut(_QueensCommandsBase):
             100, 'queens', _NORM_ALICE)
 
         asyncio.run(cog._cmd_queens_register(
-            ctx, alice, 'Alice LinkedIn'))
+            ctx, QUEENS_GAME, alice, 'Alice LinkedIn'))
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is False
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is not None
         assert self._rated_ids(db) == {'300', '301'}
 
     def test_optout_keeps_already_rated_history(self, db, monkeypatch):
@@ -115,17 +115,17 @@ class TestQueensOptOut(_QueensCommandsBase):
         self._seed_two_players(db, cog)
 
         ctx_alice = self._make_ctx(guild, alice)
-        asyncio.run(cog._cmd_queens_optout(ctx_alice))
+        asyncio.run(cog._cmd_queens_optout(ctx_alice, QUEENS_GAME))
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id) is not None
+            100, 'linkedin', alice.id) is not None
         assert self._rated_ids(db) == {'300', '301'}
 
         ctx_mod = self._make_ctx(guild, mod)
         asyncio.run(cog._cmd_queens_set(
-            ctx_mod, alice, 'Alice LinkedIn'))
+            ctx_mod, QUEENS_GAME, alice, 'Alice LinkedIn'))
 
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id).external_name == 'Alice LinkedIn'
+            100, 'linkedin', alice.id).external_name == 'Alice LinkedIn'
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is True
         assert self._rated_ids(db) == {'300', '301'}
         rows = db.get_minigame_results_for_guild(100, 'queens')
@@ -144,7 +144,7 @@ class TestQueensOptOut(_QueensCommandsBase):
 
         ctx_bob = self._make_ctx(guild, bob)
         with pytest.raises(MinigameCogError, match='Only'):
-            asyncio.run(cog._cmd_queens_optout(ctx_bob, alice))
+            asyncio.run(cog._cmd_queens_optout(ctx_bob, QUEENS_GAME, alice))
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is False
 
@@ -168,7 +168,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         asyncio.run(Minigames.queens_optout.__wrapped__(cog, ctx))
 
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is True
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is not None
         assert self._rated_ids(db) == {'300', '301'}
         with pytest.raises(MinigameCogError, match='already opted out'):
             asyncio.run(Minigames.queens_optout.__wrapped__(cog, ctx))
@@ -176,7 +176,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         asyncio.run(Minigames.queens_optin.__wrapped__(cog, ctx))
 
         assert db.is_minigame_opted_out(100, 'queens', alice.id) is False
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is not None
         assert self._rated_ids(db) == {'300', '301'}
         with pytest.raises(MinigameCogError, match='not opted out'):
             asyncio.run(Minigames.queens_optin.__wrapped__(cog, ctx))
@@ -191,30 +191,30 @@ class TestQueensOptOut(_QueensCommandsBase):
         self._seed_two_players(db, cog)
         ctx = self._make_ctx(guild, alice)
 
-        asyncio.run(cog._cmd_queens_optout(ctx))
-        asyncio.run(cog._cmd_queens_unregister(ctx, None))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME))
+        asyncio.run(cog._cmd_queens_unregister(ctx, QUEENS_GAME, None))
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id) is None
+            100, 'linkedin', alice.id) is None
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is True
 
         with pytest.raises(MinigameCogError, match='already linked'):
             asyncio.run(cog._cmd_queens_register(
-                ctx, alice, 'Bob LinkedIn'))
+                ctx, QUEENS_GAME, alice, 'Bob LinkedIn'))
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id) is None
+            100, 'linkedin', alice.id) is None
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is True
 
         asyncio.run(cog._cmd_queens_register(
-            ctx, alice, 'Alice LinkedIn'))
+            ctx, QUEENS_GAME, alice, 'Alice LinkedIn'))
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id) is not None
+            100, 'linkedin', alice.id) is not None
         assert db.is_minigame_opted_out(
             100, 'queens', alice.id) is True
         assert self._rated_ids(db) == {'300', '301'}
 
-        asyncio.run(cog._cmd_queens_optin(ctx))
+        asyncio.run(cog._cmd_queens_optin(ctx, QUEENS_GAME))
         assert self._rated_ids(db) == {'300', '301'}
 
     def test_import_while_opted_out_stays_stored_and_unrated(
@@ -226,9 +226,9 @@ class TestQueensOptOut(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn', _NORM_ALICE,
+            100, 'linkedin', alice.id, 'Alice LinkedIn', _NORM_ALICE,
             None, 1.0, alice.id)
-        asyncio.run(cog._cmd_queens_optout(ctx))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME))
 
         entry = SimpleNamespace(
             linkedin_name='Alice LinkedIn',
@@ -237,8 +237,8 @@ class TestQueensOptOut(_QueensCommandsBase):
             no_mistakes=True,
         )
         cog._save_queens_external_result(
-            100, 200, entry, '2026-06-08', 'raw')
-        cog._sync_queens_materialized_results(100)
+            100, QUEENS_GAME, 200, entry, '2026-06-08', 'raw')
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
         assert db.get_minigame_unresolved_results_for_name(
@@ -246,16 +246,16 @@ class TestQueensOptOut(_QueensCommandsBase):
         assert db.get_minigame_results_for_guild(100, 'queens') == []
         assert db.get_minigame_ratings(100, 'queens') == []
 
-        asyncio.run(cog._cmd_queens_optin(ctx))
-        cog._sync_queens_materialized_results(100)
+        asyncio.run(cog._cmd_queens_optin(ctx, QUEENS_GAME))
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         assert db.get_minigame_results_for_guild(100, 'queens') == []
 
         cog._save_queens_external_result(
-            100, 200, entry, '2026-06-09', 'next')
+            100, QUEENS_GAME, 200, entry, '2026-06-09', 'next')
         next_source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _NORM_ALICE)[-1]
         assert next_source.is_rated == 1
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         assert [row.puzzle_date for row in
                 db.get_minigame_results_for_guild(100, 'queens')] == [
                     '2026-06-09']
@@ -267,7 +267,7 @@ class TestQueensOptOut(_QueensCommandsBase):
         guild = _FakeGuild(100, members=[alice])
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn', _NORM_ALICE,
+            100, 'linkedin', alice.id, 'Alice LinkedIn', _NORM_ALICE,
             None, 1.0, alice.id)
 
         def interaction():
@@ -304,11 +304,11 @@ class TestQueensOptOut(_QueensCommandsBase):
             100, 'queens', _NORM_ALICE, 'Alice LinkedIn', 200, num,
             '2026-06-08', 100, 5, 1, 'raw')
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn', _NORM_ALICE, None, 1.0, 300)
+            100, 'linkedin', 300, 'Alice LinkedIn', _NORM_ALICE, None, 1.0, 300)
         db.optout_minigame_user(100, 'queens', 300, 1.0)
 
         cog = Minigames(bot=None)
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         rows = db.get_minigame_results_for_guild(100, 'queens')
         assert {row.user_id for row in rows} == {'300'}

@@ -79,7 +79,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         asyncio.run(Minigames.queens_register.__wrapped__(
             cog, ctx, '+anon'))
 
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is None
         view = ctx.sent['kwargs']['view']
         assert view.requester_id == alice.id
         assert view.children
@@ -109,7 +109,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         modal.linkedin_name.value = 'Alice LinkedIn'
         asyncio.run(modal.on_submit(interaction))
 
-        row = db.get_minigame_player_link(100, 'queens', alice.id)
+        row = db.get_minigame_player_link(100, 'linkedin', alice.id)
         assert row.external_name == 'Alice LinkedIn'
         assert row.external_url == (
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER)
@@ -184,7 +184,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
             100, minigames_module._QUEENS_ADMINS_KEY,
             json.dumps(['300']))
 
-        assert cog._resolve_queens_registrar_target(ctx, alice) is alice
+        assert cog._resolve_queens_registrar_target(ctx, QUEENS_GAME, alice) is alice
         with pytest.raises(MinigameCogError, match='Only'):
             cog._resolve_registrar_target(ctx, alice)
 
@@ -214,7 +214,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ])
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, mod.id)
 
         asyncio.run(Minigames.queens_backfill.__wrapped__(
@@ -296,7 +296,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
                 (bob, 'Bob LinkedIn'),
                 (cara, 'Cara LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', member.id, name, normalize_queens_name(name),
+                100, 'linkedin', member.id, name, normalize_queens_name(name),
                 None, 1.0, mod.id)
         db.save_minigame_unresolved_result(
             100, 'queens', normalize_queens_name('Alice LinkedIn'),
@@ -322,7 +322,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ]
         assert ctx.sent['embed'] is not None
 
-        claimed = cog._cmd_queens_register_link(ctx, unknown, 'Unknown LinkedIn')
+        claimed = cog._cmd_queens_register_link(ctx, QUEENS_GAME, unknown, 'Unknown LinkedIn')
         assert claimed == 1
         unknown_saved = db.get_minigame_result_for_user_puzzle(
             100, 'queens', unknown.id, _queens_number('2026-06-09'))
@@ -342,7 +342,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
                 cog, ctx, 'Alice',
                 linkedin='https://www.linkedin.com/in/alice/'))
 
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is None
 
     def test_register_rejects_duplicate_linkedin_name(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -353,14 +353,14 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Alice LinkedIn',
+            100, 'linkedin', bob.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, bob.id)
 
         with pytest.raises(MinigameCogError, match='already linked'):
             asyncio.run(Minigames.queens_register.__wrapped__(
                 cog, ctx, 'alice', linkedin='linkedin'))
 
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is None
 
     def test_register_duplicate_anonymous_name_hides_discord_owner(
             self, db, monkeypatch):
@@ -372,7 +372,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ctx = self._make_ctx(guild, bob)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Existing LinkedIn',
+            100, 'linkedin', alice.id, 'Existing LinkedIn',
             normalize_queens_name('Existing LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
 
@@ -395,7 +395,7 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
 
         asyncio.run(Minigames.queens_add.__wrapped__(
@@ -424,13 +424,13 @@ class TestQueensCommandsAdmin(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
         db.save_minigame_unresolved_result(
             100, 'queens', normalize_queens_name('Alice LinkedIn'),
             'Alice LinkedIn', 200, _queens_number('2026-06-08'),
             '2026-06-08', 100, 5, True, 'source')
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         asyncio.run(Minigames.queens_remove.__wrapped__(
             cog, ctx, args='Alice LinkedIn #769'))

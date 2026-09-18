@@ -41,7 +41,7 @@ def _setup_live(db, *, opted_out=False):
     db.set_guild_config(1, 'queens', '1')
     db.set_minigame_channel(1, 'queens', 10)
     db.set_minigame_player_link(
-        1, 'queens', 999, _ALICE_NAME, _ALICE_NORM, None, 1.0, 999)
+        1, 'linkedin', 999, _ALICE_NAME, _ALICE_NORM, None, 1.0, 999)
     if opted_out:
         db.optout_minigame_user(
             1, 'queens', 999, 1.0, _ALICE_NORM)
@@ -115,7 +115,7 @@ def test_live_puzzle_move_preserves_moderator_override(
     original = _FakeMessage(123, 1, 10, 999, _queens_share(26, 774))
     asyncio.run(cog.on_message(original))
     asyncio.run(cog._cmd_queens_set_result_rating(
-        ctx, 'Alice LinkedIn #774', is_rated=True))
+        ctx, QUEENS_GAME, 'Alice LinkedIn #774', is_rated=True))
     first = db.get_minigame_unresolved_result_for_source_message(
         1, 'queens', 123)
 
@@ -147,7 +147,7 @@ def test_live_puzzle_move_onto_existing_result_removes_old_source(
     asyncio.run(cog.on_message(old))
     asyncio.run(cog.on_message(existing))
     asyncio.run(cog._cmd_queens_set_result_rating(
-        ctx, 'Alice LinkedIn #775', is_rated=True))
+        ctx, QUEENS_GAME, 'Alice LinkedIn #775', is_rated=True))
 
     moved = _FakeMessage(123, 1, 10, 999, _queens_share(30, 775))
     asyncio.run(cog.on_message_edit(old, moved))
@@ -168,9 +168,9 @@ def test_live_share_edit_keeps_linkedin_source_after_unregister(
     cog = Minigames(bot=None)
     original = _FakeMessage(123, 1, 10, 999, _queens_share(26))
     asyncio.run(cog.on_message(original))
-    link = db.get_minigame_player_link(1, 'queens', 999)
-    cog._delete_queens_materialized_results_for_link(1, link)
-    db.delete_minigame_player_link(1, 'queens', 999)
+    link = db.get_minigame_player_link(1, 'linkedin', 999)
+    cog._delete_queens_materialized_results_for_link(1, QUEENS_GAME, link)
+    db.delete_minigame_player_link(1, 'linkedin', 999)
 
     edited = _FakeMessage(123, 1, 10, 999, _queens_share(30))
     asyncio.run(cog.on_message_edit(original, edited))
@@ -195,7 +195,7 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
     def _link(db):
         db.set_guild_config(100, 'queens', '1')
         db.set_minigame_player_link(
-            100, 'queens', 300, _ALICE_NAME, _ALICE_NORM,
+            100, 'linkedin', 300, _ALICE_NAME, _ALICE_NORM,
             None, 1.0, 999)
 
     @staticmethod
@@ -225,20 +225,20 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         alice, mod, guild = self._members()
         self._link(db)
         cog = Minigames(bot=None)
-        asyncio.run(cog._cmd_queens_optout(self._make_ctx(guild, alice)))
+        asyncio.run(cog._cmd_queens_optout(self._make_ctx(guild, alice), QUEENS_GAME))
         cog._save_queens_external_result(
-            100, 200, self._entry(5), '2026-06-08', 'first')
+            100, QUEENS_GAME, 200, self._entry(5), '2026-06-08', 'first')
 
         mod_ctx = self._make_ctx(guild, mod)
         asyncio.run(cog._cmd_queens_set_result_rating(
-            mod_ctx, 'Alice LinkedIn #769', is_rated=True))
+            mod_ctx, QUEENS_GAME, 'Alice LinkedIn #769', is_rated=True))
         assert db.is_minigame_opted_out(100, 'queens', 300) is True
         assert {row.user_id for row in
                 db.get_minigame_results_for_guild(100, 'queens')} == {'300'}
 
         cog._save_queens_external_result(
-            100, 200, self._entry(6), '2026-06-09', 'next')
-        cog._sync_queens_materialized_results(100)
+            100, QUEENS_GAME, 200, self._entry(6), '2026-06-09', 'next')
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         sources = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)
         assert [row.is_rated for row in sources] == [1, 0]
@@ -252,12 +252,12 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         alice, mod, guild = self._members()
         self._link(db)
         db.set_minigame_player_link(
-            100, 'queens', mod.id, 'Moderator LinkedIn',
+            100, 'linkedin', mod.id, 'Moderator LinkedIn',
             normalize_queens_name('Moderator LinkedIn'),
             None, 1.0, mod.id)
         cog = Minigames(bot=None)
         ctx = self._make_ctx(guild, mod)
-        asyncio.run(cog._cmd_queens_optout(ctx, alice))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME, alice))
 
         def leaderboard(seconds):
             return (
@@ -268,16 +268,16 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
             )
 
         preview = cog._make_queens_import_preview(
-            ctx, '2026-06-08', leaderboard(5))
-        saved = cog._save_queens_import(ctx, preview)
+            ctx, QUEENS_GAME, '2026-06-08', leaderboard(5))
+        saved = cog._save_queens_import(ctx, QUEENS_GAME, preview)
         assert saved.resolved == 1
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
         assert (source.time_seconds, source.is_rated) == (5, 0)
 
         correction = cog._make_queens_import_preview(
-            ctx, '2026-06-08', leaderboard(4))
-        cog._save_queens_import(ctx, correction)
+            ctx, QUEENS_GAME, '2026-06-08', leaderboard(4))
+        cog._save_queens_import(ctx, QUEENS_GAME, correction)
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
         assert (source.time_seconds, source.is_rated) == (4, 0)
@@ -290,16 +290,16 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         self._link(db)
         cog = Minigames(bot=None)
         cog._save_queens_external_result(
-            100, 200, self._entry(5), '2026-06-08', 'old')
+            100, QUEENS_GAME, 200, self._entry(5), '2026-06-08', 'old')
         ctx = self._make_ctx(guild, alice)
-        asyncio.run(cog._cmd_queens_optout(ctx))
-        asyncio.run(cog._cmd_queens_unregister(ctx, None))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME))
+        asyncio.run(cog._cmd_queens_unregister(ctx, QUEENS_GAME, None))
 
         cog._save_queens_external_result(
-            100, 200, self._entry(6), '2026-06-09', 'during optout')
+            100, QUEENS_GAME, 200, self._entry(6), '2026-06-09', 'during optout')
         asyncio.run(cog._cmd_queens_register(
-            ctx, alice, _ALICE_NAME))
-        asyncio.run(cog._cmd_queens_optin(ctx))
+            ctx, QUEENS_GAME, alice, _ALICE_NAME))
+        asyncio.run(cog._cmd_queens_optin(ctx, QUEENS_GAME))
 
         sources = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)
@@ -315,23 +315,23 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         self._link(db)
         cog = Minigames(bot=None)
         ctx = self._make_ctx(guild, alice)
-        asyncio.run(cog._cmd_queens_optout(ctx))
-        asyncio.run(cog._cmd_queens_unregister(ctx, None))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME))
+        asyncio.run(cog._cmd_queens_unregister(ctx, QUEENS_GAME, None))
 
         new_name = 'Alice New LinkedIn'
         new_norm = normalize_queens_name(new_name)
         entry = self._entry(6)
         entry.linkedin_name = new_name
         cog._save_queens_external_result(
-            100, 200, entry, '2026-06-09', 'unresolved')
+            100, QUEENS_GAME, 200, entry, '2026-06-09', 'unresolved')
         assert db.get_minigame_unresolved_results_for_name(
             100, 'queens', new_norm)[0].is_rated == 1
 
-        asyncio.run(cog._cmd_queens_register(ctx, alice, new_name))
+        asyncio.run(cog._cmd_queens_register(ctx, QUEENS_GAME, alice, new_name))
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', new_norm)[0]
         assert source.is_rated == 0
-        asyncio.run(cog._cmd_queens_optin(ctx))
+        asyncio.run(cog._cmd_queens_optin(ctx, QUEENS_GAME))
         assert db.get_minigame_results_for_guild(100, 'queens') == []
 
     def test_manual_add_preserves_unrated_state(self, db, monkeypatch):
@@ -345,7 +345,7 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         asyncio.run(cog._cmd_queens_add(
-            self._make_ctx(guild, mod),
+            self._make_ctx(guild, mod), QUEENS_GAME,
             'Alice LinkedIn 2026-06-08 0:04'))
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
@@ -367,10 +367,10 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         cog = Minigames(bot=None)
         ctx = self._make_ctx(guild, mod)
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Alice LinkedIn #769', is_rated=True))
+            ctx, QUEENS_GAME, 'Alice LinkedIn #769', is_rated=True))
 
         asyncio.run(cog._cmd_queens_add(
-            ctx, 'Alice LinkedIn 2026-06-08 0:04'))
+            ctx, QUEENS_GAME, 'Alice LinkedIn 2026-06-08 0:04'))
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
         assert (
@@ -381,7 +381,7 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
         db.set_minigame_optout_identity(
             100, 'queens', 300, 'different identity')
         cog._claim_queens_unresolved_results(
-            100, 300, _ALICE_NORM)
+            100, QUEENS_GAME, 300, _ALICE_NORM)
         assert db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0].is_rated == 1
 
@@ -395,18 +395,18 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
             100, 'queens', _ALICE_NORM, _ALICE_NAME, 200,
             day.toordinal(), day.isoformat(), 100, 5, True, 'legacy')
         cog = Minigames(bot=None)
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         ctx = self._make_ctx(guild, mod)
 
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Alice LinkedIn #769', is_rated=False))
+            ctx, QUEENS_GAME, 'Alice LinkedIn #769', is_rated=False))
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
         assert source.is_rated == 0
         assert db.get_minigame_results_for_guild(100, 'queens') == []
 
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Alice LinkedIn 2026-06-08', is_rated=True))
+            ctx, QUEENS_GAME, 'Alice LinkedIn 2026-06-08', is_rated=True))
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
         assert source.is_rated == 1
@@ -423,7 +423,7 @@ class TestQueensUnratedLifecycle(_QueensCommandsBase):
             100, 'queens', _ALICE_NORM, _ALICE_NAME, 200, puzzle,
             '2026-06-08', 100, 5, True, 'raw')
         cog = Minigames(bot=None)
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         optout_interaction = self._interaction(guild, mod)
         asyncio.run(cog.slash_queens_optout(

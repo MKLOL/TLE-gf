@@ -1,5 +1,6 @@
 """Shared fakes for the ``;llm`` test modules."""
 import asyncio
+from datetime import datetime, timedelta, timezone
 import sqlite3
 
 import discord
@@ -72,6 +73,72 @@ class FakeAttachment:
         if self._fail:
             raise OSError('download failed')
         return self._data
+
+
+_HISTORY_BASE = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
+
+
+class HistMessage:
+    """A message with the attributes history collection actually reads."""
+
+    def __init__(self, author='someone', content='hi', offset=0,
+                 attachments=None, is_bot=False, author_id=1):
+        self.content = content
+        self.attachments = attachments or []
+        self.created_at = _HISTORY_BASE + timedelta(seconds=offset)
+        self.author = type('A', (), {'display_name': author, 'bot': is_bot,
+                                     'id': author_id})()
+
+
+class FakeHistoryChannel:
+    """Serves a fixed message list through an async ``history()`` iterator."""
+
+    def __init__(self, messages, fail=False):
+        self.messages = sorted(messages, key=lambda message: message.created_at)
+        self.fail = fail
+        self.calls = []
+
+    def history(self, limit=None, before=None, after=None, oldest_first=None):
+        self.calls.append({'limit': limit, 'before': before, 'after': after,
+                           'oldest_first': oldest_first})
+        channel = self
+
+        class _Iter:
+            def __aiter__(self):
+                if channel.fail:
+                    raise RuntimeError('missing Read Message History')
+                picked = list(channel.messages)  # ascending by created_at
+                if before is not None:
+                    anchor = getattr(before, 'created_at', before)
+                    picked = [m for m in picked if m.created_at < anchor]
+                if after is not None:
+                    anchor = getattr(after, 'created_at', after)
+                    picked = [m for m in picked if m.created_at > anchor]
+                # Mirror discord.py: oldest_first defaults to True when
+                # `after` is given, and `limit` applies in traversal order.
+                ascending = oldest_first
+                if ascending is None:
+                    ascending = after is not None
+                if not ascending:
+                    picked.reverse()
+                if limit is not None:
+                    picked = picked[:limit]
+                self._items = iter(picked)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        return _Iter()
+
+
+class FakeGatherCtx:
+    def __init__(self, channel, message):
+        self.channel = channel
+        self.message = message
 
 
 class FakeMessage(discord.Message):

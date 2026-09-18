@@ -69,18 +69,25 @@ constants_mod.AKARI_DECAY_MAX = 0.08
 constants_mod.AKARI_DECAY_GRACE = 0
 constants_mod.AKARI_MAX_PUZZLE_LOOKAHEAD = 2
 constants_mod.AKARI_RANKING_MAX_INACTIVE_DAYS = 30
+constants_mod.QUEENS_DECAY_BASE = 0.04
+constants_mod.QUEENS_DECAY_MAX = 0.08
+constants_mod.QUEENS_DECAY_GRACE = 0
+constants_mod.TANGO_DECAY_BASE = 0.04
+constants_mod.TANGO_DECAY_MAX = 0.08
+constants_mod.TANGO_DECAY_GRACE = 0
 constants_mod.LLM_MODELS = ('model-a', 'model-b')
 constants_mod.GEMINI_API_KEYS = ''
 constants_mod.XAI_API_KEYS = ''
 constants_mod.XAI_MODEL = 'grok-test'
 constants_mod.XAI_MODELS = ('grok-test',)
-constants_mod.XAI_MAX_OUTPUT_TOKENS = 512
-constants_mod.XAI_USER_RATE_LIMIT = 10
-constants_mod.XAI_USER_RATE_WINDOW_SECONDS = 30 * 60
-constants_mod.XAI_DAILY_REQUEST_LIMIT = 100
-constants_mod.XAI_INPUT_USD_PER_MILLION = 1.25
-constants_mod.XAI_OUTPUT_USD_PER_MILLION = 2.50
-constants_mod.XAI_DAILY_BUDGET_USD = 1.00
+constants_mod.XAI_MAX_OUTPUT_TOKENS = 1536
+constants_mod.XAI_ROUTER_MAX_OUTPUT_TOKENS = 256
+constants_mod.XAI_USER_RATE_LIMIT = 15
+constants_mod.XAI_USER_RATE_WINDOW_SECONDS = 60 * 60
+constants_mod.XAI_DAILY_REQUEST_LIMIT = 200
+constants_mod.XAI_INPUT_USD_PER_MILLION = 2.00
+constants_mod.XAI_OUTPUT_USD_PER_MILLION = 6.00
+constants_mod.XAI_DAILY_BUDGET_USD = 0.50
 constants_mod.XAI_REQUEST_RESERVE_INPUT_TOKENS = 6000
 constants_mod.LLM_REQUEST_TIMEOUT_SECONDS = 90
 constants_mod.LLM_ROUTER_TIMEOUT_SECONDS = 15
@@ -92,6 +99,8 @@ constants_mod.LLM_MAX_PROMPT_CHARS = 4000
 constants_mod.LLM_CONTEXT_ENABLED = True
 constants_mod.LLM_CONTEXT_MESSAGES = 50
 constants_mod.LLM_CONTEXT_WINDOW_SECONDS = 600
+constants_mod.LLM_CONTEXT_GAP_SECONDS = 600
+constants_mod.LLM_CONTEXT_RECENT_MAX_AGE_SECONDS = 21600
 constants_mod.LLM_REPLY_BEFORE = 25
 constants_mod.LLM_REPLY_AFTER = 24
 constants_mod.LLM_MAX_OUTPUT_TOKENS = 900
@@ -339,6 +348,7 @@ _load_module('tle.util.llm_models', os.path.join(_util_path, 'llm_models.py'))
 _load_module('tle.util.gemini_api', os.path.join(_util_path, 'gemini_api.py'))
 _load_module('tle.util.xai_api', os.path.join(_util_path, 'xai_api.py'))
 _load_module('tle.cogs._llm_context', os.path.join(_cogs_path, '_llm_context.py'))
+_load_module('tle.cogs._llm_transcript', os.path.join(_cogs_path, '_llm_transcript.py'))
 _load_module('tle.cogs._llm_history', os.path.join(_cogs_path, '_llm_history.py'))
 _load_module('tle.cogs._llm_pipeline', os.path.join(_cogs_path, '_llm_pipeline.py'))
 _load_module('tle.cogs._llm_format', os.path.join(_cogs_path, '_llm_format.py'))

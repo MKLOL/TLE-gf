@@ -34,20 +34,23 @@ export GEMINI_API_KEYS=""
 # API use requires prepaid credits or an invoiced account; a valid key alone
 # does not grant model access. XAI_API_KEYS (comma-separated) is also accepted.
 export XAI_API_KEY=""
-export XAI_MODEL="grok-4.3"
+export XAI_MODEL="grok-4.5"
 # Optional strongest-to-weakest fallback ladder. Every listed model may have a
 # different price; update the cost settings below to the most expensive one.
-export XAI_MODELS="grok-4.3"
-# Grok-only credit guard. Discord users receive generic retry messages; these
-# thresholds are not exposed by bot commands or denial responses.
-export XAI_MAX_OUTPUT_TOKENS="512"
-export XAI_USER_RATE_LIMIT="10"
-export XAI_USER_RATE_WINDOW_SECONDS="1800"
-export XAI_DAILY_REQUEST_LIMIT="100"
-# Private spend guard; ordinary users only receive a generic breather message.
-export XAI_DAILY_BUDGET_USD="1.00"
-export XAI_INPUT_USD_PER_MILLION="1.25"
-export XAI_OUTPUT_USD_PER_MILLION="2.50"
+export XAI_MODELS="grok-4.5"
+# Grok-only credit guard. These are the regular-user defaults; guild moderators
+# can override them with `;ai ratelimit`. Configured Admin/Moderator roles
+# bypass only the personal guard. Count-limit responses tell users when to
+# retry, while the bot-wide request and spend thresholds stay private. The
+# output cap covers both Grok's hidden reasoning and its visible answer.
+export XAI_MAX_OUTPUT_TOKENS="1536"
+export XAI_USER_RATE_LIMIT="15"
+export XAI_USER_RATE_WINDOW_SECONDS="3600"
+export XAI_DAILY_REQUEST_LIMIT="200"
+# Private spend guard; ordinary users only see that daily capacity is used.
+export XAI_DAILY_BUDGET_USD="0.50"
+export XAI_INPUT_USD_PER_MILLION="2.00"
+export XAI_OUTPUT_USD_PER_MILLION="6.00"
 export XAI_REQUEST_RESERVE_INPUT_TOKENS="6000"
 
 # End-to-end request/concurrency protection.
@@ -73,8 +76,14 @@ export LLM_MODELS="gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-
 # Users can request `+context`, force `+direct`, and cap context with
 # `messages=N` (up to LLM_CONTEXT_MESSAGES).
 export LLM_CONTEXT_ENABLED="1"
+# Maximum non-reply speaker turns; consecutive messages from one author share a turn.
 export LLM_CONTEXT_MESSAGES="50"
 export LLM_CONTEXT_WINDOW_SECONDS="600"
+
+# Recent non-reply context follows the active conversation backward
+# until an inactivity gap or hard maximum age is reached.
+export LLM_CONTEXT_GAP_SECONDS="600"
+export LLM_CONTEXT_RECENT_MAX_AGE_SECONDS="21600"
 
 # Set to enable automatic venv usage.
 export VENV_DIR=""

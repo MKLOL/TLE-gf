@@ -85,7 +85,7 @@ class TestCogIngest:
         db.set_guild_config(1, 'queens', '1')
         db.set_minigame_channel(1, 'queens', 10)
         db.set_minigame_player_link(
-            1, 'queens', 999, 'Alice LinkedIn',
+            1, 'linkedin', 999, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
 
         cog = Minigames(bot=None)
@@ -119,7 +119,7 @@ class TestCogIngest:
             minigames_module.discord_common, 'embed_success',
             lambda desc: SimpleNamespace(description=desc))
         db.set_minigame_player_link(
-            1, 'queens', 999, 'Alice LinkedIn',
+            1, 'linkedin', 999, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
         content = (
             'Queens #774 | 1:26\n'

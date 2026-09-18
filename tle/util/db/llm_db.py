@@ -1,6 +1,6 @@
 """LLM DB methods — API key storage and per-bucket quota state.
 
-Owns five tables:
+Owns the core LLM tables:
 
 ``llm_api_key``
     Provider-tagged API keys, one row per key. Keys are bot-global (not
@@ -20,13 +20,17 @@ Owns five tables:
     Per-user, per-UTC-day call counts for moderator visibility.
 
 ``llm_xai_request``
-    A compact timestamp ledger for Grok-only credit protection: per-user
-    rolling-window limits plus one bot-wide UTC-day limit. Old rows are pruned
-    whenever a request reserves a slot.
+    A compact timestamp ledger for Grok-only credit protection: per-guild,
+    per-user rolling-window limits plus one bot-wide UTC-day limit. Old rows
+    are pruned whenever a request reserves a slot.
 
 ``llm_user_ban``
     Guild-scoped request bans. These block both provider routes while leaving
     moderation subcommands available so the ban can always be reversed.
+
+``llm_cooldown``
+    Persistent shared admission cooldowns for one server, channel family,
+    exact channel, or exact thread.
 
 The key material is stored in plaintext: the bot must be able to present it
 to the provider on every call, so there is nothing to gain from hashing it.
@@ -37,10 +41,22 @@ import logging
 import time
 
 from tle.util.db.llm_telemetry_db import LlmTelemetryDbMixin
+from tle.util.db.llm_cooldown_db import LlmCooldownDbMixin
 
 logger = logging.getLogger(__name__)
 
 _KEY_PROVIDERS = frozenset(('gemini', 'xai'))
+_XAI_LEDGER_RETENTION_SECONDS = 31 * 86400
+
+
+class XaiRequestDenial(str):
+    """String-compatible guard result with a retry timestamp when finite."""
+
+    def __new__(cls, reason, retry_at=None):
+        value = super().__new__(cls, reason)
+        value.reason = reason
+        value.retry_at = retry_at
+        return value
 
 
 def key_fingerprint(api_key):
@@ -48,11 +64,12 @@ def key_fingerprint(api_key):
     return hashlib.sha256(api_key.strip().encode('utf-8')).hexdigest()
 
 
-class LlmDbMixin(LlmTelemetryDbMixin):
+class LlmDbMixin(LlmCooldownDbMixin, LlmTelemetryDbMixin):
     """Mixin providing LLM key-pool and quota DB methods."""
 
     def _create_llm_tables(self):
         self._create_llm_telemetry_tables()
+        self._create_llm_cooldown_tables()
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS llm_api_key (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,13 +288,16 @@ class LlmDbMixin(LlmTelemetryDbMixin):
     def llm_reserve_xai_request(self, user_id, user_limit, window_seconds,
                                 daily_limit, now=None, *, guild_id=None,
                                 model=None, reserved_microusd=0,
-                                daily_budget_microusd=0, return_id=False):
+                                daily_budget_microusd=0, return_id=False,
+                                enforce_user_limit=True):
         """Atomically reserve one Grok invocation.
 
         Returns ``None`` when accepted (or the row id with ``return_id=True``),
-        ``'user'``/``'daily'`` for count guards, or ``'budget'`` for the
-        operator's private estimated-spend guard. A reservation is kept on
-        failure so repeated failing calls cannot bypass credit protection.
+        or a string-compatible :class:`XaiRequestDenial`. Its ``retry_at`` is
+        the first guaranteed opening, accounting for simultaneous guards. A
+        reservation is kept on failure so failures cannot bypass protection.
+        ``enforce_user_limit=False`` skips only the personal rolling guard;
+        shared daily count and spend protection always remain active.
         """
         now = time.time() if now is None else float(now)
         user_id = str(user_id)
@@ -285,7 +305,11 @@ class LlmDbMixin(LlmTelemetryDbMixin):
         daily_budget_microusd = max(0, int(daily_budget_microusd or 0))
         window_cutoff = now - max(0, window_seconds)
         day_start = int(now // 86400) * 86400
-        retain_after = min(window_cutoff, day_start)
+        retention = max(_XAI_LEDGER_RETENTION_SECONDS,
+                        max(0, window_seconds))
+        retain_after = min(now - retention, day_start)
+        scope_sql = '' if guild_id is None else ' AND guild_id = ?'
+        scope_params = () if guild_id is None else (_s(guild_id),)
 
         with self.conn:
             # The write starts a transaction before the counts, so concurrent
@@ -293,26 +317,45 @@ class LlmDbMixin(LlmTelemetryDbMixin):
             self.conn.execute(
                 'DELETE FROM llm_xai_request WHERE requested_at < ?',
                 (retain_after,))
-            user_count = self.conn.execute(
-                'SELECT COUNT(*) AS count FROM llm_xai_request '
-                'WHERE user_id = ? AND requested_at > ?',
-                (user_id, window_cutoff)).fetchone().count
-            if user_count >= user_limit:
-                return 'user'
-
+            user_count = None
+            if enforce_user_limit:
+                user_count = self.conn.execute(
+                    'SELECT COUNT(*) AS count FROM llm_xai_request '
+                    f'WHERE user_id = ? AND requested_at > ?{scope_sql}',
+                    (user_id, window_cutoff, *scope_params)).fetchone().count
             daily_count = self.conn.execute(
                 'SELECT COUNT(*) AS count FROM llm_xai_request '
                 'WHERE requested_at >= ?', (day_start,)).fetchone().count
+            denials = []
+            if enforce_user_limit and user_count >= user_limit:
+                retry_at = None
+                if user_limit > 0:
+                    row = self.conn.execute(
+                        'SELECT requested_at FROM llm_xai_request '
+                        f'WHERE user_id = ? AND requested_at > ?{scope_sql} '
+                        'ORDER BY requested_at, id LIMIT 1 OFFSET ?',
+                        (user_id, window_cutoff, *scope_params,
+                         max(0, user_count - user_limit))).fetchone()
+                    if row is not None:
+                        retry_at = row.requested_at + max(0, window_seconds)
+                denials.append(('user', retry_at, 0))
             if daily_count >= daily_limit:
-                return 'daily'
-
+                denials.append(('daily', day_start + 86400, 1))
             if daily_budget_microusd:
                 spent = self.conn.execute(
                     'SELECT COALESCE(SUM(COALESCE(actual_microusd, '
                     'reserved_microusd)), 0) AS spent FROM llm_xai_request '
                     'WHERE requested_at >= ?', (day_start,)).fetchone().spent
                 if spent + reserved_microusd > daily_budget_microusd:
-                    return 'budget'
+                    denials.append(('budget', day_start + 86400, 2))
+
+            if denials:
+                # Pick the last guard to reopen; a same-time shared guard wins
+                # so spend exhaustion remains indistinguishable from count.
+                reason, retry_at, _ = max(
+                    denials, key=lambda item: (
+                        item[1] is not None, item[1] or 0, item[2]))
+                return XaiRequestDenial(reason, retry_at)
 
             cur = self.conn.execute(
                 'INSERT INTO llm_xai_request '
@@ -347,6 +390,17 @@ class LlmDbMixin(LlmTelemetryDbMixin):
                        AS guarded_microusd
             FROM llm_xai_request WHERE requested_at >= ?
         ''', (day_start,)).fetchone()
+
+    def llm_reset_xai_daily_limits(self, now=None):
+        """Clear Grok guard reservations from the current UTC day."""
+        now = time.time() if now is None else float(now)
+        day_start = int(now // 86400) * 86400
+        with self.conn:
+            cursor = self.conn.execute(
+                'DELETE FROM llm_xai_request '
+                'WHERE requested_at >= ? AND requested_at < ?',
+                (day_start, day_start + 86400))
+        return cursor.rowcount
 
     # ── Per-user daily usage ────────────────────────────────────────────
 

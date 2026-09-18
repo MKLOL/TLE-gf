@@ -5,11 +5,13 @@ from tle import constants
 from tle.cogs import llm as llm_cog
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, xai_api
+from tle.util.db.llm_db import XaiRequestDenial
 from tests.llm_test_utils import FakeLlmDb, run
 from tests.test_llm_cog import FakeCtx, _answers
 from tests.test_llm_grok import (
-    _FakeBot, _add_xai_key, _invoke, _listener_message, _xai_answers,
+    _add_xai_key, _invoke, _xai_answers,
 )
+from tests.test_llm_literal_triggers import _FakeBot, _listener_message
 
 
 @pytest.fixture(autouse=True)
@@ -34,41 +36,78 @@ def _event_count(database):
 
 
 class TestGrokLimitGate:
-    @pytest.mark.parametrize('reason', ['user', 'daily'])
-    def test_denial_is_generic_and_makes_no_provider_call(
-            self, reason, cog, db, monkeypatch):
+    def test_denials_explain_retry_without_exposing_spend(
+            self, cog, db, monkeypatch):
         _add_xai_key(db)
-        monkeypatch.setattr(
-            db, 'llm_reserve_xai_request', lambda *args, **kwargs: reason)
 
         async def should_not_call(*args, **kwargs):
             raise AssertionError('a rejected invocation must not call xAI')
 
         monkeypatch.setattr(xai_api, 'complete', should_not_call)
-        ctx = FakeCtx()
-        _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok hello')
+        messages = {}
+        retry_at = 2_000_000_000.2
+        for reason in ('user', 'daily', 'budget'):
+            denial = XaiRequestDenial(reason, retry_at)
+            monkeypatch.setattr(
+                db, 'llm_reserve_xai_request',
+                lambda *args, _denial=denial, **kwargs: _denial)
+            ctx = FakeCtx()
+            _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok hello')
+            messages[reason] = ctx.text
 
-        assert ctx.text == (
-            'ALERT: Grok is taking a breather right now. Try again later.')
-        hidden = ('10', '30', '100', 'minute', 'daily', 'quota', 'limit')
-        assert not any(word in ctx.text.casefold() for word in hidden)
+        assert messages['user'] == (
+            'ALERT: You have used all 15 Grok requests available in this '
+            'server over the last hour. Try again <t:2000000001:R> '
+            '(<t:2000000001:F>).')
+        shared = (
+            "ALERT: Grok's shared daily allowance is used up. Try again "
+            '<t:2000000001:R> (<t:2000000001:F>).')
+        assert messages['daily'] == messages['budget'] == shared
+        hidden = ('200 requests', '$0.5', 'budget', 'cost', 'spend')
+        assert not any(word in shared.casefold() for word in hidden)
         assert db.llm_get_usage(100, 1, llm_cog._today()) == 0
 
-    def test_cross_guild_tenth_allowed_and_eleventh_blocked_for_moderator(
+    def test_user_limit_is_per_guild_for_regular_user(
             self, cog, db, monkeypatch):
         _add_xai_key(db)
         seen = _xai_answers(monkeypatch)
 
-        for index in range(constants.XAI_USER_RATE_LIMIT):
-            ctx = FakeCtx(roles=('Moderator',), guild_id=100 + index % 2)
+        for _ in range(constants.XAI_USER_RATE_LIMIT):
+            ctx = FakeCtx(guild_id=100)
             _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok again')
             assert 'Grok answer' in ctx.text
 
-        blocked = FakeCtx(roles=('Moderator',), guild_id=999)
+        blocked = FakeCtx(guild_id=100)
         _invoke(llm_cog.Llm.llm, cog, blocked, question='+grok again')
-        assert 'taking a breather' in blocked.text
-        assert len(seen) == constants.XAI_USER_RATE_LIMIT * 2
-        assert _event_count(db) == constants.XAI_USER_RATE_LIMIT
+        assert 'used all 15 Grok requests' in blocked.text
+        assert '<t:' in blocked.text and ':R>' in blocked.text
+
+        other_guild = FakeCtx(guild_id=999)
+        _invoke(llm_cog.Llm.llm, cog, other_guild, question='+grok again')
+        assert 'Grok answer' in other_guild.text
+        assert len(seen) == (constants.XAI_USER_RATE_LIMIT + 1) * 2
+        assert _event_count(db) == constants.XAI_USER_RATE_LIMIT + 1
+
+    @pytest.mark.parametrize('role', (
+        constants.TLE_ADMIN, constants.TLE_MODERATOR,
+    ))
+    def test_privileged_roles_bypass_personal_but_not_shared_limit(
+            self, role, cog, db, monkeypatch):
+        monkeypatch.setattr(constants, 'XAI_USER_RATE_LIMIT', 1)
+        monkeypatch.setattr(constants, 'XAI_DAILY_REQUEST_LIMIT', 3)
+        _add_xai_key(db)
+        seen = _xai_answers(monkeypatch)
+
+        for _ in range(3):
+            ctx = FakeCtx(roles=(role,))
+            _invoke(llm_cog.Llm.llm, cog, ctx, question='+grok again')
+            assert 'Grok answer' in ctx.text
+
+        blocked = FakeCtx(roles=(role,))
+        _invoke(llm_cog.Llm.llm, cog, blocked, question='+grok again')
+        assert 'shared daily allowance is used up' in blocked.text
+        assert len(seen) == 6
+        assert _event_count(db) == 3
 
     def test_success_reserves_once_despite_router_and_answer_calls(
             self, cog, db, monkeypatch):
@@ -118,7 +157,8 @@ class TestGrokLimitGate:
         _add_xai_key(db)
         monkeypatch.setattr(
             db, 'llm_reserve_xai_request',
-            lambda *args, **kwargs: 'daily')
+            lambda *args, **kwargs: XaiRequestDenial(
+                'daily', 2_000_000_000))
 
         async def should_not_call(*args, **kwargs):
             raise AssertionError('a rejected @grok must not call xAI')
@@ -127,7 +167,8 @@ class TestGrokLimitGate:
         ctx = FakeCtx()
         cog = llm_cog.Llm(_FakeBot(ctx))
         run(cog.on_message(_listener_message('@grok hello')))
-        assert 'taking a breather' in ctx.text
+        assert 'shared daily allowance is used up' in ctx.text
+        assert '<t:2000000000:R>' in ctx.text
 
 
 def test_gemini_keeps_its_existing_output_budget(cog, db, monkeypatch):

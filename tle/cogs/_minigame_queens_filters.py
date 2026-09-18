@@ -212,9 +212,14 @@ def _queens_filter_suffix(*, weekdays=None, date_bounds=None):
     return f' ({", ".join(parts)})' if parts else ''
 
 
-def _filter_queens_contested_rating_history(history):
-    """Return graph history with solo contest days omitted entirely."""
+def _filter_queens_contested_rating_history(history, *, keep_decay=False):
+    """Return graph history with solo contest days omitted entirely.
+
+    ``keep_decay=True`` (the ``+decay`` view) keeps inactivity points, which
+    carry no performance of their own, so the absent-day slope stays visible.
+    """
     return [
         point for point in history
         if point.performance is not None
+        or (keep_decay and getattr(point, 'is_decay', False))
     ]

@@ -96,14 +96,27 @@ class CoreMixin:
             return
         if entry.channel_id is None:
             return  # Emoji configured but no starboard channel set yet
+        # Starboard posts are display surfaces, not starrable content — a
+        # reaction on one is forwarded to the original message it points at
+        # (see ProxyReactionMixin).  Anything else living in a board channel
+        # stays excluded entirely, so star/pill spam on a board can't put a
+        # board message onto another board.
+        sb_row = cf_common.user_db.get_starboard_message_by_starboard_id(payload.message_id)
+        if sb_row is None and cf_common.user_db.is_starboard_channel(
+                payload.guild_id, payload.channel_id):
+            return
         channel_id, threshold, color = int(entry.channel_id), entry.threshold, entry.color
         logger.debug(f'Reaction add: raw_emoji={raw_emoji} main_emoji={main_emoji} '
                      f'guild={payload.guild_id} msg={payload.message_id} user={payload.user_id} '
                      f'threshold={threshold} starboard_channel={channel_id}')
         try:
-            await self.check_and_add_to_starboard(
-                channel_id, threshold, color, main_emoji, payload, raw_emoji=raw_emoji,
-            )
+            if sb_row is not None:
+                await self._handle_proxy_reaction_add(
+                    payload, sb_row, main_emoji, entry, raw_emoji)
+            else:
+                await self.check_and_add_to_starboard(
+                    channel_id, threshold, color, main_emoji, payload, raw_emoji=raw_emoji,
+                )
         except StarboardCogError as e:
             logger.info(f'Failed to starboard msg={payload.message_id} emoji={main_emoji}: {e!r}')
         except Exception as e:
@@ -125,6 +138,12 @@ class CoreMixin:
             return
         logger.debug(f'Reaction remove: raw_emoji={raw_emoji} main_emoji={main_emoji} '
                      f'guild={payload.guild_id} msg={payload.message_id} user={payload.user_id}')
+        # Un-reacting on a starboard post removes the proxy reactor for the
+        # original message instead (see ProxyReactionMixin).
+        sb_row = cf_common.user_db.get_starboard_message_by_starboard_id(payload.message_id)
+        if sb_row is not None:
+            await self._handle_proxy_reaction_remove(payload, sb_row, main_emoji, raw_emoji)
+            return
         # Always remove the reactor from DB — even if the message isn't on the
         # starboard yet.  This prevents ghost reactors from inflating counts
         # when a user reacts then un-reacts before the threshold is reached.
@@ -132,34 +151,42 @@ class CoreMixin:
 
         # Update starboard display if the message is already tracked
         if cf_common.user_db.check_exists_starboard_message_v1(payload.message_id, main_emoji):
-            lock = self.locks.get(payload.guild_id)
-            if lock is None:
-                self.locks[payload.guild_id] = lock = asyncio.Lock()
-            async with lock:
+            await self._refresh_starboard_display(
+                payload.guild_id, payload.message_id, payload.channel_id, main_emoji)
+
+    async def _refresh_starboard_display(self, guild_id, original_msg_id,
+                                         source_channel_id, main_emoji):
+        """Recount a tracked message and re-render its starboard post.
+
+        Shared by the physical and proxy reaction-remove paths."""
+        lock = self.locks.get(guild_id)
+        if lock is None:
+            self.locks[guild_id] = lock = asyncio.Lock()
+        async with lock:
+            try:
                 try:
-                    try:
-                        channel = await self._resolve_channel(payload.channel_id)
-                    except discord.NotFound:
-                        logger.warning(f'Reaction remove: channel {payload.channel_id} not found')
-                        return
-                    emoji_family = cf_common.user_db.get_emoji_family(payload.guild_id, main_emoji)
-                    count = cf_common.user_db.get_merged_reactor_count(payload.message_id, emoji_family)
-                    message = await channel.fetch_message(payload.message_id)
-                    cf_common.user_db.update_starboard_author_and_count(
-                        payload.message_id, main_emoji, str(message.author.id), count
-                    )
-                    logger.info(f'Updated star count for msg={payload.message_id} emoji={main_emoji} '
-                                f'author={message.author.id} new_count={count}')
-                    await self._update_starboard_message(
-                        payload.guild_id, payload.message_id, main_emoji, count,
-                        original_message=message,
-                    )
+                    channel = await self._resolve_channel(source_channel_id)
                 except discord.NotFound:
-                    logger.warning(f'Reaction remove: message {payload.message_id} not found '
-                                   f'(may have been deleted)')
-                except Exception as e:
-                    logger.warning(f'Failed to update star count on reaction remove for '
-                                   f'msg={payload.message_id}: {e}', exc_info=True)
+                    logger.warning(f'Reaction remove: channel {source_channel_id} not found')
+                    return
+                emoji_family = cf_common.user_db.get_emoji_family(guild_id, main_emoji)
+                count = cf_common.user_db.get_merged_reactor_count(original_msg_id, emoji_family)
+                message = await channel.fetch_message(original_msg_id)
+                cf_common.user_db.update_starboard_author_and_count(
+                    original_msg_id, main_emoji, str(message.author.id), count
+                )
+                logger.info(f'Updated star count for msg={original_msg_id} emoji={main_emoji} '
+                            f'author={message.author.id} new_count={count}')
+                await self._update_starboard_message(
+                    guild_id, original_msg_id, main_emoji, count,
+                    original_message=message,
+                )
+            except discord.NotFound:
+                logger.warning(f'Reaction remove: message {original_msg_id} not found '
+                               f'(may have been deleted)')
+            except Exception as e:
+                logger.warning(f'Failed to update star count on reaction remove for '
+                               f'msg={original_msg_id}: {e}', exc_info=True)
 
     @staticmethod
     def _handle_message_delete(payload):
@@ -251,11 +278,14 @@ class CoreMixin:
                            f'original={original_msg_id}: {e}')
 
     async def check_and_add_to_starboard(self, starboard_channel_id, threshold, color,
-                                          emoji_str, payload, raw_emoji=None):
+                                          emoji_str, payload, raw_emoji=None,
+                                          record_reactor=True):
         """Check if a message meets the starboard threshold and post/update it.
 
         emoji_str is the main emoji. raw_emoji is the actual emoji the user reacted with
         (may be an alias). If raw_emoji is None, it defaults to emoji_str.
+        record_reactor=False skips storing the payload's reactor row — used by
+        the proxy path, which has already stored it as a proxy reactor.
         """
         if raw_emoji is None:
             raw_emoji = emoji_str
@@ -278,21 +308,27 @@ class CoreMixin:
                     and len(message.embeds) == 0 and not snapshots)):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')
 
-        # Track the reactor under the raw emoji they actually used
-        cf_common.user_db.add_reactor(message.id, raw_emoji, payload.user_id)
+        if record_reactor:
+            # Track the reactor under the raw emoji they actually used
+            cf_common.user_db.add_reactor(message.id, raw_emoji, payload.user_id)
 
-        # Count = union of unique reactors across main + all aliases
+        # Count = union of unique reactors (original message + starboard posts)
+        # across main + all aliases
         emoji_family = cf_common.user_db.get_emoji_family(payload.guild_id, emoji_str)
         reaction_count = cf_common.user_db.get_merged_reactor_count(message.id, emoji_family)
 
         # Self-healing: if Discord shows more reactions than the DB knows about
         # (e.g. reactions added while the bot had a bug), sync from Discord.
+        # Discord's counts only cover reactions physically on this message, so
+        # compare against the physical pool — proxy reactors live elsewhere.
         emoji_family_set = set(emoji_family)
         discord_count = sum(r.count for r in message.reactions
                             if _emoji_str(r) in emoji_family_set)
-        if discord_count > reaction_count:
+        physical_count = cf_common.user_db.get_merged_physical_reactor_count(
+            message.id, emoji_family)
+        if discord_count > physical_count:
             logger.info(f'Reactor drift on new msg={message.id} emoji={emoji_str}: '
-                        f'db_count={reaction_count} discord_count={discord_count}, resyncing')
+                        f'db_count={physical_count} discord_count={discord_count}, resyncing')
             reaction_count = await self._resync_reactors(message, emoji_family)
 
         logger.debug(f'Message {message.id}: {emoji_str} (family={emoji_family}) '
@@ -314,14 +350,18 @@ class CoreMixin:
             reaction_count = cf_common.user_db.get_merged_reactor_count(message.id, emoji_family)
             already_exists = cf_common.user_db.check_exists_starboard_message_v1(message.id, emoji_str)
             if already_exists:
-                # Self-healing: if DB count exceeds visible Discord reactions,
-                # resync reactors from Discord to purge ghost entries.
+                # Self-healing: if the physical DB count exceeds visible Discord
+                # reactions, resync from Discord to purge ghost entries.  Proxy
+                # reactors are excluded — they legitimately exceed what is
+                # visible on the original message.
                 emoji_family_set = set(emoji_family)
                 discord_count = sum(r.count for r in message.reactions
                                     if _emoji_str(r) in emoji_family_set)
-                if reaction_count > discord_count:
+                physical_count = cf_common.user_db.get_merged_physical_reactor_count(
+                    message.id, emoji_family)
+                if physical_count > discord_count:
                     logger.info(f'Reactor drift detected for msg={message.id} emoji={emoji_str}: '
-                                f'db_count={reaction_count} discord_count={discord_count}, resyncing')
+                                f'db_count={physical_count} discord_count={discord_count}, resyncing')
                     reaction_count = await self._resync_reactors(message, emoji_family)
                 cf_common.user_db.update_starboard_author_and_count(
                     message.id, emoji_str, str(message.author.id), reaction_count
@@ -348,13 +388,15 @@ class CoreMixin:
                 author_id=str(message.author.id),
                 channel_id=str(channel.id)
             )
-            cf_common.user_db.update_starboard_star_count(message.id, emoji_str, reaction_count)
             # Collect all current reactors for each emoji in the family
             for r in message.reactions:
                 r_emoji = _emoji_str(r)
                 if r_emoji in emoji_family:
                     user_ids = [str(user.id) async for user in r.users()]
                     cf_common.user_db.bulk_add_reactors(message.id, r_emoji, user_ids)
+            # Count update runs after reactor collection so the sticky
+            # narcissus hook sees a self-react that predates the post.
+            cf_common.user_db.update_starboard_star_count(message.id, emoji_str, reaction_count)
             logger.info(f'NEW starboard entry: original_msg={message.id} starboard_msg={starboard_message.id} '
                         f'guild={guild.id} emoji={emoji_str} author={message.author} ({message.author.id}) '
                         f'channel={channel.id} count={reaction_count} '
@@ -376,6 +418,13 @@ class CoreMixin:
                 return val
         return 0
 
+    @staticmethod
+    def _row_suffix(row):
+        """Suffix for rows carrying an `unreacted` column (narcissus): how
+        many sticky self-stars had their reaction sneakily removed."""
+        unreacted = getattr(row, 'unreacted', None)
+        return f' ({unreacted} unreacted)' if unreacted else ''
+
     def _get_personal_rank_line(self, ctx, ranked, unit):
         """Get the invoking user's rank as a string for embedding. `ranked`
         is the output of `ranking.rank_items` — `(rank, row)` pairs in display
@@ -384,7 +433,8 @@ class CoreMixin:
         for rank, row in ranked:
             if self._get_user_id(row) == user_id_str:
                 count = self._get_count(row)
-                return f'\nYour rank: **#{rank}** with **{count}** {unit}'
+                return (f'\nYour rank: **#{rank}** with **{count}** {unit}'
+                        f'{self._row_suffix(row)}')
         return '\nYou are not on this leaderboard yet.'
 
     def _make_leaderboard_pages(self, ctx, rows, emoji, title, unit):
@@ -404,7 +454,7 @@ class CoreMixin:
                 count = self._get_count(row)
                 member = ctx.guild.get_member(int(user_id))
                 name = member.mention if member else f'<@{user_id}>'
-                lines.append(f'**#{rank}** {name} — {count} {unit}')
+                lines.append(f'**#{rank}** {name} — {count} {unit}{self._row_suffix(row)}')
             lines.append(personal)
             embed = discord.Embed(
                 title=f'{emoji} {title}',

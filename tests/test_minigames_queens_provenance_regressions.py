@@ -48,7 +48,7 @@ def _enable_and_link(db, *, guild_id=1, user_id=999, channel_id=10,
     db.set_guild_config(guild_id, 'queens', '1')
     db.set_minigame_channel(guild_id, 'queens', channel_id)
     db.set_minigame_player_link(
-        guild_id, 'queens', user_id, name, normalize_queens_name(name),
+        guild_id, 'linkedin', user_id, name, normalize_queens_name(name),
         None, 1.0, user_id)
 
 
@@ -248,28 +248,28 @@ def test_moderator_override_survives_optout_identity_round_trip_and_correction(
     guild = _FakeGuild(100, members=[alice, moderator])
     db.set_guild_config(100, 'queens', '1')
     db.set_minigame_player_link(
-        100, 'queens', alice.id, _X_NAME, _X_NORM, None, 1.0, moderator.id)
+        100, 'linkedin', alice.id, _X_NAME, _X_NORM, None, 1.0, moderator.id)
     cog = Minigames(bot=None)
 
-    asyncio.run(cog._cmd_queens_optout(_ctx(guild, alice, 200)))
+    asyncio.run(cog._cmd_queens_optout(_ctx(guild, alice, 200), QUEENS_GAME))
     cog._save_queens_external_result(
-        100, 200, _entry(_X_NAME, 5), '2026-06-08', 'first')
+        100, QUEENS_GAME, 200, _entry(_X_NAME, 5), '2026-06-08', 'first')
     moderator_ctx = _ctx(guild, moderator, 200)
     asyncio.run(cog._cmd_queens_set_result_rating(
-        moderator_ctx, f'{_X_NAME} 2026-06-08', is_rated=True))
+        moderator_ctx, QUEENS_GAME, f'{_X_NAME} 2026-06-08', is_rated=True))
     initial = db.get_minigame_unresolved_results_for_name(
         100, 'queens', _X_NORM)[0]
     assert (initial.is_rated, initial.rating_override) == (1, 1)
     first_stored_at = initial.stored_at
 
     asyncio.run(cog._cmd_queens_set(
-        moderator_ctx, alice, 'Identity Y'))
+        moderator_ctx, QUEENS_GAME, alice, 'Identity Y'))
     asyncio.run(cog._cmd_queens_set(
-        moderator_ctx, alice, _X_NAME))
+        moderator_ctx, QUEENS_GAME, alice, _X_NAME))
     cog._save_queens_external_result(
-        100, 200, _entry(_X_NAME, 4), '2026-06-08', 'corrected')
+        100, QUEENS_GAME, 200, _entry(_X_NAME, 4), '2026-06-08', 'corrected')
     cog._sync_queens_materialized_results(
-        100, migrate_legacy=False)
+        100, QUEENS_GAME, migrate_legacy=False)
     corrected = db.get_minigame_unresolved_results_for_name(
         100, 'queens', _X_NORM)[0]
 
@@ -292,15 +292,15 @@ def test_stale_former_owner_optout_does_not_unrate_current_owner_import(
     guild = _FakeGuild(100, members=[former, current])
     db.set_guild_config(100, 'queens', '1')
     db.set_minigame_player_link(
-        100, 'queens', former.id, _X_NAME, _X_NORM, None, 1.0, former.id)
+        100, 'linkedin', former.id, _X_NAME, _X_NORM, None, 1.0, former.id)
     cog = Minigames(bot=None)
 
     former_ctx = _ctx(guild, former, 200)
-    asyncio.run(cog._cmd_queens_optout(former_ctx))
-    asyncio.run(cog._cmd_queens_unregister(former_ctx, None))
+    asyncio.run(cog._cmd_queens_optout(former_ctx, QUEENS_GAME))
+    asyncio.run(cog._cmd_queens_unregister(former_ctx, QUEENS_GAME, None))
     current_ctx = _ctx(guild, current, 200)
     asyncio.run(cog._cmd_queens_register(
-        current_ctx, current, _X_NAME))
+        current_ctx, QUEENS_GAME, current, _X_NAME))
 
     # Registration normally clears this stale identity snapshot. Reintroduce
     # the state an older database or interrupted transfer can contain: the
@@ -315,9 +315,9 @@ def test_stale_former_owner_optout_does_not_unrate_current_owner_import(
         100, 'queens', current.id) is False
 
     preview = cog._make_queens_import_preview(
-        current_ctx, '2026-06-08',
+        current_ctx, QUEENS_GAME, '2026-06-08',
         'You\nNo hints & no mistakes!\n0:05\n')
-    saved = cog._save_queens_import(current_ctx, preview)
+    saved = cog._save_queens_import(current_ctx, QUEENS_GAME, preview)
 
     assert saved.resolved == 1
     source = db.get_minigame_unresolved_results_for_name(

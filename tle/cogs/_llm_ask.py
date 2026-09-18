@@ -1,4 +1,4 @@
-"""Shared, guarded request flow for ``;llm`` and literal ``@grok``."""
+"""Shared guarded request flow for commands and literal provider triggers."""
 from datetime import datetime, timezone
 import logging
 import secrets
@@ -12,9 +12,13 @@ from tle.util import discord_common, gemini_api, llm_models, xai_api
 from tle.cogs import _llm_access as llm_access
 from tle.cogs import _llm_accounting as accounting
 from tle.cogs import _llm_context as llm_context
+from tle.cogs import _llm_entrypoints as llm_entrypoints
 from tle.cogs import _llm_format as llm_format
 from tle.cogs import _llm_history as llm_history
+from tle.cogs import _llm_identity as llm_identity
+from tle.cogs import _llm_limits as llm_limits
 from tle.cogs import _llm_pipeline as llm_pipeline
+from tle.cogs import _llm_profiles as llm_profiles
 from tle.cogs._llm_failures import (
     describe_gemini_failure, describe_xai_failure,
 )
@@ -23,6 +27,7 @@ from tle.cogs._llm_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+split_provider = llm_entrypoints.split_provider
 
 
 class LlmNotReadyError(commands.CommandError):
@@ -30,10 +35,6 @@ class LlmNotReadyError(commands.CommandError):
 
 
 class _ContextDisabledError(Exception):
-    pass
-
-
-class _GrokGuardError(Exception):
     pass
 
 
@@ -50,29 +51,19 @@ def today():
     return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 
-def split_provider(question):
-    """Return ``(provider, question)`` for an exact leading ``+grok``."""
-    if question is None:
-        return 'gemini', None
-    parts = question.strip().split(maxsplit=1)
-    if parts and parts[0].casefold() == '+grok':
-        return 'grok', (parts[1].strip() if len(parts) > 1 else None)
-    return 'gemini', question
-
-
 async def ask(cog, ctx, question):
     if getattr(ctx, 'guild', None) is None:
         await ctx.send(embed=discord_common.embed_alert(
             'LLM requests are only available inside a server.'))
         return
-    provider, question = split_provider(question)
+    provider, question, explicit = llm_entrypoints.parse_provider(question)
     if provider == 'grok':
         await ask_grok(cog, ctx, question)
     else:
-        await ask_gemini(cog, ctx, question)
+        await ask_gemini(cog, ctx, question, explicit=explicit)
 
 
-async def ask_gemini(cog, ctx, question):
+async def ask_gemini(cog, ctx, question, *, explicit=False):
     if not await llm_access.allow_request_or_notify(db(), ctx):
         return
     referenced = await cog._resolve_reference(ctx)
@@ -84,7 +75,11 @@ async def ask_gemini(cog, ctx, question):
     question = controls.question
     if (question is None and referenced is None
             and controls.mode != llm_context.MODE_CONTEXT):
-        await ctx.send_help(ctx.command)
+        if explicit:
+            await ctx.send(embed=discord_common.embed_alert(
+                llm_entrypoints.usage('gemini')))
+        else:
+            await ctx.send_help(ctx.command)
         return
 
     try:
@@ -183,9 +178,9 @@ async def ask_gemini(cog, ctx, question):
     footer = llm_pipeline.describe_mode(
         mode, window, explicit=explicit,
         has_reference=referenced is not None)
-    for embed in llm_format.build_answer_embeds(
-            answer, tier_note, author=ctx.author, footer_extra=footer):
-        await ctx.send(embed=embed)
+    embeds = llm_format.build_answer_embeds(
+        answer, tier_note, author=ctx.author, footer_extra=footer)
+    await _send_answer_embeds(ctx, embeds)
 
 
 async def ask_grok(cog, ctx, question):
@@ -201,7 +196,7 @@ async def ask_grok(cog, ctx, question):
     if (question is None and referenced is None
             and controls.mode != llm_context.MODE_CONTEXT):
         await ctx.send(embed=discord_common.embed_alert(
-            'Usage: `@grok <question>` or `;llm +grok <question>`.'))
+            llm_entrypoints.usage('grok')))
         return
     if not await _valid_question(question, ctx):
         return
@@ -231,27 +226,40 @@ async def ask_grok(cog, ctx, question):
     async def operation():
         nonlocal mode, window, lease, reservation_id
         llm_access.raise_if_request_blocked(db(), ctx)
+        user_rate = llm_limits.resolve(db(), ctx.guild.id)
         reservation_id = db().llm_reserve_xai_request(
-            ctx.author.id, user_limit=constants.XAI_USER_RATE_LIMIT,
-            window_seconds=constants.XAI_USER_RATE_WINDOW_SECONDS,
+            ctx.author.id, user_limit=max(1, user_rate.requests),
+            window_seconds=user_rate.window_seconds,
             daily_limit=constants.XAI_DAILY_REQUEST_LIMIT,
             guild_id=ctx.guild.id, model=constants.XAI_MODELS[0],
             reserved_microusd=accounting.xai_reservation_microusd(),
             daily_budget_microusd=accounting.daily_budget_microusd(),
-            return_id=True)
+            return_id=True,
+            enforce_user_limit=(
+                user_rate.enabled and not cog._is_privileged(ctx.author)))
         if isinstance(reservation_id, str):
-            raise _GrokGuardError
+            raise llm_limits.GrokGuardError(
+                str(reservation_id),
+                getattr(reservation_id, 'retry_at', None), user_rate)
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'xai', pool, question, referenced, attachments,
             controls, router_stats)
+        profiles = llm_profiles.build_profiles(
+            db(), ctx.guild.id, ctx.author, [referenced, *window],
+            focused=referenced)
+        routing = ''
+        if referenced is not None or window:
+            routing = llm_identity.build_request_routing(
+                ctx.author, ctx.message, referenced)
         prompt = llm_pipeline.build_prompt(
-            question, referenced, window, mode=mode)
+            question, referenced, window, mode=mode, profiles=profiles,
+            routing=routing, requester_id=ctx.author.id)
         images = await llm_context.read_images(attachments)
         answer, lease = await xai_api.complete(
             pool, prompt, images=images,
             system_instruction=llm_context.GROK_SYSTEM_INSTRUCTION,
             max_output_tokens=constants.XAI_MAX_OUTPUT_TOKENS,
-            reasoning_effort='none', session=cog._get_session(),
+            reasoning_effort='low', session=cog._get_session(),
             stats=answer_stats, models=constants.XAI_MODELS)
         return answer, explicit
 
@@ -262,12 +270,12 @@ async def ask_grok(cog, ctx, question):
     except llm_access.LlmAccessDeniedError as err:
         await ctx.send(embed=discord_common.embed_alert(str(err)))
         return
-    except _GrokGuardError:
+    except llm_limits.GrokGuardError as err:
         _record(cog, ctx, 'xai', 'guarded', started,
                 constants.XAI_MODELS[0], router_stats, answer_stats,
                 mode, window)
         await ctx.send(embed=discord_common.embed_alert(
-            'Grok is taking a breather right now. Try again later.'))
+            llm_limits.guard_message(err)))
         return
     except (RequestBusyError, ProviderQueueError, RequestDeadlineError) as err:
         await _finalize_xai(reservation_id, router_stats, answer_stats,
@@ -312,9 +320,19 @@ async def ask_grok(cog, ctx, question):
     footer = llm_pipeline.describe_mode(
         mode, window, explicit=explicit,
         has_reference=referenced is not None)
-    for embed in llm_format.build_answer_embeds(
-            answer, lease.model, author=ctx.author, footer_extra=footer):
-        await ctx.send(embed=embed)
+    embeds = llm_format.build_answer_embeds(
+        answer, lease.model, author=ctx.author, footer_extra=footer)
+    await _send_answer_embeds(ctx, embeds)
+
+
+async def _send_answer_embeds(ctx, embeds):
+    """Reply with the first answer page; send later pages without references."""
+    for index, embed in enumerate(embeds):
+        if index == 0:
+            await ctx.send(
+                embed=embed, reference=ctx.message, mention_author=False)
+        else:
+            await ctx.send(embed=embed)
 
 
 async def _prepare_context(cog, ctx, provider, pool, question, referenced,

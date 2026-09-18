@@ -6,7 +6,7 @@ from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_pipeline as llm_pipeline
 from tests.llm_test_utils import FakeAttachment, run
-from tests.test_llm_history import FakeGatherCtx, FakeHistoryChannel, HistMessage
+from tests.llm_test_utils import FakeGatherCtx, FakeHistoryChannel, HistMessage
 
 
 def _message(content, offset, message_id, author_id=1, is_bot=False,

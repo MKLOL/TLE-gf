@@ -265,20 +265,20 @@ class TestDbMixin:
 
     def test_minigame_player_link_crud_and_unique_name(self, db):
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Robert Kocharyan',
+            100, 'linkedin', 300, 'Robert Kocharyan',
             normalize_queens_name('Robert Kocharyan'),
             'https://www.linkedin.com/in/robert/', 1.0, 999)
-        row = db.get_minigame_player_link(100, 'queens', 300)
+        row = db.get_minigame_player_link(100, 'linkedin', 300)
         assert row.external_name == 'Robert Kocharyan'
         assert row.external_url == 'https://www.linkedin.com/in/robert/'
 
         by_name = db.get_minigame_player_link_by_name(
-            100, 'queens', normalize_queens_name('  robert   kocharyan '))
+            100, 'linkedin', normalize_queens_name('  robert   kocharyan '))
         assert by_name.user_id == '300'
 
         with pytest.raises(sqlite3.IntegrityError):
             db.set_minigame_player_link(
-                100, 'queens', 301, 'Robert   Kocharyan',
+                100, 'linkedin', 301, 'Robert   Kocharyan',
                 normalize_queens_name('Robert   Kocharyan'),
                 None, 2.0, 999)
 

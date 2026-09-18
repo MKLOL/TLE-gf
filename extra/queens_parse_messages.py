@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Parse LinkedIn Queens score messages from a Basic LinkedIn data export.
+"""Parse LinkedIn Queens/Tango score messages from a Basic LinkedIn data export.
 
 Reads ``messages.csv`` from a LinkedIn "Basic" data export, finds rows whose
-body matches the Queens score-share format, and writes a clean JSON file
-containing **only** the score data: sender name, sender profile URL, puzzle
-number, time, badges, and the puzzle date.
+body matches the chosen game's score-share format, and writes a clean JSON
+file containing **only** the score data: sender name, sender profile URL,
+puzzle number, time, badges, and the puzzle date — the input for
+``;queens backfill`` / ``;tango backfill``.
 
 Nothing else is emitted — no message bodies, no recipient lists, no DM
 contents, no subject lines.  Safe to share / upload because the only thing
-in the output is what would appear on a Queens leaderboard anyway.
+in the output is what would appear on a LinkedIn leaderboard anyway.
 
 Usage:
     python extra/queens_parse_messages.py /path/to/messages.csv [output.json]
     python extra/queens_parse_messages.py /path/to/messages.csv -o queens.json
+    python extra/queens_parse_messages.py /path/to/messages.csv --game tango
     python extra/queens_parse_messages.py /path/to/messages.csv --no-dedupe
 """
 import argparse
@@ -24,24 +26,38 @@ from datetime import date, timedelta
 from pathlib import Path
 
 
-# Body looks like:
-#   Queens #771 | 0:15
-#   Queens #770 | 0:05 with no mistakes & no hints
-#   Queens #769 | 0:06 with no hints
-# Anchored at start because we only want the first / leading line; the body
-# also contains a trailing "lnkd.in/queens." link we don't care about.
-_QUEENS_LINE_RE = re.compile(
-    r'^\s*Queens\s+#(\d+)\s*\|\s*(\d{1,2}):(\d{2})([^\n]*)',
-    re.IGNORECASE | re.MULTILINE)
-
-# Same anchor the cog uses (tle/cogs/minigames.py).  Keep these in sync if
-# LinkedIn ever resets puzzle numbering.
-_ANCHOR_DATE = date(2026, 6, 8)
-_ANCHOR_NUMBER = 769
+# One entry per LinkedIn game.  The anchors are the same ones the cog uses
+# (``LinkedInDef`` in tle/cogs/_minigame_queens.py / _minigame_tango.py) —
+# keep them in sync if LinkedIn ever resets puzzle numbering.
+_GAMES = {
+    'queens': {'word': 'Queens',
+               'anchor_date': date(2026, 6, 8), 'anchor_number': 769},
+    'tango': {'word': 'Tango',
+              'anchor_date': date(2026, 9, 4), 'anchor_number': 697},
+}
 
 
-def _puzzle_date_for(puzzle_number):
-    return _ANCHOR_DATE + timedelta(days=int(puzzle_number) - _ANCHOR_NUMBER)
+def _line_re(word):
+    """Body looks like one of::
+
+        Queens #771 | 0:15
+        Queens #770 | 0:05 with no mistakes & no hints
+        Tango #695
+        0:08 🌗
+
+    Anchored at start because we only want the first / leading line; the
+    time is either after a ``|`` on the same line or wrapped onto the next.
+    The body also contains a trailing ``lnkd.in/<game>.`` link we ignore.
+    """
+    return re.compile(
+        rf'^\s*{word}\s+#(\d+)\s*(?:\|\s*|\n\s*)(\d{{1,2}}):(\d{{2}})([^\n]*)',
+        re.IGNORECASE | re.MULTILINE)
+
+
+def _puzzle_date_for(puzzle_number, game):
+    spec = _GAMES[game]
+    return spec['anchor_date'] + timedelta(
+        days=int(puzzle_number) - spec['anchor_number'])
 
 
 def _parse_badges(trailing):
@@ -49,8 +65,10 @@ def _parse_badges(trailing):
     return ('no hints' in lowered, 'no mistakes' in lowered)
 
 
-def parse_messages_csv(path):
-    """Yield one dict per Queens score message found in ``path``."""
+def parse_messages_csv(path, game='queens'):
+    """Yield one dict per score message for ``game`` found in ``path``."""
+    word = _GAMES[game]['word']
+    line_re = _line_re(word)
     with open(path, newline='', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         # Tolerate different column headers across export versions.
@@ -72,9 +90,9 @@ def parse_messages_csv(path):
             'DATE')
         for row in reader:
             content = (row.get(content_col) or '').strip()
-            if 'Queens' not in content:
+            if word.lower() not in content.lower():
                 continue
-            m = _QUEENS_LINE_RE.search(content)
+            m = line_re.search(content)
             if not m:
                 continue
             puzzle_num = int(m.group(1))
@@ -86,7 +104,8 @@ def parse_messages_csv(path):
             if not sender_name:
                 continue
             try:
-                puzzle_date_iso = _puzzle_date_for(puzzle_num).isoformat()
+                puzzle_date_iso = _puzzle_date_for(
+                    puzzle_num, game).isoformat()
             except (OverflowError, ValueError):
                 puzzle_date_iso = None
             yield {
@@ -133,14 +152,17 @@ def main(argv=None):
         'messages',
         help='Path to messages.csv from a LinkedIn "Basic" data export.')
     p.add_argument(
-        'output', nargs='?', default='queens_history.json',
-        help='Output JSON path (default: queens_history.json).')
+        'output', nargs='?', default=None,
+        help='Output JSON path (default: <game>_history.json).')
+    p.add_argument(
+        '--game', choices=sorted(_GAMES), default='queens',
+        help='Which LinkedIn game to extract (default: queens).')
     p.add_argument(
         '-o', '--output', dest='output_flag', default=None,
         help='Alternative way to specify the output path.')
     p.add_argument(
         '--no-dedupe', action='store_true',
-        help='Emit every Queens-message row, including duplicates from '
+        help='Emit every score-message row, including duplicates from '
              'group-chat cross-posts.')
     p.add_argument(
         '--respect-badges', action='store_true',
@@ -150,13 +172,15 @@ def main(argv=None):
              'messages omit the suffix even for clean solves.')
     args = p.parse_args(argv)
 
-    output_path = Path(args.output_flag or args.output).expanduser().resolve()
+    output_path = Path(
+        args.output_flag or args.output or f'{args.game}_history.json'
+    ).expanduser().resolve()
     msgs_path = Path(args.messages).expanduser().resolve()
     if not msgs_path.exists():
         print(f'No such file: {msgs_path}', file=sys.stderr)
         return 1
 
-    results = list(parse_messages_csv(msgs_path))
+    results = list(parse_messages_csv(msgs_path, args.game))
     raw_count = len(results)
     if not args.respect_badges:
         for r in results:
@@ -168,7 +192,8 @@ def main(argv=None):
     results.sort(key=lambda r: (r['puzzle_number'], r['time_seconds']))
 
     print(f'Scanned {msgs_path.name}', file=sys.stderr)
-    print(f'  Queens-message rows: {raw_count}', file=sys.stderr)
+    print(f'  {_GAMES[args.game]["word"]}-message rows: {raw_count}',
+          file=sys.stderr)
     if not args.no_dedupe:
         print(f'  After dedupe (best per player/puzzle): {len(results)}',
               file=sys.stderr)

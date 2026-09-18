@@ -22,6 +22,7 @@ from tle.cogs._minigame_common import (
     compute_streak,
     compute_longest_streak,
     compute_top,
+    compute_top_breakdown,
     parse_date_args,
     resolve_scoring,
     strip_codeblock,
@@ -198,6 +199,42 @@ class TestComputation:
             _row(5, 20, '2026-03-27', False, 60, 99, 446),
         ]
         assert compute_top(rows) == [('10', 2), ('20', 1)]
+
+    def test_top_breakdown_splits_solo_and_tied_wins(self):
+        rows = [
+            # Puzzle 445 is shared by 10 and 20; 446 is won outright by 10.
+            _row(1, 10, '2026-03-26', True, 80, number=445),
+            _row(2, 20, '2026-03-26', True, 80, number=445),
+            _row(3, 30, '2026-03-26', True, 90, number=445),
+            _row(4, 10, '2026-03-27', True, 75, number=446),
+            _row(5, 20, '2026-03-27', False, 60, 99, 446),
+        ]
+        assert compute_top_breakdown(rows) == [('10', 1, 1), ('20', 0, 1)]
+
+    def test_top_breakdown_total_matches_compute_top(self):
+        rows = [
+            _row(1, 10, '2026-03-26', True, 80, number=445),
+            _row(2, 20, '2026-03-26', True, 80, number=445),
+            _row(3, 10, '2026-03-27', True, 75, number=446),
+        ]
+        totals = {user_id: wins for user_id, wins in compute_top(rows)}
+        assert {user_id: solo + tied
+                for user_id, solo, tied in compute_top_breakdown(rows)} == totals
+
+    def test_top_breakdown_ranks_solo_wins_above_shared_ones(self):
+        rows = [
+            # 10 wins 445 outright; 20 and 30 share 446 and 447.
+            _row(1, 10, '2026-03-26', True, 60, number=445),
+            _row(2, 20, '2026-03-26', True, 90, number=445),
+            _row(3, 20, '2026-03-27', True, 70, number=446),
+            _row(4, 30, '2026-03-27', True, 70, number=446),
+            _row(5, 20, '2026-03-28', True, 70, number=447),
+            _row(6, 30, '2026-03-28', True, 70, number=447),
+        ]
+        # 20 leads on total (2 vs 1), and 20 outranks 30 on neither solo nor
+        # total, so the user_id tiebreak keeps the order stable.
+        assert compute_top_breakdown(rows) == [
+            ('20', 0, 2), ('30', 0, 2), ('10', 1, 0)]
 
     def test_top_with_custom_is_eligible(self):
         """compute_top with GuessGame-style eligibility: any green counts."""

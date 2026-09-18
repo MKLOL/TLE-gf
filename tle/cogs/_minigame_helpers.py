@@ -55,6 +55,11 @@ def queens_mod_only():
         '_has_queens_mod_access', '_mod_role_error_message')
 
 
+def tango_mod_only():
+    return _game_mod_only(
+        '_has_tango_mod_access', '_tango_mod_role_error_message')
+
+
 def akari_mod_only():
     return _game_mod_only(
         '_has_akari_mod_access', '_akari_mod_role_error_message')

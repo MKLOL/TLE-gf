@@ -34,7 +34,7 @@ class TestWeeklyPerformance:
         slow = _row('b', 1, dt.date(2026, 6, 15), seconds=120)
         assert result_performance(best, best_perfect_time=60) == 1.0
         score = result_performance(slow, best_perfect_time=60)
-        assert math.isclose(score, 0.5 + 0.5 * math.exp(-0.7))
+        assert math.isclose(score, 0.5 + 0.5 * math.exp(-0.8))
         assert score > 0.5
 
     def test_time_breaks_equal_accuracy_without_crossing_accuracy_bands(self):
@@ -56,7 +56,9 @@ class TestWeeklyPerformance:
         values = [difficulty_weight(level) for level in range(1, 6)]
         assert values == sorted(values)
         assert values[2] == 1.0
-        assert math.isclose(values[-1] / values[0], 2.0)
+        assert all(math.isclose(right / left, 2.0 ** 0.35)
+                   for left, right in zip(values, values[1:]))
+        assert math.isclose(values[-1] / values[0], 2.0 ** 1.4)
 
 
 class TestWeeklyScoring:
@@ -101,6 +103,8 @@ class TestWeeklyScoring:
         standings = score_week([
             _row('10', 526, monday, seconds=60),
             _row('20', 526, monday, seconds=120),
+            _row('10', 527, monday + dt.timedelta(days=1)),
+            _row('10', 527, monday + dt.timedelta(days=1)),
         ])
         guild = _FakeGuild(1, members=[
             _FakeDiscordMember(10, 'Alice'),
@@ -109,6 +113,8 @@ class TestWeeklyScoring:
         rows = _akari_weekly_table_rows(guild, standings)
         assert rows[0][1] == 'Alice'
         assert rows[0][3] == round(standings[0].score * 1000)
+        assert rows[0][4] == 2
+        assert rows[1][4] == 1
 
 
 class TestWeeklyRatings:
@@ -145,7 +151,7 @@ class TestDifficultyCacheDb:
 
 
 class TestWeeklyCommand:
-    def test_weekly_flag_sends_rating_and_current_score_tables(
+    def test_weekly_and_current_flags_send_separate_tables(
             self, db, monkeypatch):
         from tle.cogs import minigames as minigames_module
         from tle.cogs._minigame_akari import expected_puzzle_number
@@ -189,11 +195,15 @@ class TestWeeklyCommand:
         ctx = SimpleNamespace(guild=_FakeGuild(1), send=send)
         asyncio.run(cog._cmd_akari_ratings(ctx, weekly=True))
 
-        assert len(sent) == 2
+        assert len(sent) == 1
         assert sent[0]['file'][0] == 'ratings'
-        assert 'weekly preview' in sent[0]['file'][1]
-        assert sent[1]['file'][0] == 'weekly'
-        assert sent[1]['file'][2] == ['20', '10']
+        assert sent[0]['file'][1] == 'Daily Akari Weekly Ratings'
+
+        sent.clear()
+        asyncio.run(cog._cmd_akari_ratings(ctx, current=True))
+        assert len(sent) == 1
+        assert sent[0]['file'][0] == 'weekly'
+        assert sent[0]['file'][2] == ['20', '10']
 
     def test_public_weekly_scores_hide_opted_out_players(
             self, db, monkeypatch):
@@ -240,7 +250,7 @@ class TestWeeklyCommand:
 
         ctx = SimpleNamespace(guild=_FakeGuild(1), send=send)
 
-        asyncio.run(cog._cmd_akari_ratings(ctx, weekly=True))
+        asyncio.run(cog._cmd_akari_ratings(ctx, current=True))
         public_scores = [k['file'] for k in weekly_sent
                          if k.get('file', (None,))[0] == 'weekly']
         assert public_scores == [('weekly', ['20'])]
@@ -248,7 +258,7 @@ class TestWeeklyCommand:
         # The admin debug board is an explicit "show everyone" view and must
         # still include the opted-out player.
         weekly_sent.clear()
-        asyncio.run(cog._cmd_akari_ratings_debug(ctx, weekly=True))
+        asyncio.run(cog._cmd_akari_ratings_debug(ctx, current=True))
         debug_scores = [k['file'] for k in weekly_sent
                         if k.get('file', (None,))[0] == 'weekly']
         assert debug_scores == [('weekly', ['20', '10'])]

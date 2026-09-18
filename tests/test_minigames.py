@@ -303,9 +303,14 @@ class TestRatingDefinitions:
 
         assert QUEENS_GAME.rating is not None
         assert QUEENS_GAME.rating.rank_fn is rank_queens_participants
-        assert QUEENS_GAME.rating.decay_base == 0.0
-        assert QUEENS_GAME.rating.decay_max == 0.0
-        assert QUEENS_GAME.rating.decay_grace == 0
+        assert QUEENS_GAME.rating.decay_base == constants.QUEENS_DECAY_BASE
+        assert QUEENS_GAME.rating.decay_max == constants.QUEENS_DECAY_MAX
+        assert QUEENS_GAME.rating.decay_grace == constants.QUEENS_DECAY_GRACE
+        assert callable(QUEENS_GAME.rating.current_puzzle_number_fn)
+        # Queens now decays exactly like Akari.
+        assert QUEENS_GAME.rating.decay_base == constants.AKARI_DECAY_BASE
+        assert QUEENS_GAME.rating.decay_max == constants.AKARI_DECAY_MAX
+        assert QUEENS_GAME.rating.decay_grace == constants.AKARI_DECAY_GRACE
 
         assert GUESSGAME_GAME.rating is None
 

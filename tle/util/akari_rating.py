@@ -34,19 +34,22 @@ import math
 from collections import namedtuple
 
 from tle import constants
-# Rating bands (display/graph tiers) live in akari_ranks to keep this module
-# under the 500-line limit. Re-exported so akari_rating.<name> still resolves.
+# Rating bands (display/graph tiers) live in akari_ranks, and the seed/search
+# primitives plus the displayed performance in _akari_performance, to keep this
+# module under the 500-line limit. Both are re-exported so
+# akari_rating.<name> still resolves.
 from tle.util.akari_ranks import _AkariRank, AKARI_RANKS, rank_for_rating
-
-
-# Codeforces logistic scale: a 400-point gap ⇒ ~10x odds.
-_RATING_SCALE = 400.0
-# Bounds and iteration count for the needed-rating binary search.  25 bisections
-# over [1, 8000] resolve to < 3e-4 — far finer than any rating difference, while
-# keeping a full-history replay cheap enough to run on every result change.
-_SEARCH_LO = 1.0
-_SEARCH_HI = 8000.0
-_SEARCH_ITERS = 25
+from tle.util._akari_performance import (  # noqa: F401
+    _RATING_SCALE,
+    _SEARCH_HI,
+    _SEARCH_ITERS,
+    _SEARCH_LO,
+    _expected_losses,
+    _expected_seed,
+    _needed_rating,
+    _pow10,
+    event_performance,
+)
 
 
 # Per-user result of a full replay.  ``rating``/``peak``/``last_delta`` are floats
@@ -67,13 +70,10 @@ RatingState = namedtuple(
 # ``rating``.  Pass ``include_decay_in_history=True`` to also get one point per
 # absent day, with ``is_decay=True`` and ``delta`` set to that day's decay
 # amount.
-# ``performance`` is the Codeforces-style per-contest performance: ``2*need -
-# rating``, where ``need`` is the geometric-mean target ``compute_round``
-# binary-searches for.  The substitution comes from the assumption that ``need``
-# is the arithmetic midpoint between the player's current rating and their
-# performance — i.e. ``need = (rating + performance) / 2``, rearranged.  This
-# matches what CF's ``correct_rating_changes`` recovers from public deltas, and
-# stays bounded for clean wins (the rank-exact definition asymptotes at 1).
+# ``performance`` is the rating at which finishing where you did would have been
+# par — see :func:`~tle.util._akari_performance.event_performance`.  It is a
+# separate inversion from the one that produces ``delta``, so it is identity-free
+# (players who tie print the same number) and finite for a win or a last place.
 # ``None`` for solo days and for decay days (no field → no contest).
 HistoryPoint = namedtuple(
     'HistoryPoint',
@@ -118,53 +118,21 @@ def rank_participants(rows):
     return ranks
 
 
-def _pow10(rating):
-    """``10 ** (rating / 400)`` — precomputed per player so the seed sums below
-    contain no ``pow`` calls (P(b beats a) = x_b / (x_a + x_b) where x = 10^(R/400))."""
-    return 10.0 ** (rating / _RATING_SCALE)
-
-
-def _expected_seed(x_self, pow_others):
-    """Codeforces "seed": the expected rank of a player whose ``_pow10`` is ``x_self``.
-
-    seed = 1 + Σ P(other ranks above me) = 1 + Σ x_other / (x_self + x_other).
-    ``pow_others`` is the list of the *other* players' ``_pow10`` values.
-    Monotonically decreasing in the player's rating.
-    """
-    seed = 1.0
-    for x_other in pow_others:
-        seed += x_other / (x_self + x_other)
-    return seed
-
-
-def _needed_rating(pow_others, target_seed):
-    """Binary-search the rating whose :func:`_expected_seed` equals ``target_seed``.
-
-    The seed decreases as rating rises, so when the seed at ``mid`` is below the
-    target we have overshot and search lower.
-    """
-    lo, hi = _SEARCH_LO, _SEARCH_HI
-    for _ in range(_SEARCH_ITERS):
-        mid = (lo + hi) / 2.0
-        if _expected_seed(_pow10(mid), pow_others) < target_seed:
-            hi = mid
-        else:
-            lo = mid
-    return (lo + hi) / 2.0
-
-
-def compute_round(ratings, ranks, damping=None, needs=None):
+def compute_round(ratings, ranks, damping=None, performances=None):
     """Run one Codeforces rating round and return ``{user_id: delta}``.
 
     ``ratings``: ``{user_id: float}`` pre-contest ratings of the participants.
     ``ranks``:   ``{user_id: int}`` actual ranks (1-based, ties share a rank).
     Returned deltas are already damped; add them to ``ratings`` to advance.
 
-    ``needs`` (optional): if a dict is passed in, it is populated with each
-    user's geometric-mean target rating — the rating that would seed them at
-    ``sqrt(actual_rank * expected_rank)`` — which Codeforces uses as the
-    "performance" of that contest.  We compute this value here anyway to derive
-    the delta, so capturing it costs nothing.
+    ``performances`` (optional): if a dict is passed in, it is populated with
+    each user's displayed event performance — see
+    :func:`~tle.util._akari_performance.event_performance`.  That is a second,
+    independent inversion of the same logistic model, deliberately *not*
+    recovered from the delta: the geometric-mean ``need`` below is a half-step
+    toward the result, and reflecting it back through ``2 * need - rating``
+    leaks the player's own rating into a number that should describe only the
+    result.  The extra binary search runs only when a caller wants history.
 
     Users are processed in a stable sorted order so floating-point summation is
     deterministic regardless of dict insertion order.
@@ -178,14 +146,15 @@ def compute_round(ratings, ranks, damping=None, needs=None):
         return {user: 0.0 for user in users}
 
     pows = {user: _pow10(ratings[user]) for user in users}
+    pow_field = [pows[user] for user in users]
     deltas = {}
     for user in users:
         pow_others = [pows[other] for other in users if other != user]
         seed = _expected_seed(pows[user], pow_others)
         mid_rank = math.sqrt(ranks[user] * seed)
         need = _needed_rating(pow_others, mid_rank)
-        if needs is not None:
-            needs[user] = need
+        if performances is not None:
+            performances[user] = event_performance(pow_field, ranks[user])
         deltas[user] = (need - ratings[user]) / 2.0
 
     # CF correction 1: shift everyone so the field loses a tiny, fixed amount of
@@ -364,24 +333,20 @@ def compute_ratings(rows, start_rating=None, damping=None,
         if len(day_rows) >= 2:
             day_ratings = {user_id: ratings[user_id] for user_id in day_rows}
             ranks = rank_fn(day_rows.values())
-            # When the caller wants history, harvest the geometric-mean "need"
-            # values that compute_round computes anyway, then convert to the
-            # CF-style performance ``2*need - rating``: assuming ``need`` is the
-            # arithmetic midpoint between the user's rating and their performance
-            # (the same implicit assumption CF's UI makes), this is bounded by
-            # the field's spread and matches what ``;plot perf`` displays.
-            round_needs = {} if histories is not None else None
+            # When the caller wants history, have compute_round also invert the
+            # field for each player's displayed performance.
+            round_perfs = {} if histories is not None else None
             deltas = compute_round(
-                day_ratings, ranks, damping=damping, needs=round_needs)
+                day_ratings, ranks, damping=damping,
+                performances=round_perfs)
             for user_id, delta in deltas.items():
                 ratings[user_id] += delta
                 games[user_id] += 1
                 last_delta[user_id] = delta
                 if ratings[user_id] > peak[user_id]:
                     peak[user_id] = ratings[user_id]
-            if round_needs is not None:
-                for user_id, need in round_needs.items():
-                    performances[user_id] = 2.0 * need - day_ratings[user_id]
+            if round_perfs is not None:
+                performances.update(round_perfs)
         else:
             # Solo days produce no contest delta but still record a history point
             # so a lone early result shows up on the user's graph.

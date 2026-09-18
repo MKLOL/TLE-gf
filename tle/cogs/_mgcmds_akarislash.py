@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 
 from tle.cogs._minigame_akari import AKARI_GAME
-from tle.cogs._minigame_helpers import _SlashCtx
+from tle.cogs._minigame_helpers import MinigameCogError, _SlashCtx
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
@@ -88,23 +88,26 @@ class AkariSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='top', description='Show winners leaderboard')
+    @akari_slash.command(name='top', description='Show outright winners leaderboard')
     @app_commands.describe(
         timeframe='Time period filter', mode='Scoring mode',
-        weekdays='Days: mon,wed, weekday, or weekend')
+        weekdays='Days: mon,wed, weekday, or weekend',
+        ties='Also count shared wins, ordered by the combined total')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
     async def slash_akari_top(
         self, interaction: discord.Interaction,
         timeframe: Optional[app_commands.Choice[str]] = None,
         mode: Optional[app_commands.Choice[str]] = None,
         weekdays: Optional[str] = None,
+        ties: bool = False,
     ):
         await interaction.response.defer()
         try:
             await self._cmd_top(
                 _SlashCtx(interaction), AKARI_GAME,
                 *self._slash_choice_args(timeframe, mode),
-                *self._slash_queens_weekday_args(weekdays))
+                *self._slash_queens_weekday_args(weekdays),
+                *(('+ties',) if ties else ()))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -135,19 +138,22 @@ class AkariSlashMixin:
         selector='Puzzle number, #number, or date (defaults to today)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_results(
         self, interaction: discord.Interaction,
         selector: Optional[str] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        time_only: bool = False,
     ):
         await interaction.response.defer()
         args = [selector] if selector else []
         args += self._slash_queens_weekday_args(weekdays)
         args += str(date_filter or '').split()
         args += ['+beta'] if beta else []
+        args += ['+time'] if time_only else []
         try:
             await self._cmd_akari_results(_SlashCtx(interaction), args)
         except Exception as _slash_exc:
@@ -155,19 +161,28 @@ class AkariSlashMixin:
 
     @akari_slash.command(name='ratings', description='Show Akari rating leaderboard')
     @app_commands.describe(
-        weekly='Preview weekly-contest ratings and this week\'s scores',
+        weekly='Show ratings from completed weekly contests',
+        current='Show only this week\'s in-progress standings',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_ratings(self, interaction: discord.Interaction,
                                   weekly: bool = False,
+                                  current: bool = False,
                                   weekdays: Optional[str] = None,
                                   date_filter: Optional[str] = None,
-                                  beta: bool = False):
+                                  beta: bool = False,
+                                  time_only: bool = False):
         await interaction.response.defer()
         try:
+            if weekly and current:
+                raise MinigameCogError(
+                    'Choose either `weekly` or `current`.')
             await self._cmd_akari_ratings(
-                _SlashCtx(interaction), weekly=weekly, beta=beta,
+                _SlashCtx(interaction), weekly=weekly, current=current,
+                beta=beta,
+                time_only=time_only,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter))
         except Exception as _slash_exc:
@@ -180,7 +195,8 @@ class AkariSlashMixin:
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
         recalculate='Recalculate ratings from the filtered result set',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_rating(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
@@ -189,6 +205,7 @@ class AkariSlashMixin:
         date_filter: Optional[str] = None,
         recalculate: Optional[bool] = False,
         beta: bool = False,
+        time_only: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -197,7 +214,8 @@ class AkariSlashMixin:
                 _SlashCtx(interaction), [target], include_decay=decay,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                recalculate=bool(recalculate), beta=beta)
+                recalculate=bool(recalculate), beta=beta,
+                time_only=time_only)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -206,13 +224,15 @@ class AkariSlashMixin:
         member='Player (defaults to you)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_performance(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        time_only: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -221,7 +241,7 @@ class AkariSlashMixin:
                 _SlashCtx(interaction), [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                beta=beta)
+                beta=beta, time_only=time_only)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -230,13 +250,15 @@ class AkariSlashMixin:
         member='Player (defaults to you)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_history(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        time_only: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -245,7 +267,7 @@ class AkariSlashMixin:
                 _SlashCtx(interaction), target,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                beta=beta)
+                beta=beta, time_only=time_only)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

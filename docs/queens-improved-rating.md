@@ -1,6 +1,6 @@
 # Queens improved rating beta
 
-The `+beta` Queens mode is an on-demand, margin-aware multiplayer Elo
+The `+beta` Queens mode is an on-demand, hybrid multiplayer Elo
 replay. It is separate from the persisted Codeforces-style Queens rating:
 testing it cannot alter the ordinary leaderboard or anything that consumes the
 ordinary rating.
@@ -25,7 +25,7 @@ The design also borrows the robust-response goal of native multiplayer systems
 such as [Elo-MMR](https://arxiv.org/abs/2101.00400), while staying small and
 explainable for a 12–20-player community.
 
-## Soft time bracket
+## Hybrid time and head-to-head bracket
 
 For player `i`, transform the time in seconds:
 
@@ -36,73 +36,93 @@ x_i = ln(time_i)
 There is no additive time offset. The bracket therefore measures the raw time
 ratio: the same absolute gap carries more evidence on a faster puzzle.
 
-Each other time contributes a soft result, and a neutral self-result anchors
-the bracket:
+Each other time first contributes a soft margin result:
 
 ```text
 z_ij = clip((x_j - x_i) / 0.35, -8, 8)
-S_ij = sigmoid(z_ij)
-S_ii = 0.5
+M_ij = sigmoid(z_ij)
+H_ij = 1 if time_i < time_j, 0 if time_i > time_j, else 0.5
+S_ij = 0.85 * M_ij + 0.15 * H_ij
 ```
 
-Lower time is better. Equal times contribute exactly `0.5`; a wider gap moves
-smoothly toward `1` or `0`. Every person contributes at most `1/n`, so one
-extreme fastest or slowest time cannot stretch the middle of the field the way
-literal min/max normalization would.
+Lower time is better. Equal times contribute exactly `0.5`. A strict win has
+at least `0.575` pair evidence, so beating someone matters even in a photo
+finish; the remaining 85% still distinguishes narrow wins from blowouts. A
+neutral self-result anchors the bracket. Every person contributes at most
+`1/n`, so one extreme result cannot dominate the whole field.
 
 The symmetric `±8` evidence limit activates only beyond a 16.4x raw-time
 ratio. It prevents numerical certainty and extreme long-run pair separation;
 it is not a cap on a player's rating change.
 
-Given the pre-day ratings, the expected pair score is:
+Given the pre-day ratings, the expected pair score is shown below for Queens:
 
 ```text
 E(r, rating_j) = sigmoid((r - rating_j) / (800 / ln(10)))
 E_ij = E(rating_i, rating_j)
 ```
 
+Akari uses the same latent model in a slightly tighter player-facing
+coordinate: `700 / ln(10)` here and a matching K-factor of `108.5` below.
+
 Each pair then receives a blended proper-score weight:
 
 ```text
 W_ij = 0.10 + 0.90 * 4 * E_ij * (1 - E_ij)
-delta_i = (108 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+raw_delta_i = (124 / n) * sum(j != i, W_ij * (S_ij - E_ij))
+c = -mean(raw_delta) - 0.25
+delta_i = raw_delta_i + c
 ```
 
 This is the rating-logit gradient of a 10% cross-entropy / 90% Brier
 proper-scoring loss. At an even expectation (`E = 0.5`) it is identical to the
 old update. Near a very confident `0` or `1` expectation, one contradictory
 day has less leverage, while the 10% cross-entropy floor prevents it from
-being ignored. It is a smooth formula, not a post-processing delta cap.
+being ignored. It is a smooth formula, not a post-processing delta cap. The
+separate common shift `c` preserves every delta difference while making the
+field lose exactly `0.25n` points. It is the lightweight field-wide part of
+Codeforces' anti-inflation policy; beta deliberately omits the strongest-player
+correction.
 
-The wider `800` expectation scale keeps sustained skill differences visible
-across the existing rank bands, while the `108` K-factor reduces the weight
-of one noisy daily puzzle. Rating scales have arbitrary units—Microsoft's
+Queens' `800` expectation gap and `124` K-factor keep sustained skill
+differences visible across the existing rank bands. Akari's rounded `700` gap
+and matching `108.5` K-factor were selected from historical checkpoint
+replays; unlike per-snapshot normalization, they remain fixed. Rating scales
+have arbitrary units—Microsoft's
 [TrueSkill explanation](https://www.microsoft.com/en-us/research/project/trueskill-ranking-system/)
 likewise calculates on one scale and multiplies into a useful display range.
-Changing K affects convergence speed and day-to-day volatility, not the
-expectation curve or its long-run equilibrium.
+Within the raw contest model, changing the expectation gap and K together and
+applying the matching affine rating map is only a coordinate change: it
+preserves probabilities, normalized learning speed, and update ordering. The
+separate fixed `0.25` field policy is intentionally not rescaled.
 
 Consequences:
 
 - A day with fewer than two players is unrated.
 - A larger field does not multiply one puzzle into many independent games.
-- Every round is zero-sum, so a fixed retained identity pool cannot create
-  nominal points. Active or visible averages can still move through churn,
-  selective submission, hidden accounts, or sybils.
+- Pairwise contest evidence is zero-sum, after which every rated participant
+  contributes `0.25` points of field deflation. The small contest correction
+  offsets rating parked by short-lived accounts.
 - There is no post-processing cap. Every pair score and expectation is a
-  probability and `0.1 <= W_ij <= 1`, so the formula itself keeps
-  `|delta_i| < 108(n - 1)/n`, which is below the K-factor.
-- Inactivity never changes skill.
+  probability and `0.1 <= W_ij <= 1`. Queens has
+  `|delta_i + 0.25| < 124(n - 1)/n`, while Akari uses `108.5` in the same
+  bound; final magnitude is below the applicable natural bound plus `0.25`.
+- Queens beta has no inactivity decay, matching ordinary Queens.
+- In Akari beta, an above-1200 absentee loses 4% of their gap to 1200 on the
+  first concluded skipped day and up to 8% as the streak grows. Below-start
+  players freeze. Removed points are transferred to that day's valid players,
+  so Akari decay remains zero-sum.
 - New players receive the same bounded update rule as established players.
-- Playing more days supplies more evidence but does not award rating by itself;
-  participation volume belongs to Queens XP rather than skill rating.
+- Playing more days supplies more contest evidence and pays the same small
+  field correction each time. A solo participant pays none; only Akari can
+  transfer previously removed decay points to one.
 - A malformed locked first time is quarantined from the beta replay after
   first-submission deduplication. It cannot become a zero-second win, promote a
   later retry, or break every `+beta` command.
 
 ## Performance
 
-Let the player's mean soft result against the day's field be:
+Let the player's mean hybrid result against the day's field be:
 
 ```text
 A_i = mean(j in field, S_ij)
@@ -136,42 +156,65 @@ starting at 1200:
 
 | Time | Performance | Rating change |
 |---:|---:|---:|
-| 7 | 1668 | +31.69 |
-| 8 | 1558 | +25.58 |
-| 10 | 1381 | +13.79 |
-| 12 | 1242 | +3.26 |
-| 13 | 1182 | -1.43 |
-| 16 | 1025 | -13.34 |
-| 20 | 853 | -24.96 |
-| 25 | 673 | -34.59 |
+| 7 | 1715 | +38.82 |
+| 8 | 1578 | +30.53 |
+| 10 | 1395 | +16.69 |
+| 12 | 1249 | +4.10 |
+| 13 | 1171 | -2.81 |
+| 16 | 1010 | -16.76 |
+| 20 | 831 | -30.42 |
+| 25 | 629 | -42.14 |
 
-The performance drop from 12 to 13 seconds is about 60 points; the drop from
-13 to 16 is about 157 points. The larger time gap therefore matters about 2.6
-times as much without making either result catastrophic.
+The performance drop from 12 to 13 seconds is about 78 points; the drop from
+13 to 16 is about 161 points. The hard component makes each strict placement
+meaningful while the time component still rewards the larger margin.
 
-## Akari accuracy multiplier
+## Akari accuracy-first pair scores
 
-Akari `+beta` feeds an accuracy-adjusted time into this same engine:
+Akari `+beta` keeps the shared zero-sum pair evidence and field correction but
+supplies its own margin score. For equal accuracy, it uses the ordinary soft
+time comparison. For different accuracies, let `L` be the lower-accuracy
+result and `H` the higher-accuracy result:
 
 ```text
-effective_time = raw_time * sqrt(101 - accuracy)
+adjusted_time_L = time_L + time_H
+M_LH = soft_time(adjusted_time_L, time_H)
+M_HL = 1 - M_LH
 ```
 
-This makes 100% `1x`, 99% about `1.414x`, 90% about `3.32x`, and 68% about
-`5.74x`. A 99% result must be approximately 29% faster to tie a perfect
-result. Accuracy therefore matters even at 99%, but there is no hard
-perfect/imperfect cliff and an exceptional time can overcome the penalty.
+The denominator is the higher-accuracy time. Consequently, a very fast lower
+accuracy can approach a tie but never win, and taking longer can only worsen
+its score. Every nonzero accuracy difference is a tier boundary; the size of
+the percentage gap does not add another parameter. The rating target is then
+`S_ij = 0.85 * M_ij + 0.15 * H_ij`, where `H` is the hard accuracy-first,
+time-second result. Pair scores remain complementary, so Akari's K=`108.5`
+raw rating round remains exactly zero-sum before the common `-0.25` policy
+shift.
 
-In `;akari results +beta`, rows are sorted by beta performance rather than the
-ordinary accuracy-first result key. Performance is shown as a whole number,
-so values that round to the same displayed number receive the same competition
-rank. This makes the visible order, value, and rank agree.
+Displayed event performance uses a separate hierarchical pair score:
 
-## Snapshot replay
+```text
+H_ij = 1                         if accuracy_i > accuracy_j
+H_ij = 0                         if accuracy_i < accuracy_j
+H_ij = hybrid_time(time_i, time_j) if accuracy_i = accuracy_j
+```
+
+The same common-field inversion turns each player's mean `H_ij` into `Perf`.
+This guarantees that every higher-accuracy result has higher performance than
+every lower-accuracy result, while time orders players inside one accuracy
+tier. `;akari results +beta` ranks rows directly by accuracy descending and
+time ascending; exact `(accuracy, time)` ties share a competition rank. The
+perfect flag adds no hidden tier beyond its reported accuracy.
+
+## Historical snapshot replay
+
+The following snapshot figures predate the 85/15 head-to-head blend and field
+correction. They are retained only as historical context. The current model
+has not been rerun on that unavailable snapshot.
 
 The supplied snapshot was read without modification. Its exact live/import
 first-submission merge contains 1,378 results, 29 observed users, and 442
-puzzle days. Of those days, 384 are solo and provide no rating signal. The 58
+puzzle days. Of those days, 384 are solo and provide no contest signal. The 58
 rated days contain 994 participant-results and fields of 7–21 players.
 
 | Model | Mean absolute change | 95th percentile | Observed range |
@@ -220,3 +263,6 @@ Akari exposes the matching beta views:
 
 The beta replay is transient for both games: it does not overwrite the
 ordinary Queens ladder or Akari rating snapshot.
+
+Akari's `+decay` history-display flag can be combined with `+beta`; it shows
+the otherwise implicit skipped-day points without changing the replay.

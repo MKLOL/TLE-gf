@@ -83,6 +83,24 @@ AKARI_MAX_PUZZLE_LOOKAHEAD = 2
 # Players who haven't played within this many days are hidden from the ranking.
 AKARI_RANKING_MAX_INACTIVE_DAYS = 30
 
+# ── LinkedIn Queens minigame (tle/cogs/_minigame_queens.py) ────────────────
+# Inactivity decay, same shape and the same values as the Akari knobs above:
+# every consecutive skipped Queens day pulls an above-default rating toward the
+# starting rating by min(QUEENS_DECAY_MAX, base*(streak-grace)) of the remaining
+# gap, and the lost points are redistributed to that day's active players. Kept
+# as separate constants (rather than aliasing the Akari ones) so the two ladders
+# can be tuned independently later.
+QUEENS_DECAY_BASE = 0.04
+QUEENS_DECAY_MAX = 0.08
+QUEENS_DECAY_GRACE = 0
+
+# ── LinkedIn Tango minigame (tle/cogs/_minigame_tango.py) ──────────────────
+# Same ladder shape as Queens.  Separate constants so the two LinkedIn games
+# can be tuned independently.
+TANGO_DECAY_BASE = 0.04
+TANGO_DECAY_MAX = 0.08
+TANGO_DECAY_GRACE = 0
+
 # ── Soccer betting minigame (tle/cogs/betting.py) ──────────────────────────
 # Live 1X2 odds and final scores come from The Odds API (the-odds-api.com).
 # Set ODDS_API_KEY to a free-tier key to enable `;bet matches`/`;bet open` and
@@ -134,28 +152,30 @@ XAI_API_KEYS = ','.join(
         os.environ.get('XAI_API_KEYS', '').strip(),
         os.environ.get('XAI_API_KEY', '').strip(),
     ) if value)
-XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.3').strip() or 'grok-4.3'
+XAI_MODEL = os.environ.get('XAI_MODEL', 'grok-4.5').strip() or 'grok-4.5'
 # Strongest-to-weakest fallback ladder. The legacy singular setting remains
 # the default so deployments opt into—and knowingly price—fallback models.
 XAI_MODELS = tuple(m.strip() for m in os.environ.get(
     'XAI_MODELS', XAI_MODEL).split(',') if m.strip()) or (XAI_MODEL,)
-# Grok uses a smaller answer budget and a persistent credit guard. Thresholds
-# are operator configuration and deliberately are not shown in Discord denial
-# messages. Gemini remains uncapped by the bot.
-XAI_MAX_OUTPUT_TOKENS = _int_env('XAI_MAX_OUTPUT_TOKENS', 512)
-XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 10)
+# Grok uses a smaller answer budget and a persistent credit guard. The user
+# limit applies to regular members; Admin/Moderator roles bypass only that
+# guard. Denials tell users when a slot returns, while spend stays private.
+# Gemini remains uncapped by the bot.
+XAI_MAX_OUTPUT_TOKENS = _int_env('XAI_MAX_OUTPUT_TOKENS', 1536)
+XAI_ROUTER_MAX_OUTPUT_TOKENS = 256
+XAI_USER_RATE_LIMIT = _int_env('XAI_USER_RATE_LIMIT', 15)
 XAI_USER_RATE_WINDOW_SECONDS = _int_env(
-    'XAI_USER_RATE_WINDOW_SECONDS', 30 * 60)
-XAI_DAILY_REQUEST_LIMIT = _int_env('XAI_DAILY_REQUEST_LIMIT', 100)
-# Current grok-4.3 short-context prices, configurable because model prices and
-# a custom XAI_MODELS ladder can differ. A private $1/day guard conserves the
-# operator's $5 balance; public denial messages never reveal it.
+    'XAI_USER_RATE_WINDOW_SECONDS', 60 * 60)
+XAI_DAILY_REQUEST_LIMIT = _int_env('XAI_DAILY_REQUEST_LIMIT', 200)
+# Current grok-4.5 short-context prices, configurable because model prices and
+# a custom XAI_MODELS ladder can differ. The private daily spend guard and its
+# thresholds are never revealed in public denial messages.
 XAI_INPUT_USD_PER_MILLION = max(
-    0.0, _float_env('XAI_INPUT_USD_PER_MILLION', 1.25))
+    0.0, _float_env('XAI_INPUT_USD_PER_MILLION', 2.00))
 XAI_OUTPUT_USD_PER_MILLION = max(
-    0.0, _float_env('XAI_OUTPUT_USD_PER_MILLION', 2.50))
+    0.0, _float_env('XAI_OUTPUT_USD_PER_MILLION', 6.00))
 XAI_DAILY_BUDGET_USD = max(
-    0.0, _float_env('XAI_DAILY_BUDGET_USD', 1.00))
+    0.0, _float_env('XAI_DAILY_BUDGET_USD', 0.50))
 XAI_REQUEST_RESERVE_INPUT_TOKENS = max(
     1, _int_env('XAI_REQUEST_RESERVE_INPUT_TOKENS', 6000))
 # One deadline covers history, attachments, router, fallbacks, and answer.
@@ -190,5 +210,8 @@ LLM_MAX_TOTAL_IMAGE_BYTES = _int_env('LLM_MAX_TOTAL_IMAGE_BYTES', 12 * 1024 * 10
 LLM_CONTEXT_ENABLED = os.environ.get('LLM_CONTEXT_ENABLED', '1').strip() != '0'
 LLM_CONTEXT_MESSAGES = _int_env('LLM_CONTEXT_MESSAGES', 50)
 LLM_CONTEXT_WINDOW_SECONDS = _int_env('LLM_CONTEXT_WINDOW_SECONDS', 600)
+LLM_CONTEXT_GAP_SECONDS = _int_env('LLM_CONTEXT_GAP_SECONDS', 600)
+LLM_CONTEXT_RECENT_MAX_AGE_SECONDS = _int_env(
+    'LLM_CONTEXT_RECENT_MAX_AGE_SECONDS', 21600)
 LLM_REPLY_BEFORE = _int_env('LLM_REPLY_BEFORE', 25)
 LLM_REPLY_AFTER = _int_env('LLM_REPLY_AFTER', 24)

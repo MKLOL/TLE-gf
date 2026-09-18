@@ -177,11 +177,13 @@ class TestNarcissusWithAliases:
         db.add_starboard_alias(GUILD, THUMBS_UP, STAR)
         db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
         db.add_reactor('msg1', THUMBS_UP, 'user1')  # self-star via alias
+        db.update_starboard_star_count('msg1', STAR, 1)
 
         family = db.get_emoji_family(GUILD, STAR)
         rows = db.get_narcissus_leaderboard(GUILD, STAR, emoji_family=family)
         assert len(rows) == 1
         assert rows[0].user_id == 'user1'
+        assert rows[0].unreacted == 0
 
     def test_narcissus_no_double_count(self, db):
         """Self-star via both main and alias on same message counts as 1."""
@@ -190,6 +192,7 @@ class TestNarcissusWithAliases:
         db.add_starboard_message_v1('msg1', 'sb1', GUILD, STAR, author_id='user1')
         db.add_reactor('msg1', STAR, 'user1')
         db.add_reactor('msg1', THUMBS_UP, 'user1')
+        db.update_starboard_star_count('msg1', STAR, 1)
 
         family = db.get_emoji_family(GUILD, STAR)
         rows = db.get_narcissus_leaderboard(GUILD, STAR, emoji_family=family)

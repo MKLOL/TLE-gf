@@ -15,7 +15,7 @@ from tle.cogs._minigame_common import (
     parse_date_args,
 )
 from tle.cogs._minigame_akari import (
-    AKARI_GAME,
+    AKARI_GAME, _split_akari_time_filter,
 )
 from tle.cogs._minigame_helpers import (
     MinigameCogError, _safe_member_name,
@@ -46,8 +46,7 @@ class ImplStatsMixin:
         sort_by_time = False
         args, weekdays = _split_queens_weekday_filter(args)
         if game.name == AKARI_GAME.name:
-            sort_by_time = '+time' in args
-            args = tuple(arg for arg in args if arg != '+time')
+            args, sort_by_time = _split_akari_time_filter(args)
             (remaining, _include_decay, excluded_ids, included_ids,
              _include_inactive, test_decay) = await self._extract_akari_filters(
                 ctx, args)
@@ -58,6 +57,7 @@ class ImplStatsMixin:
                     ctx, args[0],
                     excluded_ids=excluded_ids, included_ids=included_ids,
                     test_decay=test_decay, weekdays=weekdays,
+                    time_only=sort_by_time,
                     sort_key_fn=(
                         _akari_results_time_sort_key if sort_by_time else None),
                     rank_key_fn=(

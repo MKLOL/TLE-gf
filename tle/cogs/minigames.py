@@ -1,4 +1,4 @@
-"""Minigames cog: Daily Akari, LinkedIn Queens, and GuessThe.Game.
+"""Minigames cog: Daily Akari, LinkedIn Queens, LinkedIn Tango, and GuessThe.Game.
 
 The cog is large, so its implementation is split across mixin modules in this
 package (``_mgimpl_*`` for logic, ``_mgcmds_*`` for command/slash groups) plus
@@ -34,12 +34,13 @@ from tle.util import paginator  # noqa: F401
 from tle.cogs._minigame_akari import AKARI_GAME, expected_puzzle_number  # noqa: F401
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
 from tle.cogs._minigame_queens import QUEENS_GAME
+from tle.cogs._minigame_tango import TANGO_GAME
 from tle.cogs._minigame_common import normalize_puzzle_date  # noqa: F401
 
 # ── Re-exports for the test suite and downstream importers ──────────────
 from tle.cogs._minigame_helpers import (  # noqa: F401
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, queens_mod_only,
-    akari_mod_only,
+    tango_mod_only, akari_mod_only,
     _FollowupChannel, _SlashCtx,
     _safe_member_name, _safe_user_name, _safe_cf_handle, _legend_name_for,
     _format_score, _format_akari_history_line, _format_minigame_history_line,
@@ -102,10 +103,13 @@ from tle.cogs._mgimpl_queenscmdb import ImplQueensCmdBMixin
 from tle.cogs._mgimpl_queensbackfill import ImplQueensBackfillMixin
 from tle.cogs._mgimpl_queenstext import ImplQueensTextMixin
 from tle.cogs._mgimpl_queenstextb import ImplQueensTextBMixin
+from tle.cogs._mgimpl_queenstime import ImplQueensTimeMixin
 from tle.cogs._mgimpl_ingest import ImplIngestMixin
 from tle.cogs._mgimpl_import import ImplImportMixin
 from tle.cogs._mgimpl_sharedcmd import ImplSharedCmdMixin
 from tle.cogs._mgimpl_vs import ImplVsMixin
+from tle.cogs._mgimpl_weekly import ImplWeeklyMixin
+from tle.cogs._mgimpl_akari_weekly import ImplAkariWeeklyMixin
 from tle.cogs._mgimpl_akaria import ImplAkariAMixin
 from tle.cogs._mgimpl_akarib import ImplAkariBMixin
 from tle.cogs._mgimpl_akaric import ImplAkariCMixin
@@ -117,11 +121,15 @@ from tle.cogs._mgimpl_export import ImplExportMixin
 from tle.cogs._mgcmds_akari import AkariCmdsMixin
 from tle.cogs._mgcmds_queens import QueensCmdsMixin
 from tle.cogs._mgcmds_queensprivacy import QueensPrivacyCmdsMixin
+from tle.cogs._mgcmds_tango import TangoCmdsMixin
+from tle.cogs._mgcmds_tangoprivacy import TangoPrivacyCmdsMixin
 from tle.cogs._mgcmds_guessgame import GuessGameCmdsMixin
 from tle.cogs._mgcmds_slashhelpers import SlashHelpersMixin
 from tle.cogs._mgcmds_akarislash import AkariSlashMixin
 from tle.cogs._mgcmds_queensslash import QueensSlashMixin
 from tle.cogs._mgcmds_queensslashprivacy import QueensPrivacySlashMixin
+from tle.cogs._mgcmds_tangoslash import TangoSlashMixin
+from tle.cogs._mgcmds_tangoslashprivacy import TangoPrivacySlashMixin
 
 logger = logging.getLogger(__name__)
 
@@ -132,11 +140,15 @@ class Minigames(
     AkariCmdsMixin,
     QueensCmdsMixin,
     QueensPrivacyCmdsMixin,
+    TangoCmdsMixin,
+    TangoPrivacyCmdsMixin,
     GuessGameCmdsMixin,
     SlashHelpersMixin,
     AkariSlashMixin,
     QueensSlashMixin,
     QueensPrivacySlashMixin,
+    TangoSlashMixin,
+    TangoPrivacySlashMixin,
     ImplCoreMixin,
     ImplRatingMixin,
     ImplQueensRegMixin,
@@ -149,10 +161,13 @@ class Minigames(
     ImplQueensBackfillMixin,
     ImplQueensTextMixin,
     ImplQueensTextBMixin,
+    ImplQueensTimeMixin,
     ImplIngestMixin,
     ImplImportMixin,
     ImplSharedCmdMixin,
     ImplVsMixin,
+    ImplWeeklyMixin,
+    ImplAkariWeeklyMixin,
     ImplAkariAMixin,
     ImplAkariBMixin,
     ImplAkariCMixin,
@@ -165,13 +180,15 @@ class Minigames(
         'akari': AKARI_GAME,
         'guessgame': GUESSGAME_GAME,
         'queens': QUEENS_GAME,
+        'tango': TANGO_GAME,
     }
 
     def __init__(self, bot):
         self.bot = bot
         self._import_tasks = {}   # (guild_id, game_name) -> asyncio.Task
         self._import_status = {}  # (guild_id, game_name) -> dict
-        self._queens_pending_imports = {}  # (guild_id, user_id) -> _QueensImportPreview
+        # (guild_id, game_name, user_id) -> _QueensImportPreview
+        self._queens_pending_imports = {}
 
     @discord_common.send_error_if(MinigameCogError)
     async def cog_command_error(self, ctx, error):

@@ -21,8 +21,8 @@ from tle.util.akari_rating import RatingState, compute_round
 WEEKLY_RATING_DAMPING = 0.75
 
 # Relative-time curve.  At 2x the best perfect time, the speed component is
-# exp(-0.7), making the final perfect score about 0.75.
-TIME_DECAY = 0.7
+# exp(-0.8), making the final perfect score about 0.725.
+TIME_DECAY = 0.8
 
 # Imperfect results occupy [0, 0.5), leaving every perfect result above every
 # imperfect result.  Raising accuracy to this power separates near-perfect
@@ -30,9 +30,9 @@ TIME_DECAY = 0.7
 IMPERFECT_SCORE_CEILING = 0.5
 ACCURACY_EXPONENT = 4.0
 
-# Difficulty 3 is neutral.  Moving four difficulty levels doubles/halves the
-# weight, producing approximately .707, .841, 1, 1.189, 1.414 for levels 1-5.
-DIFFICULTY_EXPONENT_STEP = 0.25
+# Difficulty 3 is neutral.  Each level multiplies/divides the weight by 2^0.35,
+# producing approximately .616, .785, 1, 1.275, 1.625 for levels 1-5.
+DIFFICULTY_EXPONENT_STEP = 0.35
 DEFAULT_DIFFICULTY = 3
 
 

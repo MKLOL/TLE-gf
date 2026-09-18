@@ -1,4 +1,4 @@
-"""Canonicalize generic Queens rows under their LinkedIn identities."""
+"""Canonicalize generic LinkedIn-game rows under their LinkedIn identities."""
 
 import time
 from types import SimpleNamespace
@@ -6,24 +6,23 @@ from types import SimpleNamespace
 from tle.util import codeforces_common as cf_common
 
 from tle.cogs._minigame_common import normalize_puzzle_date
-from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_queens_cog import (
-    _queens_puzzle_number_for_date,
     _queens_puzzle_date_text,
 )
 
 
 class ImplQueensSourcesMixin:
     def _migrate_legacy_queens_results_to_external(
-            self, guild_id, *, delete_migrated=True):
-        links_by_user = self._queens_links_by_user(guild_id)
+            self, guild_id, game, *, delete_migrated=True):
+        calendar = game.linkedin
+        links_by_user = self._queens_links_by_user(guild_id, game)
         existing_source_rows = (
             cf_common.user_db.get_minigame_unresolved_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+                guild_id, game.name)
         )
         sources_by_identity = {
             self._queens_source_identity_key(
-                row.normalized_name, row.puzzle_date): row
+                game, row.normalized_name, row.puzzle_date): row
             for row in existing_source_rows
         }
         sources_by_message = {
@@ -31,15 +30,14 @@ class ImplQueensSourcesMixin:
             for row in existing_source_rows
             if row.source_message_id is not None
         }
-        opted_out_ids = self._minigame_opted_out_user_ids(
-            guild_id, QUEENS_GAME)
+        opted_out_ids = self._minigame_opted_out_user_ids(guild_id, game)
         planned_sources = []
         planned_deletions = []
         source_message_ids_to_replace = set()
         created_sources = 0
         handled_identities = set()
         rows = cf_common.user_db.get_stored_minigame_results_for_guild(
-            guild_id, QUEENS_GAME.name)
+            guild_id, game.name)
 
         def migration_order(row):
             try:
@@ -54,7 +52,7 @@ class ImplQueensSourcesMixin:
             if (
                     row.storage == 'live'
                     and self._is_current_queens_projection_row(
-                        guild_id, row, link, sources_by_identity)
+                        guild_id, game, row, link, sources_by_identity)
             ):
                 continue
             message_source = sources_by_message.get(str(row.message_id))
@@ -71,15 +69,15 @@ class ImplQueensSourcesMixin:
             normalized_name, external_name = identity
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
             identity_key = self._queens_source_identity_key(
-                normalized_name, puzzle_date)
+                game, normalized_name, puzzle_date)
             existing_source = sources_by_identity.get(identity_key)
             adopts_missing_provenance = (
                 existing_source is not None
                 and existing_source.source_message_id is None
                 and self._queens_source_row_key(
-                    normalized_name, row)
+                    game, normalized_name, row)
                 == self._queens_source_row_key(
-                    existing_source.normalized_name, existing_source)
+                    game, existing_source.normalized_name, existing_source)
             )
             same_message_source = (
                 existing_source is not None
@@ -95,6 +93,7 @@ class ImplQueensSourcesMixin:
             message_source_moved = (
                 message_source is not None
                 and self._queens_source_identity_key(
+                    game,
                     message_source.normalized_name,
                     message_source.puzzle_date,
                 ) != identity_key
@@ -128,7 +127,7 @@ class ImplQueensSourcesMixin:
                 normalized_name,
                 external_name,
                 row.channel_id,
-                _queens_puzzle_number_for_date(puzzle_date),
+                calendar.number_for_date(puzzle_date),
                 _queens_puzzle_date_text(puzzle_date),
                 row.accuracy,
                 row.time_seconds,
@@ -152,7 +151,7 @@ class ImplQueensSourcesMixin:
             source = SimpleNamespace(
                 external_name=external_name,
                 normalized_name=normalized_name,
-                puzzle_number=_queens_puzzle_number_for_date(puzzle_date),
+                puzzle_number=calendar.number_for_date(puzzle_date),
                 puzzle_date=_queens_puzzle_date_text(puzzle_date),
                 accuracy=row.accuracy,
                 time_seconds=row.time_seconds,
@@ -165,6 +164,6 @@ class ImplQueensSourcesMixin:
             sources_by_identity[identity_key] = source
             sources_by_message[str(source_message_id)] = source
         cf_common.user_db.apply_minigame_source_migration(
-            guild_id, QUEENS_GAME.name, planned_sources, planned_deletions,
+            guild_id, game.name, planned_sources, planned_deletions,
             source_message_ids_to_replace)
         return created_sources

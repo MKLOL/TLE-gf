@@ -20,6 +20,7 @@ from tle.cogs._starboard_core import (
     FULL_RE_RENDER,
 )
 from tle.cogs._starboard_impls import ImplMixin
+from tle.cogs._starboard_proxy import ProxyReactionMixin
 from tle.cogs._starboard_render import (
     _starboard_content,
     _parse_starboard_args,
@@ -34,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 class Starboard(
-        LeaderboardHelpersMixin, CoreMixin, ImplMixin, BackfillMixin,
-        commands.Cog):
+        LeaderboardHelpersMixin, CoreMixin, ProxyReactionMixin, ImplMixin,
+        BackfillMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.locks = {}

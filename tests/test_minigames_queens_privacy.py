@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs import minigames as minigames_module
 from tle.cogs._minigame_queens import normalize_queens_name
 from tle.cogs.minigames import MinigameCogError, Minigames
@@ -61,15 +62,15 @@ class TestQueensPrivacy(_QueensCommandsBase):
             100, members=[low_id_anon, public, high_id_anon])
 
         db.set_minigame_player_link(
-            100, 'queens', low_id_anon.id, 'Aaron Secret',
+            100, 'linkedin', low_id_anon.id, 'Aaron Secret',
             normalize_queens_name('Aaron Secret'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER,
             1.0, low_id_anon.id)
         db.set_minigame_player_link(
-            100, 'queens', public.id, 'Bob LinkedIn',
+            100, 'linkedin', public.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, public.id)
         db.set_minigame_player_link(
-            100, 'queens', high_id_anon.id, 'Zulu Secret',
+            100, 'linkedin', high_id_anon.id, 'Zulu Secret',
             normalize_queens_name('Zulu Secret'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER,
             1.0, high_id_anon.id)
@@ -82,7 +83,7 @@ class TestQueensPrivacy(_QueensCommandsBase):
 
         cog = Minigames(bot=None)
         ctx = self._make_ctx(guild, public)
-        asyncio.run(cog._cmd_queens_links(ctx))
+        asyncio.run(cog._cmd_queens_links(ctx, QUEENS_GAME))
 
         assert len(pages) == 1
         assert pages[0][1].description.splitlines() == [
@@ -102,7 +103,7 @@ class TestQueensPrivacy(_QueensCommandsBase):
         guild = _FakeGuild(100, members=[alice, bob])
         secret_name = 'Hidden LinkedIn'
         db.set_minigame_player_link(
-            100, 'queens', alice.id, secret_name,
+            100, 'linkedin', alice.id, secret_name,
             normalize_queens_name(secret_name),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER,
             1.0, alice.id)

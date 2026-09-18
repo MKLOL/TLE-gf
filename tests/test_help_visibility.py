@@ -7,6 +7,7 @@ import types
 from discord.ext import commands
 import pytest
 import tle.util
+from tle.cogs import llm as llm_cog
 
 tle_util = sys.modules['tle.util']
 
@@ -139,3 +140,34 @@ def test_automatic_error_is_public(help_module):
 
     assert ctx.channel.calls == [('Try another command.', {})]
     assert ctx.author.calls == []
+
+
+def test_ai_group_help_is_one_compact_public_message(help_module):
+    ctx = _context()
+    help_command = help_module.TleHelp()
+    help_command.context = ctx
+
+    asyncio.run(help_command.send_group_help(llm_cog.Llm.llm))
+
+    assert len(ctx.channel.calls) == 1
+    text, kwargs = ctx.channel.calls[0]
+    assert kwargs == {}
+    assert 'AI — Gemini & Grok' in text
+    assert ';help ai <command>' in text
+    assert len(text) < 2000
+
+
+def test_ai_focused_help_has_usage_without_sibling_dump(help_module):
+    ctx = _context()
+    help_command = help_module.TleHelp()
+    help_command.context = ctx
+    cooldown = llm_cog.Llm.llm.all_commands['cooldown']
+
+    asyncio.run(help_command.send_command_help(cooldown))
+
+    assert len(ctx.channel.calls) == 1
+    text, kwargs = ctx.channel.calls[0]
+    assert kwargs == {}
+    assert ';ai cooldown [seconds] [+threads|+global]' in text
+    assert 'shared prompt cooldowns' in text
+    assert 'grokkeys' not in text

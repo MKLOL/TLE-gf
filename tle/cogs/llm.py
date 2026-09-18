@@ -1,7 +1,6 @@
 """``;llm`` — Gemini and Grok with bounded Discord context."""
 import asyncio
 import logging
-import re
 import time
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
@@ -14,6 +13,7 @@ from tle import constants
 from tle.util import discord_common, xai_api
 from tle.util.llm_keypool import KeyPool
 from tle.cogs import _llm_ask as llm_ask
+from tle.cogs import _llm_entrypoints as llm_entrypoints
 from tle.cogs._llm_commands import (
     LlmCommandsMixin, _delete_quietly, _is_gemini_key, _is_xai_key,
     looks_like_api_key,
@@ -21,7 +21,6 @@ from tle.cogs._llm_commands import (
 from tle.cogs._llm_runtime import RequestRuntime
 
 logger = logging.getLogger(__name__)
-_GROK_TRIGGER = re.compile(r'^\s*@grok(?:\s+|$)', re.IGNORECASE)
 _MIN_KEY_LENGTH = 20
 _EnvironmentKey = namedtuple('EnvironmentKey', 'id api_key label')
 
@@ -202,20 +201,26 @@ class Llm(LlmCommandsMixin, commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        """Handle the requested literal ``@grok <text>`` trigger."""
+        """Handle literal ``@gemini`` and ``@grok`` provider triggers."""
         if (getattr(message, 'guild', None) is None
                 or getattr(getattr(message, 'author', None), 'bot', False)):
             return
-        match = _GROK_TRIGGER.match(getattr(message, 'content', '') or '')
+        match = llm_entrypoints.PROVIDER_TRIGGER.match(
+            getattr(message, 'content', '') or '')
         if match is None:
             return
+        provider = match.group(1).casefold()
         ctx = await self.bot.get_context(message)
         question = message.content[match.end():].strip() or None
         try:
             can_run = getattr(self.bot, 'can_run', None)
             if can_run is not None and not await can_run(ctx):
                 return
-            await llm_ask.ask_grok(self, ctx, question)
+            if provider == 'grok':
+                await llm_ask.ask_grok(self, ctx, question)
+            else:
+                await llm_ask.ask_gemini(
+                    self, ctx, question, explicit=True)
         except discord_common.FeatureDisabledSilent:
             return
         except commands.CheckFailure:
@@ -223,9 +228,10 @@ class Llm(LlmCommandsMixin, commands.Cog):
         except LlmNotReadyError as err:
             await ctx.send(embed=discord_common.embed_alert(str(err)))
         except Exception:  # noqa: BLE001 - listeners have no command handler
-            logger.exception('Unhandled @grok listener failure')
+            logger.exception('Unhandled @%s listener failure', provider)
             await ctx.send(embed=discord_common.embed_alert(
-                'Grok hit an unexpected error. Try again shortly.'))
+                f'{provider.title()} hit an unexpected error. '
+                'Try again shortly.'))
 
     def _bot_user_id(self):
         user = getattr(self.bot, 'user', None)

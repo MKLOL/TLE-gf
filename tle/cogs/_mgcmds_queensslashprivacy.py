@@ -5,6 +5,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._mgcmds_queensslash import QueensSlashMixin
 from tle.cogs._minigame_helpers import _SlashCtx
 
@@ -27,7 +28,7 @@ class QueensPrivacySlashMixin:
         await interaction.response.defer()
         try:
             await self._cmd_queens_optout(
-                _SlashCtx(interaction), member)
+                _SlashCtx(interaction), QUEENS_GAME, member)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -37,7 +38,7 @@ class QueensPrivacySlashMixin:
     async def slash_queens_optin(self, interaction: discord.Interaction):
         await interaction.response.defer()
         try:
-            await self._cmd_queens_optin(_SlashCtx(interaction))
+            await self._cmd_queens_optin(_SlashCtx(interaction), QUEENS_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -57,7 +58,7 @@ class QueensPrivacySlashMixin:
             return
         try:
             await self._cmd_queens_set_result_rating(
-                _SlashCtx(interaction), date,
+                _SlashCtx(interaction), QUEENS_GAME, date,
                 is_rated=False, member=member)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
@@ -78,7 +79,7 @@ class QueensPrivacySlashMixin:
             return
         try:
             await self._cmd_queens_set_result_rating(
-                _SlashCtx(interaction), date,
+                _SlashCtx(interaction), QUEENS_GAME, date,
                 is_rated=True, member=member)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)

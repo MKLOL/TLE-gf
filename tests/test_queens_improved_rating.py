@@ -9,10 +9,13 @@ import pytest
 
 from tle.util.queens_improved_rating import (
     _ELO_SCALE,
+    _FIELD_DEFLATION,
+    _HEAD_TO_HEAD_WEIGHT,
     _RATING_K,
     _TIME_MARGIN_LOGIT_LIMIT,
     _TIME_MARGIN_WIDTH,
     _compute_round,
+    _hybrid_time_score,
     _soft_time_score,
     _time_log,
     compute_queens_improved_ratings,
@@ -48,11 +51,20 @@ def _day(puzzle, results):
     ]
 
 
-def test_time_spacing_shapes_the_soft_bracket_and_performance():
+def test_time_spacing_shapes_the_hybrid_bracket_and_performance():
+    assert _RATING_K == 124
+    assert _HEAD_TO_HEAD_WEIGHT == 0.15
     assert _soft_time_score(12, 12) == 0.5
     close_advantage = _soft_time_score(12, 13) - 0.5
     wider_advantage = _soft_time_score(13, 16) - 0.5
     assert 0 < close_advantage < wider_advantage
+    assert _hybrid_time_score(12, 13) == (
+        0.85 * _soft_time_score(12, 13) + 0.15
+    )
+    assert _hybrid_time_score(13, 12) == (
+        0.85 * _soft_time_score(13, 12)
+    )
+    assert _hybrid_time_score(12, 12) == 0.5
 
     times = {
         str(index): seconds
@@ -64,12 +76,28 @@ def test_time_spacing_shapes_the_soft_bracket_and_performance():
     }
 
     assert by_time[12] - by_time[13] < by_time[13] - by_time[16]
-    assert abs((by_time[12] - by_time[13]) - 60.49) < 0.1
-    assert abs((by_time[13] - by_time[16]) - 156.91) < 0.1
+    assert abs((by_time[12] - by_time[13]) - 77.52) < 0.1
+    assert abs((by_time[13] - by_time[16]) - 160.91) < 0.1
     # The wider player-facing point scale should make the existing rank bands
     # meaningful while the underlying closeness response stays unchanged.
     assert updates['0'].delta > 30
     assert updates['7'].delta < -30
+
+
+def test_photo_finish_gets_fifteen_percent_head_to_head_result():
+    win = _hybrid_time_score(100, 101)
+    loss = _hybrid_time_score(101, 100)
+
+    assert math.isclose(win, 0.5810408654380644, abs_tol=1e-15)
+    assert 0.575 < win < 1
+    assert 0 < loss < 0.425
+    assert math.isclose(win + loss, 1.0, abs_tol=1e-15)
+
+    # Distinct enormous integers can share one floating-point logarithm. The
+    # hard component must compare their exact validated seconds instead.
+    huge = 10 ** 400
+    assert _soft_time_score(huge, huge + 1) == 0.5
+    assert _hybrid_time_score(huge, huge + 1) == 0.575
 
 
 def test_extreme_pair_evidence_is_symmetric_and_never_separates():
@@ -118,7 +146,7 @@ def test_replay_is_deterministic_and_dedupes_by_first_message():
     assert len(histories_a['u2']) == 6
 
 
-def test_solo_days_seed_players_without_rating_signal():
+def test_solo_days_seed_players_without_queens_absence_tracking():
     histories = {}
     states = compute_queens_improved_ratings(
         [_row('u1', 1, 18), _row('u2', 2, 12)],
@@ -132,13 +160,15 @@ def test_solo_days_seed_players_without_rating_signal():
         assert state.games == 0
         assert state.peak == 1200
         assert state.last_delta == 0
-        assert state.skip_streak == 0
         assert state.last_puzzle == puzzle
-        assert len(histories[user_id]) == 1
         point = histories[user_id][0]
         assert point.delta == 0
         assert point.performance is None
         assert point.is_decay is False
+    assert states['u1'].skip_streak == 0
+    assert states['u2'].skip_streak == 0
+    assert len(histories['u1']) == 1
+    assert len(histories['u2']) == 1
 
 
 def test_equal_times_share_performance_and_stay_symmetric():
@@ -148,11 +178,19 @@ def test_equal_times_share_performance_and_stay_symmetric():
     histories = {}
     states = compute_queens_improved_ratings(rows, histories=histories)
 
-    assert {state.rating for state in states.values()} == {1200}
+    assert {state.rating for state in states.values()} == {
+        1200 - 5 * _FIELD_DEFLATION
+    }
     assert {state.games for state in states.values()} == {5}
     for points in histories.values():
-        assert all(point.rating == 1200 for point in points)
-        assert all(abs(point.performance - 1200) < 1e-9 for point in points)
+        assert [point.rating for point in points] == [
+            1200 - puzzle * _FIELD_DEFLATION
+            for puzzle in range(1, 6)
+        ]
+        assert [point.performance for point in points] == [
+            1200 - (puzzle - 1) * _FIELD_DEFLATION
+            for puzzle in range(1, 6)
+        ]
 
 
 def test_rating_delta_and_performance_follow_the_daily_result():
@@ -291,15 +329,18 @@ def test_one_changed_time_has_bounded_influence_on_every_other_player():
                 assert change <= _RATING_K / count + 1e-10
 
 
-def test_replay_conserves_starting_mean_as_players_enter():
+def test_replay_applies_only_fixed_field_deflation_as_players_enter():
     rng = random.Random(424242)
     rows = []
     next_message = 1
+    rated_participations = 0
     for puzzle in range(1, 31):
         # The observed pool grows, and some days deliberately have only one
-        # participant.  Neither entry nor a solo day may create rating drift.
+        # participant. Entry and solo days do not add any field correction.
         observed = min(12, 1 + puzzle // 2)
         field_size = 1 if puzzle % 7 == 0 else min(observed, 2 + puzzle % 8)
+        if field_size >= 2:
+            rated_participations += field_size
         for user_index in rng.sample(range(observed), field_size):
             rows.append(_row(
                 f'u{user_index}',
@@ -312,7 +353,12 @@ def test_replay_conserves_starting_mean_as_players_enter():
     states = compute_queens_improved_ratings(rows)
 
     assert len(states) == 12
-    assert abs(sum(state.rating for state in states.values()) - 12 * 1200) < 1e-9
+    expected_total = 12 * 1200 - rated_participations * _FIELD_DEFLATION
+    assert math.isclose(
+        sum(state.rating for state in states.values()),
+        expected_total,
+        abs_tol=1e-9,
+    )
 
 
 def test_malformed_times_are_quarantined_from_improved_replay():
@@ -329,7 +375,8 @@ def test_malformed_times_are_quarantined_from_improved_replay():
         _row('u8', 2, None, message_id=8),
         _row('u9', 2, 'not-a-time', message_id=9),
         _row('u12', 2, Decimal('1.5'), message_id=12),
-        # Quarantining u11 leaves a valid solo day, which must remain unrated.
+        # Quarantining u11 leaves a valid solo day. Queens has no inactivity
+        # decay, so that uncontested player receives no transfer.
         _row('u10', 3, 15, message_id=10),
         _row('u11', 3, -1, message_id=11),
     ]
@@ -340,6 +387,11 @@ def test_malformed_times_are_quarantined_from_improved_replay():
     assert states['u2'].rating > 1200 > states['u3'].rating
     assert states['u10'].rating == 1200
     assert states['u10'].games == 0
+    assert math.isclose(
+        sum(state.rating for state in states.values()),
+        3600 - 2 * _FIELD_DEFLATION,
+        abs_tol=1e-9,
+    )
     with pytest.raises(ValueError):
         _time_log(-1)
     with pytest.raises(ValueError):
@@ -347,7 +399,7 @@ def test_malformed_times_are_quarantined_from_improved_replay():
     assert math.isfinite(_time_log(10 ** 10_000))
 
 
-def test_history_contract_and_inactivity_state():
+def test_history_contract_omits_queens_inactivity_points():
     rows = _day(1, [('u1', 10), ('u2', 30)])
     rows.extend(_day(2, [('u2', 10), ('u3', 30)]))
     histories = {}
@@ -357,16 +409,16 @@ def test_history_contract_and_inactivity_state():
         include_decay_in_history=True,
     )
 
-    # Inactivity changes metadata only: never visible rating or history.
+    # Queens inactivity neither changes state nor creates a history point.
     assert states['u1'].rating == histories['u1'][0].rating
-    assert states['u1'].last_delta == 0
-    assert states['u1'].skip_streak == 1
+    assert states['u1'].last_delta == histories['u1'][0].delta > 0
+    assert states['u1'].skip_streak == 0
     assert states['u1'].last_puzzle == 1
     assert len(histories['u1']) == 1
     assert histories['u1'][0].is_decay is False
 
     for user_id, points in histories.items():
-        assert len(points) == states[user_id].games
+        assert sum(not point.is_decay for point in points) == states[user_id].games
         for point in points:
             assert point.puzzle_number >= 1
             assert math.isfinite(point.rating)

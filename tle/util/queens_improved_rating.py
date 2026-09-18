@@ -1,20 +1,22 @@
 """Experimental margin-aware multiplayer Elo replay for LinkedIn Queens.
 
 The canonical Queens ladder remains Codeforces-style.  This module powers only
-the opt-in ``+beta`` views and deliberately uses a calmer, time-sensitive
-model:
+the opt-in ``+beta`` views and deliberately uses a bounded hybrid model:
 
 * every opponent contributes a bounded fraction of one daily result;
-* close times behave almost like ties instead of full wins/losses;
+* 85% of each pair score comes from the time margin and 15% from the hard
+  faster/slower result, so close wins still matter;
 * the field is averaged, so a 20-player day is not 19 independent games;
 * a proper log-loss/Brier blend smoothly reduces one surprising day's
   leverage without a post-hoc delta cap;
-* complementary pair updates preserve an exactly zero-sum round;
-* player-facing rating points use a wider scale so sustained skill differences
-  span the existing minigame rank tiers.
+* complementary pair evidence is zero-sum before a small field correction;
+* each rated participant then contributes 0.25 points of deflation to offset
+  rating parked by short-lived accounts and, for Akari, redistributed decay;
+* each game's player-facing point scale is calibrated independently while the
+  shared latent proper-score model remains identical.
 
 Displayed performance uniquely inverts the common field expectation from the
-mean soft result. This keeps result order monotone even though the robust
+mean hybrid result. This keeps result order monotone even though the robust
 update loss itself can be non-convex. A neutral self-comparison keeps the best
 and worst performance finite, while a single extreme time can affect every
 other player by only ``1 / field_size``.
@@ -23,7 +25,7 @@ other player by only ``1 / field_size``.
 import math
 from dataclasses import dataclass
 
-from tle.util.akari_rating import HistoryPoint, RatingState
+from tle.util.akari_rating import HistoryPoint, RatingState, _decay_rate
 from tle.util._beta_rating_performance import (
     _BRIER_BLEND,
     _ELO_SCALE,
@@ -32,21 +34,36 @@ from tle.util._beta_rating_performance import (
     _field_expected,
     _performance_rating,
     _proper_residual,
-    _sigmoid,
+)
+from tle.util._beta_rating_time import (
+    _HEAD_TO_HEAD_WEIGHT,
+    _TIME_MARGIN_LOGIT_LIMIT,
+    _TIME_MARGIN_WIDTH,
+    _blend_pair_score,
+    _hard_time_score,
+    _hybrid_time_score,
+    _result_time_seconds,
+    _soft_time_score,
+    _soft_time_score_from_logs,
+    _time_log,
 )
 
 
 _START_RATING = 1200.0
-# Rating scales have arbitrary units.  The original beta's sound latent model
-# occupied only half of the rank bands used by Queens/Akari, so expose two
-# player-facing points per original beta point.  Scaling the expectation curve,
-# K, and performance search together preserves every probability and ordering.
-_TIME_MARGIN_WIDTH = 0.35
-# This is a bound on one pair's *evidence*, not on a player's rating change.
-# It activates only beyond a 16.4x raw-time ratio and prevents malformed
-# or repeated extreme margins from producing numerical 0/1 separation.
-_TIME_MARGIN_LOGIT_LIMIT = 8.0
-_RATING_K = _RATING_POINT_SCALE * 54.0
+# Rating scales have arbitrary units. Queens keeps the established 2x display
+# coordinate; Akari supplies its independently calibrated coordinate through
+# ``rating_point_scale``. Within a raw contest, scaling the expectation curve,
+# K, performance search, and ratings together preserves every probability,
+# normalized update, and ordering. The fixed field policy stays in display
+# points and is intentionally separate from that coordinate transformation.
+_BASE_RATING_K = 62.0
+_RATING_K = _RATING_POINT_SCALE * _BASE_RATING_K
+# The pairwise model is naturally zero-sum, but the visible active pool is not:
+# short-lived players can leave below the starting rating, while Akari's decay
+# moves points from inactive players to active ones. Apply only the lightweight
+# field-wide part of the Codeforces correction. There is deliberately no
+# strongest-player correction in the beta ladder.
+_FIELD_DEFLATION = 0.25
 
 
 @dataclass(frozen=True)
@@ -65,68 +82,26 @@ class _RoundUpdate:
     performance: float
 
 
-def _time_log(time_seconds):
-    """Return the raw log-time used by the daily performance bracket."""
-    try:
-        if isinstance(time_seconds, int):
-            seconds = time_seconds
-        else:
-            seconds = float(time_seconds)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            f'Queens time must be numeric, got {time_seconds!r}.') from exc
-    if (
-            isinstance(seconds, float) and not math.isfinite(seconds)
-            or seconds <= 0):
-        raise ValueError(
-            f'Queens time must be finite and positive, '
-            f'got {time_seconds!r}.')
-    # Keep integer inputs as integers so even an unexpectedly huge legacy value
-    # can be logged without overflowing an intermediate float conversion.
-    return math.log(seconds)
-
-
-def _result_time_seconds(time_seconds):
-    """Validate one stored result time, returning its integral seconds."""
-    try:
-        seconds = int(time_seconds)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            f'Queens result time must be an integer, got {time_seconds!r}.'
-        ) from exc
-    if seconds <= 0:
-        raise ValueError(
-            f'Queens result time must be positive, got {time_seconds!r}.')
-    # Reject fractional floats rather than silently truncating them.  SQLite
-    # rows use integers, but this also protects imported/test row-like objects.
-    if not isinstance(time_seconds, str) and time_seconds != seconds:
-        raise ValueError(
-            f'Queens result time must be an integer, got {time_seconds!r}.')
-    _time_log(seconds)
-    return seconds
-
-
-def _soft_time_score(time_self, time_other):
-    """Soft result for ``time_self`` against ``time_other``.
-
-    Lower is better.  Equal times return exactly 0.5; increasingly large gaps
-    approach a full 1/0 result without ever making performance infinite.
-    """
-    return _soft_time_score_from_logs(
-        _time_log(time_self), _time_log(time_other))
-
-
-def _soft_time_score_from_logs(log_self, log_other):
-    """Return bounded pair evidence from two already-transformed times."""
-    logit = (log_other - log_self) / _TIME_MARGIN_WIDTH
-    logit = max(
-        -_TIME_MARGIN_LOGIT_LIMIT,
-        min(_TIME_MARGIN_LOGIT_LIMIT, logit),
+def _apply_field_correction(updates):
+    """Center one rated field, then remove 0.25 points per participant."""
+    if len(updates) < 2:
+        return updates
+    shift = (
+        -sum(update.delta for update in updates.values()) / len(updates)
+        - _FIELD_DEFLATION
     )
-    return _sigmoid(logit)
+    return {
+        user: _RoundUpdate(
+            delta=update.delta + shift,
+            performance=update.performance,
+        )
+        for user, update in updates.items()
+    }
 
 
-def _compute_round(ratings, times, *, compute_performance=True):
+def _compute_round(
+        ratings, times, *, compute_performance=True,
+        rating_point_scale=_RATING_POINT_SCALE):
     """Return naturally bounded, zero-sum updates for one multiplayer day."""
     users = sorted(ratings)
     if set(users) != set(times):
@@ -137,18 +112,30 @@ def _compute_round(ratings, times, *, compute_performance=True):
             for user in users
         }
 
-    time_logs = {user: _time_log(times[user]) for user in users}
+    normalized_times = {
+        user: _result_time_seconds(times[user]) for user in users
+    }
+    time_logs = {
+        user: _time_log(normalized_times[user]) for user in users
+    }
     return _compute_round_from_pair_score(
         ratings,
-        lambda user, opponent: _soft_time_score_from_logs(
-            time_logs[user], time_logs[opponent]),
+        lambda user, opponent: _blend_pair_score(
+            _soft_time_score_from_logs(
+                time_logs[user], time_logs[opponent]),
+            _hard_time_score(
+                normalized_times[user], normalized_times[opponent]),
+        ),
         compute_performance=compute_performance,
+        rating_point_scale=rating_point_scale,
     )
 
 
 def _compute_round_from_pair_score(
-        ratings, pair_score_fn, *, compute_performance=True):
-    """Convert complementary pair scores into proper-score beta updates."""
+        ratings, pair_score_fn, *, compute_performance=True,
+        performance_pair_score_fn=None,
+        rating_point_scale=_RATING_POINT_SCALE):
+    """Convert update scores and optional display scores into one beta round."""
     users = sorted(ratings)
     if len(users) < 2:
         return {
@@ -156,6 +143,10 @@ def _compute_round_from_pair_score(
             for user in users
         }
 
+    rating_point_scale = float(rating_point_scale)
+    if not math.isfinite(rating_point_scale) or rating_point_scale <= 0:
+        raise ValueError('Beta rating point scale must be finite and positive.')
+    rating_k = rating_point_scale * _BASE_RATING_K
     field_ratings = [float(ratings[user]) for user in users]
     scores_by_user = {}
     residuals_by_user = {}
@@ -163,25 +154,42 @@ def _compute_round_from_pair_score(
         scores = []
         residuals = []
         for opponent in users:
-            score = (
+            update_score = (
                 0.5 if opponent == user
                 else float(pair_score_fn(user, opponent))
             )
-            if not math.isfinite(score) or not 0 <= score <= 1:
-                raise ValueError(f'Beta pair score must be in [0, 1], got {score}.')
-            expected = _elo_expected(ratings[user], ratings[opponent])
-            scores.append(score)
-            residuals.append(_proper_residual(score, expected))
+            if (not math.isfinite(update_score)
+                    or not 0 <= update_score <= 1):
+                raise ValueError(
+                    f'Beta pair score must be in [0, 1], '
+                    f'got {update_score}.')
+            expected = _elo_expected(
+                ratings[user], ratings[opponent],
+                point_scale=rating_point_scale)
+            residuals.append(_proper_residual(update_score, expected))
+            performance_score = update_score
+            if (compute_performance
+                    and performance_pair_score_fn is not None
+                    and opponent != user):
+                performance_score = float(
+                    performance_pair_score_fn(user, opponent))
+                if (not math.isfinite(performance_score)
+                        or not 0 <= performance_score <= 1):
+                    raise ValueError(
+                        'Beta performance pair score must be in [0, 1], '
+                        f'got {performance_score}.')
+            scores.append(performance_score)
         scores_by_user[user] = scores
         residuals_by_user[user] = residuals
 
     return {
         user: _RoundUpdate(
-            delta=_RATING_K * sum(residuals_by_user[user]) / len(users),
+            delta=rating_k * sum(residuals_by_user[user]) / len(users),
             performance=(
                 _performance_rating(
                     field_ratings,
                     sum(scores_by_user[user]) / len(users),
+                    point_scale=rating_point_scale,
                 )
                 if compute_performance else None
             ),
@@ -191,7 +199,9 @@ def _compute_round_from_pair_score(
 
 
 def _compute_pair_round(
-        ratings, rows, pair_score_fn, *, compute_performance=True):
+        ratings, rows, pair_score_fn, *, compute_performance=True,
+        performance_pair_score_fn=None,
+        rating_point_scale=_RATING_POINT_SCALE):
     """Run a beta round using a game-specific complementary pair score."""
     users = sorted(ratings)
     if set(users) != set(rows):
@@ -201,6 +211,12 @@ def _compute_pair_round(
         lambda user, opponent: pair_score_fn(
             rows[user], rows[opponent]),
         compute_performance=compute_performance,
+        performance_pair_score_fn=(
+            None if performance_pair_score_fn is None
+            else lambda user, opponent: performance_pair_score_fn(
+                rows[user], rows[opponent])
+        ),
+        rating_point_scale=rating_point_scale,
     )
 
 
@@ -247,17 +263,41 @@ def _history_point(puzzle_number, row, rating, delta, performance):
 def compute_queens_improved_ratings(
         rows, *, max_puzzle=None, histories=None,
         include_decay_in_history=False, current_puzzle_number=None,
-        rank_fn=None, pair_score_fn=None, row_validator_fn=None,
-        performance_puzzles=None, **_ignored):
-    """Replay Queens results with the experimental soft-bracket Elo model.
+        rank_fn=None, start_rating=None, decay_base=None, decay_max=None,
+        decay_grace=None, pair_score_fn=None, row_validator_fn=None,
+        performance_pair_score_fn=None, performance_puzzles=None,
+        rating_point_scale=_RATING_POINT_SCALE, **_ignored):
+    """Replay Queens results with the experimental hybrid-bracket Elo model.
 
     The return and history shapes match :func:`compute_ratings`, so every
     existing ``+beta`` table and graph can use this engine without storing
-    a second rating snapshot.  Queens inactivity never changes visible skill;
-    ``include_decay_in_history`` and ``rank_fn`` are accepted only for shared
-    engine compatibility.
+    a second rating snapshot. Inactivity decay is off unless the caller passes
+    decay parameters; both Queens and Akari now supply their own, so the beta
+    ladder decays exactly like the canonical one. When enabled, above-start
+    absentees decay toward ``start_rating`` on concluded active days and their
+    lost points are split equally among that day's valid participants. Each
+    rated update is centered and then reduced by 0.25 points per participant;
+    the stronger-participant Codeforces correction is not used. A custom
+    ``performance_pair_score_fn`` can decouple event-performance ordering from
+    rating evidence, but requires a custom ``pair_score_fn`` and never affects
+    deltas.
     """
-    del include_decay_in_history, rank_fn
+    del rank_fn
+    rating_point_scale = float(rating_point_scale)
+    if not math.isfinite(rating_point_scale) or rating_point_scale <= 0:
+        raise ValueError('Beta rating point scale must be finite and positive.')
+    if start_rating is None:
+        start_rating = float(_START_RATING)
+    if decay_base is None:
+        decay_base = 0.0
+    if decay_max is None:
+        decay_max = 0.0
+    if decay_grace is None:
+        decay_grace = 0
+    decay_enabled = decay_base > 0 and decay_max > 0
+    if performance_pair_score_fn is not None and pair_score_fn is None:
+        raise ValueError(
+            'A performance pair score requires a rating pair score.')
     if performance_puzzles is not None:
         performance_puzzles = {
             int(puzzle_number) for puzzle_number in performance_puzzles
@@ -293,59 +333,86 @@ def compute_queens_improved_ratings(
         day_rows = valid_day_rows
         active_ids = sorted(day_rows)
 
-        for user_id in active_ids:
-            players.setdefault(
-                user_id, _Player(last_puzzle=puzzle_number))
-
-        if len(active_ids) < 2:
-            for user_id in active_ids:
-                old = players[user_id]
-                players[user_id] = _Player(
-                    rating=old.rating,
-                    games=old.games,
-                    peak=old.peak,
-                    last_delta=0.0,
-                    skip_streak=0,
-                    last_puzzle=puzzle_number,
-                )
-                if histories is not None:
-                    histories.setdefault(user_id, []).append(_history_point(
-                        puzzle_number, day_rows[user_id], old.rating, 0.0, None))
+        # A fully malformed day supplies neither rating evidence nor anyone to
+        # receive a zero-sum decay transfer, so quarantine it completely.
+        if not active_ids:
             continue
 
-        before = {
-            user_id: players[user_id].rating for user_id in active_ids
-        }
-        times = {
-            user_id: _result_time_seconds(day_rows[user_id].time_seconds)
-            for user_id in active_ids
-        }
-        compute_performance = (
-            histories is not None
-            and (
-                performance_puzzles is None
-                or puzzle_number in performance_puzzles
+        for user_id in active_ids:
+            players.setdefault(
+                user_id,
+                _Player(
+                    rating=start_rating,
+                    peak=start_rating,
+                    last_puzzle=puzzle_number,
+                ),
             )
+
+        rated_day = len(active_ids) >= 2
+        if rated_day:
+            before = {
+                user_id: players[user_id].rating for user_id in active_ids
+            }
+            times = {
+                user_id: _result_time_seconds(day_rows[user_id].time_seconds)
+                for user_id in active_ids
+            }
+            compute_performance = (
+                histories is not None
+                and (
+                    performance_puzzles is None
+                    or puzzle_number in performance_puzzles
+                )
+            )
+            updates = (
+                _compute_round(
+                    before, times,
+                    compute_performance=compute_performance,
+                    rating_point_scale=rating_point_scale)
+                if pair_score_fn is None
+                else _compute_pair_round(
+                    before, day_rows, pair_score_fn,
+                    compute_performance=compute_performance,
+                    performance_pair_score_fn=performance_pair_score_fn,
+                    rating_point_scale=rating_point_scale)
+            )
+            updates = _apply_field_correction(updates)
+        else:
+            updates = {
+                user_id: _RoundUpdate(delta=0.0, performance=None)
+                for user_id in active_ids
+            }
+
+        day_concluded = (
+            current_puzzle_number is None
+            or puzzle_number < current_puzzle_number
         )
-        updates = (
-            _compute_round(
-                before, times,
-                compute_performance=compute_performance)
-            if pair_score_fn is None
-            else _compute_pair_round(
-                before, day_rows, pair_score_fn,
-                compute_performance=compute_performance)
-        )
+        absent_changes = {}
+        decay_pool = 0.0
+        if day_concluded and decay_enabled:
+            for user_id in sorted(players):
+                if user_id in day_rows:
+                    continue
+                old = players[user_id]
+                skip_streak = old.skip_streak + 1
+                raw_delta = (start_rating - old.rating) * _decay_rate(
+                    skip_streak, decay_base, decay_max, decay_grace)
+                delta = min(0.0, raw_delta)
+                absent_changes[user_id] = (skip_streak, delta)
+                decay_pool -= delta
+
+        transfer_share = decay_pool / len(active_ids) if decay_pool > 0 else 0.0
 
         for user_id in active_ids:
             old = players[user_id]
             update = updates[user_id]
-            new_rating = old.rating + update.delta
+            combined_delta = update.delta + transfer_share
+            new_rating = old.rating + combined_delta
             players[user_id] = _Player(
                 rating=new_rating,
-                games=old.games + 1,
+                games=old.games + int(rated_day),
                 peak=max(old.peak, new_rating),
-                last_delta=update.delta,
+                last_delta=combined_delta,
                 skip_streak=0,
                 last_puzzle=puzzle_number,
             )
@@ -354,27 +421,34 @@ def compute_queens_improved_ratings(
                     puzzle_number,
                     day_rows[user_id],
                     new_rating,
-                    update.delta,
+                    combined_delta,
                     update.performance,
                 ))
 
-        day_concluded = (
-            current_puzzle_number is None
-            or puzzle_number < current_puzzle_number
-        )
-        if day_concluded:
-            for user_id in sorted(players):
-                if user_id in day_rows:
-                    continue
-                old = players[user_id]
-                players[user_id] = _Player(
-                    rating=old.rating,
-                    games=old.games,
-                    peak=old.peak,
-                    last_delta=0.0,
-                    skip_streak=old.skip_streak + 1,
-                    last_puzzle=old.last_puzzle,
-                )
+        puzzle_date = getattr(day_rows[active_ids[0]], 'puzzle_date', None)
+        for user_id, (skip_streak, delta) in absent_changes.items():
+            old = players[user_id]
+            new_rating = old.rating + delta
+            players[user_id] = _Player(
+                rating=new_rating,
+                games=old.games,
+                peak=old.peak,
+                last_delta=delta,
+                skip_streak=skip_streak,
+                last_puzzle=old.last_puzzle,
+            )
+            if histories is not None and include_decay_in_history:
+                histories.setdefault(user_id, []).append(HistoryPoint(
+                    puzzle_number=puzzle_number,
+                    puzzle_date=puzzle_date,
+                    rating=new_rating,
+                    delta=delta,
+                    performance=None,
+                    is_perfect=False,
+                    accuracy=0,
+                    time_seconds=0,
+                    is_decay=True,
+                ))
 
     return {
         user_id: RatingState(

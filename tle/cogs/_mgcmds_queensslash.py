@@ -29,7 +29,7 @@ class QueensSlashMixin:
     async def slash_queens_show(self, interaction: discord.Interaction):
         await interaction.response.defer()
         try:
-            await self._cmd_queens_show(_SlashCtx(interaction))
+            await self._cmd_queens_show(_SlashCtx(interaction), QUEENS_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -67,9 +67,9 @@ class QueensSlashMixin:
         await interaction.response.defer()
         ctx = _SlashCtx(interaction)
         try:
-            target = self._resolve_queens_registrar_target(ctx, member)
+            target = self._resolve_queens_registrar_target(ctx, QUEENS_GAME, member)
             await self._cmd_queens_register(
-                ctx, target, linkedin_name, anonymous=anonymous)
+                ctx, QUEENS_GAME, target, linkedin_name, anonymous=anonymous)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -89,7 +89,7 @@ class QueensSlashMixin:
             return
         try:
             await self._cmd_queens_set(
-                _SlashCtx(interaction), member, linkedin_name,
+                _SlashCtx(interaction), QUEENS_GAME, member, linkedin_name,
                 anonymous=anonymous)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
@@ -103,7 +103,7 @@ class QueensSlashMixin:
         await interaction.response.defer()
         ctx = _SlashCtx(interaction)
         try:
-            await self._cmd_queens_unregister(ctx, member)
+            await self._cmd_queens_unregister(ctx, QUEENS_GAME, member)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -138,23 +138,27 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='top', description='Show fastest-result winners')
+    @queens_slash.command(
+        name='top', description='Show outright fastest-result winners')
     @app_commands.describe(
         timeframe='Time period filter', mode='Scoring mode',
-        weekdays='Queens days: mon,wed, weekday, or weekend')
+        weekdays='Queens days: mon,wed, weekday, or weekend',
+        ties='Also count shared wins, ordered by the combined total')
     @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, mode=_MODE_CHOICES)
     async def slash_queens_top(
         self, interaction: discord.Interaction,
         timeframe: Optional[app_commands.Choice[str]] = None,
         mode: Optional[app_commands.Choice[str]] = None,
         weekdays: Optional[str] = None,
+        ties: bool = False,
     ):
         await interaction.response.defer()
         try:
             await self._cmd_top(
                 _SlashCtx(interaction), QUEENS_GAME,
                 *self._slash_choice_args(timeframe, mode),
-                *self._slash_queens_weekday_args(weekdays))
+                *self._slash_queens_weekday_args(weekdays),
+                *(('+ties',) if ties else ()))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -175,7 +179,7 @@ class QueensSlashMixin:
             ctx.author = member
         try:
             await self._cmd_queens_streak(
-                ctx, *self._slash_choice_args(timeframe),
+                ctx, QUEENS_GAME, *self._slash_choice_args(timeframe),
                 *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
@@ -197,7 +201,7 @@ class QueensSlashMixin:
             ctx.author = member
         try:
             await self._cmd_queens_stats(
-                ctx, *self._slash_choice_args(timeframe),
+                ctx, QUEENS_GAME, *self._slash_choice_args(timeframe),
                 *self._slash_queens_weekday_args(weekdays))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
@@ -220,7 +224,7 @@ class QueensSlashMixin:
         await interaction.response.defer()
         try:
             await self._cmd_queens_stats_date(
-                _SlashCtx(interaction),
+                _SlashCtx(interaction), QUEENS_GAME,
                 date or _queens_current_puzzle_date().isoformat(),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
@@ -244,7 +248,7 @@ class QueensSlashMixin:
         await interaction.response.defer()
         try:
             await self._cmd_queens_ratings(
-                _SlashCtx(interaction),
+                _SlashCtx(interaction), QUEENS_GAME,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
                 improved=beta, weekly=weekly)
@@ -257,6 +261,7 @@ class QueensSlashMixin:
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         recalculate='Recalculate ratings from the filtered result set',
+        decay='Show inactivity days on the graph',
         beta='Use the beta testing rating system')
     async def slash_queens_rating(
         self, interaction: discord.Interaction,
@@ -264,13 +269,15 @@ class QueensSlashMixin:
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         recalculate: Optional[bool] = False,
+        decay: bool = False,
         beta: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
         try:
             await self._cmd_queens_rating(
-                _SlashCtx(interaction), [target],
+                _SlashCtx(interaction), QUEENS_GAME, [target],
+                include_decay=bool(decay),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
                 recalculate=bool(recalculate), improved=beta)
@@ -294,7 +301,7 @@ class QueensSlashMixin:
         target = member or interaction.user
         try:
             await self._cmd_queens_performance(
-                _SlashCtx(interaction), [target],
+                _SlashCtx(interaction), QUEENS_GAME, [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
                 improved=beta)
@@ -318,7 +325,7 @@ class QueensSlashMixin:
         target = member or interaction.user
         try:
             await self._cmd_queens_history(
-                _SlashCtx(interaction), target,
+                _SlashCtx(interaction), QUEENS_GAME, target,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
                 improved=beta)
@@ -341,7 +348,7 @@ class QueensSlashMixin:
         try:
             status = status or 'No hints & no mistakes'
             await self._cmd_queens_add(
-                _SlashCtx(interaction),
+                _SlashCtx(interaction), QUEENS_GAME,
                 f'{member.id} {date} {time} {status}')
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
@@ -357,7 +364,7 @@ class QueensSlashMixin:
             return
         try:
             await self._cmd_queens_remove(
-                _SlashCtx(interaction), f'{member.id} {date}')
+                _SlashCtx(interaction), QUEENS_GAME, f'{member.id} {date}')
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -370,7 +377,7 @@ class QueensSlashMixin:
         if not await self._slash_require_queens_mod(interaction):
             return
         try:
-            await self._cmd_queens_clear(_SlashCtx(interaction), date)
+            await self._cmd_queens_clear(_SlashCtx(interaction), QUEENS_GAME, date)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -387,7 +394,7 @@ class QueensSlashMixin:
             return
         try:
             await self._cmd_queens_clean(
-                _SlashCtx(interaction), start_date, end_date)
+                _SlashCtx(interaction), QUEENS_GAME, start_date, end_date)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -456,6 +463,6 @@ class QueensSlashMixin:
         if not await self._slash_require_queens_mod(interaction):
             return
         try:
-            await self._cmd_queens_ratings_recompute(_SlashCtx(interaction))
+            await self._cmd_queens_ratings_recompute(_SlashCtx(interaction), QUEENS_GAME)
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)

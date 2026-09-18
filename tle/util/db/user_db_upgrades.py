@@ -2,7 +2,7 @@
 Database upgrade functions for user.db.
 Register upgrades in version order; they run automatically on startup.
 
-The upgrade functions are defined across ``_user_db_upgrades_part1/2/3/4``
+The upgrade functions are defined across ``_user_db_upgrades_part1/2/3/4/5``
 (split to keep each module under the 500-line limit). Importing those modules below
 registers every upgrade on the shared ``registry``; the registry runs them in
 version order regardless of import order. ``registry`` is re-exported here so
@@ -17,3 +17,4 @@ from tle.util.db._user_db_upgrades_part1 import *  # noqa: F401,F403
 from tle.util.db._user_db_upgrades_part2 import *  # noqa: F401,F403
 from tle.util.db._user_db_upgrades_part3 import *  # noqa: F401,F403
 from tle.util.db._user_db_upgrades_part4 import *  # noqa: F401,F403
+from tle.util.db._user_db_upgrades_part5 import *  # noqa: F401,F403

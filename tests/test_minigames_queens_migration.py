@@ -68,7 +68,7 @@ class TestQueensImportMigration:
                 (300, 'Alice LinkedIn'),
                 (301, 'Bob LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', user_id, name, normalize_queens_name(name),
+                100, 'linkedin', user_id, name, normalize_queens_name(name),
                 None, 1.0, user_id)
         db.save_minigame_result(
             11, 100, 'queens', 201, 300, _queens_number('2026-06-08'),
@@ -81,7 +81,7 @@ class TestQueensImportMigration:
             100, 9, True, 'akari raw')
 
         cog = Minigames(bot=None)
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         source = {
             row.external_name: row
@@ -127,7 +127,7 @@ class TestQueensImportMigration:
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn',
+            100, 'linkedin', 300, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
         db.save_minigame_result(
             11, 100, 'queens', 201, 300, _queens_number('2026-06-08'),
@@ -143,7 +143,7 @@ class TestQueensImportMigration:
         )
         cog = Minigames(bot=None)
         preview = cog._make_queens_import_preview(
-            ctx, '2026-06-08', (
+            ctx, QUEENS_GAME, '2026-06-08', (
                 'Alice LinkedIn\n'
                 '\U0001f913\U0001f48e No hints & no mistakes!\n'
                 '0:07\n'
@@ -153,10 +153,10 @@ class TestQueensImportMigration:
             ))
 
         new_resolved, new_unresolved = cog._filter_new_queens_entries(
-            100, preview)
+            100, QUEENS_GAME, preview)
         preview = preview._replace(
             resolved=new_resolved, unresolved=new_unresolved)
-        saved = cog._save_queens_import(ctx, preview)
+        saved = cog._save_queens_import(ctx, QUEENS_GAME, preview)
 
         assert saved.resolved == 1
         assert saved.unresolved == 1
@@ -183,7 +183,7 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 9, True, raw)
         cog = Minigames(bot=None)
 
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         assert saved == 0
         assert db.get_minigame_results_for_guild(100, 'queens') == []
@@ -194,9 +194,9 @@ class TestQueensImportMigration:
         assert source[0].time_seconds == 9
 
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Charlie LinkedIn',
+            100, 'linkedin', 300, 'Charlie LinkedIn',
             normalize_queens_name('Charlie LinkedIn'), None, 1.0, 999)
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         materialized = db.get_minigame_result_for_user_puzzle(
             100, 'queens', 300, _queens_number('2026-06-08'))
@@ -217,7 +217,7 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 9, True, raw)
         cog = Minigames(bot=None)
 
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         assert saved == 0
         assert db.conn.execute(
@@ -229,9 +229,9 @@ class TestQueensImportMigration:
         assert [row.time_seconds for row in source] == [9]
 
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Charlie LinkedIn',
+            100, 'linkedin', 300, 'Charlie LinkedIn',
             normalize_queens_name('Charlie LinkedIn'), None, 1.0, 999)
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         materialized = db.get_minigame_result_for_user_puzzle(
             100, 'queens', 300, _queens_number('2026-06-08'))
@@ -243,7 +243,7 @@ class TestQueensImportMigration:
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Current LinkedIn',
+            100, 'linkedin', 300, 'Current LinkedIn',
             normalize_queens_name('Current LinkedIn'), None, 1.0, 999)
         raw = (
             'Original LinkedIn\n'
@@ -255,7 +255,7 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 9, True, raw)
         cog = Minigames(bot=None)
 
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
 
         assert saved == 0
         assert db.get_minigame_results_for_guild(100, 'queens') == []
@@ -274,7 +274,7 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 9, True, 'not a copied leaderboard')
         cog = Minigames(bot=None)
 
-        saved = cog._sync_queens_materialized_results(100)
+        saved = cog._sync_queens_materialized_results(100, QUEENS_GAME)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
         assert saved == 0
@@ -286,7 +286,7 @@ class TestQueensImportMigration:
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn',
+            100, 'linkedin', 300, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
         db.save_minigame_unresolved_result(
             100, 'queens', normalize_queens_name('Alice LinkedIn'),
@@ -294,13 +294,13 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 4, True, 'source')
         cog = Minigames(bot=None)
 
-        assert cog._sync_queens_materialized_results(100) == 1
+        assert cog._sync_queens_materialized_results(100, QUEENS_GAME) == 1
         rows_before = db.get_minigame_results_for_guild(100, 'queens')
         assert [(row.user_id, row.time_seconds) for row in rows_before] == [
             ('300', 4),
         ]
 
-        assert cog._migrate_legacy_queens_results_to_external(100) == 0
+        assert cog._migrate_legacy_queens_results_to_external(100, QUEENS_GAME) == 0
         rows_after = db.get_minigame_results_for_guild(100, 'queens')
         assert [(row.user_id, row.time_seconds) for row in rows_after] == [
             ('300', 4),
@@ -310,7 +310,7 @@ class TestQueensImportMigration:
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn',
+            100, 'linkedin', 300, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
         db.save_minigame_unresolved_result(
             100, 'queens', normalize_queens_name('Alice LinkedIn'),
@@ -318,7 +318,7 @@ class TestQueensImportMigration:
             '2026-06-08', 100, 4, True, 'source')
         cog = Minigames(bot=None)
 
-        assert cog._sync_queens_materialized_results(100) == 1
+        assert cog._sync_queens_materialized_results(100, QUEENS_GAME) == 1
         writes = []
 
         def record_write(rows):
@@ -328,14 +328,14 @@ class TestQueensImportMigration:
         monkeypatch.setattr(db, 'save_minigame_results', record_write)
 
         assert cog._sync_queens_materialized_results(
-            100, migrate_legacy=False) == 0
+            100, QUEENS_GAME, migrate_legacy=False) == 0
         assert writes == []
 
     def test_sync_batches_projection_writes_and_optout_lookup(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Alice LinkedIn',
+            100, 'linkedin', 300, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, 999)
         for index, day in enumerate(('2026-06-08', '2026-06-09'), start=1):
             db.save_minigame_unresolved_result(
@@ -362,7 +362,7 @@ class TestQueensImportMigration:
         monkeypatch.setattr(db, 'get_minigame_optouts', record_optouts)
 
         assert cog._sync_queens_materialized_results(
-            100, migrate_legacy=False) == 2
+            100, QUEENS_GAME, migrate_legacy=False) == 2
         assert batch_sizes == [2]
         # Per-result is_rated state is authoritative; sync no longer needs a
         # whole-user opt-out lookup.
@@ -377,7 +377,7 @@ class TestQueensImportMigration:
                 (301, 'Bob LinkedIn'),
                 (302, 'Cara LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', user_id, name, normalize_queens_name(name),
+                100, 'linkedin', user_id, name, normalize_queens_name(name),
                 None, 1.0, user_id)
         db.save_minigame_result(
             1, 100, 'queens', 200, 300, _queens_number('2026-06-08'), '2026-06-08',
@@ -411,14 +411,14 @@ class TestQueensImportMigration:
         assert akari.rating == 1500
         assert akari.games == 1
 
-    def test_queens_rating_does_not_decay_absent_players(self, db, monkeypatch):
+    def test_queens_rating_decays_absent_players(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         for user_id, name in (
                 (300, 'Alice LinkedIn'),
                 (301, 'Bob LinkedIn'),
                 (302, 'Cara LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', user_id, name, normalize_queens_name(name),
+                100, 'linkedin', user_id, name, normalize_queens_name(name),
                 None, 1.0, user_id)
         db.save_minigame_result(
             1, 100, 'queens', 200, 300, _queens_number('2026-06-08'), '2026-06-08',
@@ -440,5 +440,12 @@ class TestQueensImportMigration:
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
         alice_after = db.get_minigame_rating(100, 'queens', 300)
-        assert abs(alice_after.rating - alice_before.rating) < 1e-9
         assert alice_after.skip_streak == 1
+        # First absent day closes decay_base of the gap back to the default.
+        expected = (
+            (constants.AKARI_START_RATING - alice_before.rating)
+            * constants.QUEENS_DECAY_BASE
+        )
+        assert alice_after.rating < alice_before.rating
+        assert abs(
+            (alice_after.rating - alice_before.rating) - expected) < 1e-9

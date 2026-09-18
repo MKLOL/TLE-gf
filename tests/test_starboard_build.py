@@ -90,6 +90,19 @@ class TestBuildStarboardMessage:
         content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
         assert files[0].spoiler is True
 
+    def test_spoiler_filename_wins_when_attachment_helper_is_incomplete(self):
+        """Snapshot-like attachments still preserve Discord's wire marker."""
+        class SnapshotAttachment(_FakeAttachment):
+            def is_spoiler(self):
+                return False
+
+        att = SnapshotAttachment('SPOILER_photo.png')
+        msg = _FakeMessage(attachments=[att])
+        _content, _embeds, files = _run(
+            Starboard.build_starboard_message(
+                msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
+        assert files[0].spoiler is True
+
     def test_non_spoiler_video_to_file_not_spoilered(self):
         """A normal video must not be spoilered when re-uploaded."""
         att = _FakeAttachment('clip.mp4', url='https://cdn.example.com/clip.mp4')
@@ -473,4 +486,3 @@ class TestBuildStarboardMessage:
         content, embeds, files = _run(Starboard.build_starboard_message(msg, '\N{WHITE MEDIUM STAR}', 5, 0xffaa10))
         main_embed = embeds[-1]
         assert main_embed.timestamp == datetime(2025, 1, 1)
-

@@ -85,10 +85,10 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=None)
         captured = {}
 
-        async def extract_filters(_ctx, _args):
-            return [], None, None, None, None
+        async def extract_filters(_ctx, _game, _args):
+            return [], False, None, None, None, None
 
-        async def capture_results(_ctx, date_arg, **_kwargs):
+        async def capture_results(_ctx, _game, date_arg, **_kwargs):
             captured['date'] = date_arg
 
         monkeypatch.setattr(
@@ -103,50 +103,64 @@ class TestQueensCommandsResults(_QueensCommandsBase):
 
         assert captured['date'] == '2026-07-28'
 
-    def test_queens_rating_filters_reject_decay(self, db, monkeypatch):
+    def test_queens_rating_filters_accept_decay_reject_test(
+            self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         alice = _FakeDiscordMember(300, 'alice', 'Alice')
         guild = _FakeGuild(100, members=[alice])
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
 
-        with pytest.raises(MinigameCogError, match='do not use decay'):
-            asyncio.run(cog._extract_queens_rating_filters(ctx, ['+decay']))
+        # Queens rates inactivity now, so +decay is a real view.
+        (remaining, include_decay, _excluded_ids, _included_ids, _weekdays,
+         _date_bounds) = asyncio.run(
+            cog._extract_queens_rating_filters(ctx, QUEENS_GAME, ['+decay']))
+        assert remaining == []
+        assert include_decay is True
 
-        (members, excluded_ids, included_ids, weekdays, date_bounds,
-         recalculate) = asyncio.run(cog._parse_queens_rating_args(
-            ctx, ['+recalculate'], allow_recalculate=True))
+        # +test (first-skip-last-place) stays Akari-only.
+        with pytest.raises(MinigameCogError, match=r'\+test'):
+            asyncio.run(cog._extract_queens_rating_filters(ctx, QUEENS_GAME, ['+test']))
+
+        (members, include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, recalculate) = asyncio.run(
+            cog._parse_queens_rating_args(
+                ctx, QUEENS_GAME, ['+recalculate'], allow_recalculate=True))
         assert members == [alice]
+        assert include_decay is False
         assert recalculate is True
         assert not (excluded_ids or included_ids or weekdays or date_bounds)
 
         with pytest.raises(MinigameCogError, match='only supported'):
-            asyncio.run(cog._parse_queens_rating_args(ctx, ['+recalculate']))
+            asyncio.run(cog._parse_queens_rating_args(ctx, QUEENS_GAME, ['+recalculate']))
 
-        (remaining, excluded_ids, included_ids, weekdays, date_bounds) = asyncio.run(
+        (remaining, include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = asyncio.run(
             cog._extract_queens_rating_filters(
-                ctx, [
+                ctx, QUEENS_GAME, [
                     '+dow=mon,wed', '+include=alice',
                     'd>=08062026', 'd<10062026',
                 ]))
+        assert include_decay is False
         assert remaining == []
         assert excluded_ids == set()
         assert included_ids == {'300'}
         assert weekdays == {0, 2}
         assert date_bounds is not None
 
-        (remaining, excluded_ids, included_ids, weekdays, date_bounds) = asyncio.run(
+        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = asyncio.run(
             cog._extract_queens_rating_filters(
-                ctx, ['+weekday=monday,wednesday,saturday']))
+                ctx, QUEENS_GAME, ['+weekday=monday,wednesday,saturday']))
         assert remaining == []
         assert weekdays == {0, 2, 5}
         assert not (excluded_ids or included_ids or date_bounds)
 
         with pytest.raises(MinigameCogError, match='Unknown Queens weekday'):
-            asyncio.run(cog._extract_queens_rating_filters(ctx, ['+dow=funday']))
+            asyncio.run(cog._extract_queens_rating_filters(ctx, QUEENS_GAME, ['+dow=funday']))
 
         with pytest.raises(MinigameCogError, match='invalid date'):
-            asyncio.run(cog._extract_queens_rating_filters(ctx, ['d>=bad']))
+            asyncio.run(cog._extract_queens_rating_filters(ctx, QUEENS_GAME, ['d>=bad']))
 
     def test_queens_results_renders_date_results_image(
             self, db, monkeypatch):
@@ -159,7 +173,7 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
         self._save_queens_result(db, 1, bob.id, '2026-06-08', 8)
         self._save_queens_result(db, 2, alice.id, '2026-06-08', 5)
@@ -184,7 +198,7 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         assert set(captured[-1]['registrants']) == {'300'}
         assert 'file' in ctx.sent['kwargs']
 
-        asyncio.run(cog._cmd_queens_stats_date(ctx, '769', show_all=True))
+        asyncio.run(cog._cmd_queens_stats_date(ctx, QUEENS_GAME, '769', show_all=True))
 
         assert set(captured[-1]['user_ids']) == {'300', '301'}
         assert set(captured[-1]['registrants']) == {'300'}
@@ -265,10 +279,10 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, mod.id)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Bob LinkedIn',
+            100, 'linkedin', bob.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, mod.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 6)
@@ -281,7 +295,7 @@ class TestQueensCommandsResults(_QueensCommandsBase):
             cog, ctx, alice, reason='duplicate account'))
 
         # Forward-only, like Akari: link kept, existing results stay rated.
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is not None
         assert db.is_minigame_banned(100, 'queens', alice.id) is True
         assert db.get_minigame_ban(100, 'queens', alice.id).reason == 'duplicate account'
         assert {row.user_id for row in db.get_minigame_ratings(100, 'queens')} == {
@@ -299,20 +313,20 @@ class TestQueensCommandsResults(_QueensCommandsBase):
             minigames_module, '_get_akari_rating_table_image_file',
             lambda guild, rating_rows, registrants, **kwargs: captured.append(
                 [row.user_id for row in rating_rows]) or object())
-        asyncio.run(cog._cmd_queens_ratings(ctx))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME))
         assert captured[-1] == ['301']
-        asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, show_all=True))
         assert set(captured[-1]) == {'300', '301'}
 
         # New manual adds are refused while banned.
         with pytest.raises(MinigameCogError, match='banned'):
             asyncio.run(cog._cmd_queens_add(
-                ctx, 'Alice LinkedIn 2026-06-09 0:30'))
+                ctx, QUEENS_GAME, 'Alice LinkedIn 2026-06-09 0:30'))
 
         # Unban keeps the registration; results resume counting.
         asyncio.run(Minigames.queens_unban.__wrapped__(cog, ctx, alice))
-        assert db.get_minigame_player_link(100, 'queens', alice.id) is not None
-        asyncio.run(cog._cmd_queens_ratings(ctx))
+        assert db.get_minigame_player_link(100, 'linkedin', alice.id) is not None
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME))
         assert set(captured[-1]) == {'300', '301'}
 
     def test_import_skips_banned_linked_user(self, db, monkeypatch):
@@ -325,15 +339,15 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, bob.id)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Bob LinkedIn',
+            100, 'linkedin', bob.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, bob.id)
         db.ban_minigame_user(
             100, 'queens', alice.id, 1.0, bob.id, 'duplicate account')
 
-        preview = cog._make_queens_import_preview(ctx, '2026-06-08', (
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', (
             'Alice LinkedIn\n'
             '\U0001f913\U0001f48e No hints & no mistakes!\n'
             '0:04\n'
@@ -357,7 +371,7 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5, False, 0)
@@ -386,11 +400,11 @@ class TestQueensCommandsResults(_QueensCommandsBase):
         cog = Minigames(bot=object())
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Bob LinkedIn',
+            100, 'linkedin', bob.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, bob.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 10, False, 0)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 5, True, 100)

@@ -27,28 +27,28 @@ class QueensCmdsMixin:
 
     @queens.command(name='show', brief='Show LinkedIn Queens settings')
     async def queens_show(self, ctx):
-        await self._cmd_queens_show(ctx)
+        await self._cmd_queens_show(ctx, QUEENS_GAME)
 
     @queens.group(name='admins', aliases=['admin'],
                   brief='Manage extra LinkedIn Queens command admins',
                   invoke_without_command=True)
     @queens_mod_only()
     async def queens_admins(self, ctx):
-        await self._cmd_queens_admins(ctx)
+        await self._cmd_queens_admins(ctx, QUEENS_GAME)
 
     @queens_admins.command(name='add',
                            brief='(Mod) Add a Queens command admin',
                            usage='@user')
     @queens_mod_only()
     async def queens_admins_add(self, ctx, member: CaseInsensitiveMember):
-        await self._cmd_queens_admins_add(ctx, member)
+        await self._cmd_queens_admins_add(ctx, QUEENS_GAME, member)
 
     @queens_admins.command(name='remove',
                            brief='(Mod) Remove a Queens command admin',
                            usage='@user')
     @queens_mod_only()
     async def queens_admins_remove(self, ctx, member: CaseInsensitiveMember):
-        await self._cmd_queens_admins_remove(ctx, member)
+        await self._cmd_queens_admins_remove(ctx, QUEENS_GAME, member)
 
     @queens.command(name='here', brief='Set the LinkedIn Queens channel to the current channel')
     @queens_mod_only()
@@ -73,7 +73,7 @@ class QueensCmdsMixin:
                     usage='[+username DiscordUser] LinkedIn Name [+anon]')
     async def queens_register(self, ctx, first: str = None, *,
                               linkedin: str = None):
-        await self._cmd_queens_register_cmd(ctx, first, linkedin)
+        await self._cmd_queens_register_cmd(ctx, QUEENS_GAME, first, linkedin)
 
     @queens.command(name='set',
                     brief='(Mod) Overwrite a Discord user Queens name',
@@ -81,7 +81,7 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_set(self, ctx, member: str = None, *,
                          linkedin: str = None):
-        await self._cmd_queens_set_cmd(ctx, member, linkedin)
+        await self._cmd_queens_set_cmd(ctx, QUEENS_GAME, member, linkedin)
 
     @queens.command(name='unregister',
                     brief='Remove a user LinkedIn Queens link',
@@ -92,11 +92,17 @@ class QueensCmdsMixin:
             target = ctx.author
         else:
             target = await self._resolve_member(ctx, member)
-        await self._cmd_queens_unregister(ctx, target)
+        await self._cmd_queens_unregister(ctx, QUEENS_GAME, target)
 
     @queens.command(name='links', brief='List registered LinkedIn Queens names')
     async def queens_links(self, ctx):
-        await self._cmd_queens_links(ctx)
+        await self._cmd_queens_links(ctx, QUEENS_GAME)
+
+    @queens.command(name='skips',
+                    brief='Show skipped days since the first Queens submission',
+                    usage='[@user]')
+    async def queens_skips(self, ctx, member: CaseInsensitiveMember = None):
+        await self._cmd_queens_skips(ctx, QUEENS_GAME, member or ctx.author)
 
     @queens.command(
         name='backfill', aliases=['backill'],
@@ -104,7 +110,7 @@ class QueensCmdsMixin:
         usage='@user|+all (attach queens_history.json)')
     @queens_mod_only()
     async def queens_backfill(self, ctx, target: str = None):
-        await self._cmd_queens_backfill(ctx, target)
+        await self._cmd_queens_backfill(ctx, QUEENS_GAME, target)
 
     @queens.command(name='ban',
                     brief='(Mod) Block a user from Queens imports/ratings',
@@ -112,7 +118,7 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_ban(self, ctx, member: CaseInsensitiveMember, *,
                          reason: str = None):
-        await self._cmd_queens_ban(ctx, member, reason)
+        await self._cmd_queens_ban(ctx, QUEENS_GAME, member, reason)
 
     @queens.command(name='unban',
                     brief='(Mod) Lift a Queens ban',
@@ -135,7 +141,7 @@ class QueensCmdsMixin:
                     brief='(Mod) List Queens bans')
     @queens_mod_only()
     async def queens_bans(self, ctx):
-        await self._cmd_queens_bans(ctx)
+        await self._cmd_queens_bans(ctx, QUEENS_GAME)
 
     @queens.command(name='vs', brief='Compare two or more players',
                     usage='@user1 @user2 [@user3 ...] '
@@ -145,21 +151,28 @@ class QueensCmdsMixin:
             ctx, QUEENS_GAME, arguments)
         await self._cmd_vs_members(ctx, QUEENS_GAME, members, *filters)
 
-    @queens.command(name='top', brief='Show fastest-result winners',
-                    usage='[filters...] [+dow=mon,wed|weekday|weekend]')
+    @queens.command(name='week', aliases=['weekly'],
+                    brief='Show the weekly server recap',
+                    usage='[YYYY-MM-DD|last]')
+    async def queens_week(self, ctx, *args):
+        await self._cmd_week(ctx, QUEENS_GAME, *args)
+
+    @queens.command(name='top', brief='Show outright fastest-result winners',
+                    usage='[+ties] [filters...] '
+                          '[+dow=mon,wed|weekday|weekend]')
     async def queens_top(self, ctx, *args):
         await self._cmd_top(ctx, QUEENS_GAME, *args)
 
     @queens.command(name='streak', brief='Show current clean streak',
                     usage='[@user] [filters...] [+dow=mon,wed|weekday|weekend]')
     async def queens_streak(self, ctx, *args):
-        await self._cmd_queens_streak(ctx, *args)
+        await self._cmd_queens_streak(ctx, QUEENS_GAME, *args)
 
     @queens.group(name='stats', brief='Show personal Queens stats',
                   usage='[@user] [filters...] [+dow=mon,wed|weekday|weekend]',
                   invoke_without_command=True)
     async def queens_stats(self, ctx, *args):
-        await self._cmd_queens_stats(ctx, *args)
+        await self._cmd_queens_stats(ctx, QUEENS_GAME, *args)
 
     @queens.group(name='results', brief='Show Queens date leaderboard',
                   usage='[date|number] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
@@ -171,8 +184,9 @@ class QueensCmdsMixin:
             arg for arg in args
             if str(arg).strip().casefold() != '+unrated')
         args, improved = _split_queens_improved_filter(args)
-        remaining, excluded_ids, included_ids, weekdays, date_bounds = (
-            await self._extract_queens_rating_filters(ctx, args))
+        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = (
+            await self._extract_queens_rating_filters(ctx, QUEENS_GAME, args))
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;queens results [date|number] '
@@ -184,7 +198,7 @@ class QueensCmdsMixin:
             else _queens_current_puzzle_date().isoformat()
         )
         await self._cmd_queens_stats_date(
-            ctx, date_arg,
+            ctx, QUEENS_GAME, date_arg,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved,
             show_unrated=show_unrated)
@@ -195,8 +209,9 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_results_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        remaining, excluded_ids, included_ids, weekdays, date_bounds = (
-            await self._extract_queens_rating_filters(ctx, args))
+        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = (
+            await self._extract_queens_rating_filters(ctx, QUEENS_GAME, args))
         if len(remaining) > 1:
             raise MinigameCogError(
                 'Usage: `;queens results debug [date|number] '
@@ -208,7 +223,7 @@ class QueensCmdsMixin:
             else _queens_current_puzzle_date().isoformat()
         )
         await self._cmd_queens_stats_date(
-            ctx, date_arg, show_all=True,
+            ctx, QUEENS_GAME, date_arg, show_all=True,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
 
@@ -219,7 +234,7 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_import(self, ctx, puzzle_date: str = None, *,
                             leaderboard: str = None):
-        await self._cmd_queens_import_preview(ctx, puzzle_date, leaderboard)
+        await self._cmd_queens_import_preview(ctx, QUEENS_GAME, puzzle_date, leaderboard)
 
     @queens_import.command(name='start',
                            brief='Rebuild imported Queens history from channel messages')
@@ -246,13 +261,22 @@ class QueensCmdsMixin:
                            brief='Save the latest Queens import preview')
     @queens_mod_only()
     async def queens_import_confirm(self, ctx):
-        await self._cmd_queens_import_confirm(ctx)
+        await self._cmd_queens_import_confirm(ctx, QUEENS_GAME)
 
     @queens_import.command(name='orphans',
                            brief='(Mod) List imported results with no live counterpart')
     @queens_mod_only()
     async def queens_import_orphans(self, ctx):
         await self._cmd_import_orphans(ctx, QUEENS_GAME)
+
+    @queens.command(name='time', aliases=['video'],
+                    brief='Read the exact solve time from a screen recording',
+                    usage='(reply to a message with a video, or attach one)')
+    async def queens_time(self, ctx):
+        """Reply to a message carrying a screen recording of a Queens solve
+        (or attach one to the command) and the bot reads the solve time with
+        decimals off the on-screen timer."""
+        await self._cmd_queens_time(ctx, QUEENS_GAME)
 
     @queens.command(name='export', brief='(Mod) Download a snapshot of the result tables')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
@@ -271,13 +295,13 @@ class QueensCmdsMixin:
                     usage='<@user|LinkedIn Name> date|number time [status...]')
     @queens_mod_only()
     async def queens_add(self, ctx, *, args: str = None):
-        await self._cmd_queens_add(ctx, args)
+        await self._cmd_queens_add(ctx, QUEENS_GAME, args)
 
     @queens.command(name='remove', brief='Remove a Queens result',
                     usage='<@user|LinkedIn Name> date|number')
     @queens_mod_only()
     async def queens_remove(self, ctx, *, args: str = None):
-        await self._cmd_queens_remove(ctx, args)
+        await self._cmd_queens_remove(ctx, QUEENS_GAME, args)
 
     # Standard names across both games: ``clear`` unsets the channel,
     # ``delete``/``clean`` remove results (``;queens clear DATE`` was the
@@ -288,7 +312,7 @@ class QueensCmdsMixin:
                     usage='date|number')
     @queens_mod_only()
     async def queens_delete(self, ctx, puzzle_date: str = None):
-        await self._cmd_queens_clear(ctx, puzzle_date)
+        await self._cmd_queens_clear(ctx, QUEENS_GAME, puzzle_date)
 
     @queens.command(name='clean', aliases=['cleanup'],
                     brief='(Mod) Remove Queens results for an inclusive date range',
@@ -296,7 +320,7 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_clean(self, ctx, start_date: str = None,
                            end_date: str = None):
-        await self._cmd_queens_clean(ctx, start_date, end_date)
+        await self._cmd_queens_clean(ctx, QUEENS_GAME, start_date, end_date)
 
     @queens.command(name='reparse', brief='(Mod) Reparse all stored raw Queens messages')
     @queens_mod_only()
@@ -311,45 +335,47 @@ class QueensCmdsMixin:
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
-        remaining, excluded_ids, included_ids, weekdays, date_bounds = (
-            await self._extract_queens_rating_filters(ctx, args))
+        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = (
+            await self._extract_queens_rating_filters(ctx, QUEENS_GAME, args))
         if remaining:
             raise MinigameCogError(
                 'Usage: `;queens ratings [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(
-            ctx, excluded_ids=excluded_ids, included_ids=included_ids,
+            ctx, QUEENS_GAME, excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved,
             weekly=weekly)
 
     @queens.group(name='rating',
                   brief='Show Queens rating graph',
-                  usage='[@user1 @user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]',
+                  usage='[@user1 @user2 ...] [+decay] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]',
                   invoke_without_command=True)
     async def queens_rating(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        (members, excluded_ids, included_ids, weekdays, date_bounds,
-         recalculate) = await self._parse_queens_rating_args(
-            ctx, args, allow_recalculate=True)
+        (members, include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, recalculate) = await self._parse_queens_rating_args(
+            ctx, QUEENS_GAME, args, allow_recalculate=True)
         await self._cmd_queens_rating(
-            ctx, members,
+            ctx, QUEENS_GAME, members, include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
             recalculate=recalculate, improved=improved)
 
     @queens_rating.command(name='debug',
                            brief='(Mod) Rating graph for any rated user',
-                           usage='@user1 [@user2 ...] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]')
+                           usage='@user1 [@user2 ...] [+decay] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date] [+recalculate]')
     @queens_mod_only()
     async def queens_rating_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        (members, excluded_ids, included_ids, weekdays, date_bounds,
-         recalculate) = (
+        (members, include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, recalculate) = (
             await self._parse_queens_rating_args(
-                ctx, args, member_required=True, allow_recalculate=True))
+                ctx, QUEENS_GAME, args, member_required=True, allow_recalculate=True))
         await self._cmd_queens_rating(
-            ctx, members, require_registered=False,
+            ctx, QUEENS_GAME, members, require_registered=False,
+            include_decay=include_decay,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds,
             recalculate=recalculate, improved=improved)
@@ -360,10 +386,11 @@ class QueensCmdsMixin:
                   invoke_without_command=True)
     async def queens_performance(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        members, excluded_ids, included_ids, weekdays, date_bounds, _recalculate = (
-            await self._parse_queens_rating_args(ctx, args))
+        (members, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, _recalculate) = (
+            await self._parse_queens_rating_args(ctx, QUEENS_GAME, args))
         await self._cmd_queens_performance(
-            ctx, members,
+            ctx, QUEENS_GAME, members,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
 
@@ -373,11 +400,12 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_performance_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        members, excluded_ids, included_ids, weekdays, date_bounds, _recalculate = (
+        (members, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, _recalculate) = (
             await self._parse_queens_rating_args(
-                ctx, args, member_required=True))
+                ctx, QUEENS_GAME, args, member_required=True))
         await self._cmd_queens_performance(
-            ctx, members, require_registered=False,
+            ctx, QUEENS_GAME, members, require_registered=False,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
 
@@ -387,13 +415,14 @@ class QueensCmdsMixin:
                   invoke_without_command=True)
     async def queens_history(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        members, excluded_ids, included_ids, weekdays, date_bounds, _recalculate = (
-            await self._parse_queens_rating_args(ctx, args))
+        (members, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, _recalculate) = (
+            await self._parse_queens_rating_args(ctx, QUEENS_GAME, args))
         if len(members) != 1:
             raise MinigameCogError(
                 '`history` shows one user at a time — pick one.')
         await self._cmd_queens_history(
-            ctx, members[0],
+            ctx, QUEENS_GAME, members[0],
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
 
@@ -403,14 +432,15 @@ class QueensCmdsMixin:
     @queens_mod_only()
     async def queens_history_debug(self, ctx, *args):
         args, improved = _split_queens_improved_filter(args)
-        members, excluded_ids, included_ids, weekdays, date_bounds, _recalculate = (
+        (members, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds, _recalculate) = (
             await self._parse_queens_rating_args(
-                ctx, args, member_required=True))
+                ctx, QUEENS_GAME, args, member_required=True))
         if len(members) != 1:
             raise MinigameCogError(
                 '`history debug` shows one user at a time — pick one.')
         await self._cmd_queens_history(
-            ctx, members[0], require_registered=False,
+            ctx, QUEENS_GAME, members[0], require_registered=False,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
 
@@ -418,7 +448,7 @@ class QueensCmdsMixin:
                             brief='(Mod) Rebuild the Queens rating snapshot')
     @queens_mod_only()
     async def queens_ratings_recompute(self, ctx):
-        await self._cmd_queens_ratings_recompute(ctx)
+        await self._cmd_queens_ratings_recompute(ctx, QUEENS_GAME)
 
     @queens_ratings.command(name='debug', aliases=['all'],
                             brief='(Mod) Leaderboard including unregistered rated users',
@@ -428,15 +458,16 @@ class QueensCmdsMixin:
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
-        remaining, excluded_ids, included_ids, weekdays, date_bounds = (
-            await self._extract_queens_rating_filters(ctx, args))
+        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
+         date_bounds) = (
+            await self._extract_queens_rating_filters(ctx, QUEENS_GAME, args))
         if remaining:
             raise MinigameCogError(
                 'Usage: `;queens ratings debug [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(
-            ctx, show_all=True,
+            ctx, QUEENS_GAME, show_all=True,
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved,
             weekly=weekly)

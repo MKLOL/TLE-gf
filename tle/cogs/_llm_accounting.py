@@ -28,7 +28,8 @@ def xai_cost_microusd(*stats_groups):
 def xai_reservation_microusd():
     """Conservative pre-call hold covering router plus capped answer output."""
     input_tokens = constants.XAI_REQUEST_RESERVE_INPUT_TOKENS
-    output_tokens = constants.XAI_MAX_OUTPUT_TOKENS + 32
+    output_tokens = (constants.XAI_MAX_OUTPUT_TOKENS
+                     + constants.XAI_ROUTER_MAX_OUTPUT_TOKENS)
     return int(math.ceil(
         input_tokens * constants.XAI_INPUT_USD_PER_MILLION
         + output_tokens * constants.XAI_OUTPUT_USD_PER_MILLION))

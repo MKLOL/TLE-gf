@@ -75,6 +75,12 @@ Additionally TLE uses pillow for graphics, which requires the following packages
 apt-get install libjpeg-dev zlib1g-dev
 ```
 
+`;queens time` reads a solve time off a screen recording and needs `ffmpeg` (which provides `ffprobe`); the command reports that it is unavailable if the binary is missing:
+
+```bash
+apt-get install ffmpeg
+```
+
 ### Final steps
 
 You will need to setup a bot on your server before continuing, follow the directions [here](https://github.com/reactiflux/discord-irc/wiki/Creating-a-discord-bot-&-getting-a-token). Following this, you should have your bot appearing in your server and you should have the Discord bot token. Finally, go to the `Bot` settings in your App's Developer Portal (in the same page where you copied your Bot Token) and enable the `Server Members Intent` and `Message Content Intent`.

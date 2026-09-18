@@ -51,7 +51,7 @@ def _register(db, member, linkedin_name, *, anonymous=False):
     )
     db.set_minigame_player_link(
         _GUILD_ID,
-        QUEENS_GAME.name,
+        QUEENS_GAME.link_key,
         member.id,
         linkedin_name,
         normalize_queens_name(linkedin_name),
@@ -155,7 +155,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
             db, 2, bob.id, sunday.isoformat(), 60)
 
         _ratings, standings = Minigames(
-            bot=None)._queens_weekly_preview(_GUILD_ID)
+            bot=None)._queens_weekly_preview(_GUILD_ID, QUEENS_GAME)
 
         assert [row.user_id for row in standings] == [
             str(bob.id), str(alice.id),
@@ -194,7 +194,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         ctx, sent = _capture_ctx(guild, alice)
         cog = Minigames(bot=None)
 
-        asyncio.run(cog._cmd_queens_ratings(ctx, weekly=True))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, weekly=True))
 
         assert [item['file'][0] for item in sent] == ['ratings', 'scores']
         rating_call = captured['ratings'][0]
@@ -244,9 +244,9 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         debug_ctx, _debug_sent = _capture_ctx(guild, alice)
 
         asyncio.run(cog._cmd_queens_ratings(
-            public_ctx, weekly=True, show_all=False))
+            public_ctx, QUEENS_GAME, weekly=True, show_all=False))
         asyncio.run(cog._cmd_queens_ratings(
-            debug_ctx, weekly=True, show_all=True))
+            debug_ctx, QUEENS_GAME, weekly=True, show_all=True))
 
         assert [row.user_id for row in captured['ratings'][0]['rows']] == [
             str(alice.id),
@@ -276,7 +276,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
                 MinigameCogError,
                 match=r'(?i)(weekly.*beta|beta.*weekly)'):
             asyncio.run(cog._cmd_queens_ratings(
-                ctx, weekly=True, improved=True))
+                ctx, QUEENS_GAME, weekly=True, improved=True))
 
     def test_weekly_uses_queens_time_scoring_not_ingestion_badges(
             self, db, monkeypatch):
@@ -303,7 +303,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
             is_perfect=True, accuracy=100)
 
         ratings, _standings = Minigames(
-            bot=None)._queens_weekly_preview(_GUILD_ID)
+            bot=None)._queens_weekly_preview(_GUILD_ID, QUEENS_GAME)
 
         assert [row.user_id for row in ratings] == [
             str(alice.id), str(bob.id),
@@ -322,7 +322,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         monkeypatch.setattr(
             cog, '_require_enabled', lambda *_args, **_kwargs: None)
 
-        async def capture(_ctx, **kwargs):
+        async def capture(_ctx, _game, **kwargs):
             calls.append(kwargs)
 
         monkeypatch.setattr(cog, '_cmd_queens_ratings', capture)

@@ -75,7 +75,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
 
         for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', member.id, name, normalize_queens_name(name),
+                100, 'linkedin', member.id, name, normalize_queens_name(name),
                 None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 6)
@@ -115,7 +115,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
 
         for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', member.id, name, normalize_queens_name(name),
+                100, 'linkedin', member.id, name, normalize_queens_name(name),
                 None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-09', 6)
@@ -150,7 +150,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 10)
@@ -170,7 +170,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         monkeypatch.setattr(
             minigames_module, '_get_akari_rating_table_image_file', _capture)
 
-        asyncio.run(cog._cmd_queens_ratings(ctx))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME))
         assert captured[-1]['user_ids'] == ['300']
         # Bob is unregistered, so alice's only day has no opponent in the
         # rating pool — a solo day is not a game (contested-days semantics).
@@ -179,7 +179,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         assert captured[-1]['mark_registered'] is False
         assert 'file' in ctx.sent['kwargs']
 
-        asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, show_all=True))
         assert set(captured[-1]['user_ids']) == {'300'}
         assert captured[-1]['mark_registered'] is True
 
@@ -191,7 +191,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         with pytest.raises(MinigameCogError, match='not enabled'):
-            asyncio.run(cog._cmd_queens_ratings(ctx))
+            asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME))
 
     def test_anonymous_registration_hides_linkedin_identity_only(
             self, db, monkeypatch):
@@ -204,11 +204,11 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Bob LinkedIn',
+            100, 'linkedin', bob.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 10)
@@ -245,7 +245,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             minigames_module, '_get_akari_rating_table_image_file',
             _capture_ratings)
 
-        asyncio.run(cog._cmd_queens_ratings(ctx, show_all=True))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, show_all=True))
 
         assert captured_ratings['names'][0] == 'Alice'
         assert captured_ratings['identities'][0] == 'Anonymous'
@@ -262,7 +262,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
 
         for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', member.id, name,
+                100, 'linkedin', member.id, name,
                 normalize_queens_name(name), None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 10)
@@ -305,7 +305,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         monkeypatch.setattr(minigames_module, 'plot_akari_rating', _rating)
         monkeypatch.setattr(minigames_module, 'plot_akari_performance', _performance)
 
-        asyncio.run(cog._cmd_queens_rating(ctx, [alice, bob]))
+        asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice, bob]))
         assert rating_series['names'] == ['Alice LinkedIn', 'Bob LinkedIn']
         full_alice_rating_dates = rating_series['dates'][0]
         full_alice_rating_values = rating_series['ratings'][0]
@@ -314,13 +314,13 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         assert rating_series['hidden_markers'][1] == [False, False]
         assert ctx.sent['kwargs']['file'] is fake_file
 
-        asyncio.run(cog._cmd_queens_rating(ctx, [alice], weekdays={0, 2}))
+        asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice], weekdays={0, 2}))
         assert rating_series['dates'] == [['2026-06-08']]
 
         date_bounds = parse_date_args(('d>=09062026', 'd<10062026'))
         date_start_index = full_alice_rating_dates.index('2026-06-09')
         asyncio.run(cog._cmd_queens_rating(
-            ctx, [alice], date_bounds=date_bounds))
+            ctx, QUEENS_GAME, [alice], date_bounds=date_bounds))
         assert rating_series['dates'] == [['2026-06-09']]
         assert rating_series['ratings'] == [
             [full_alice_rating_values[date_start_index]]
@@ -329,7 +329,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         _expected_row, expected_recalculated_history = cog._minigame_user_data(
             100, QUEENS_GAME, alice.id, date_bounds=date_bounds)
         asyncio.run(cog._cmd_queens_rating(
-            ctx, [alice], date_bounds=date_bounds, recalculate=True))
+            ctx, QUEENS_GAME, [alice], date_bounds=date_bounds, recalculate=True))
         assert rating_series['dates'] == [['2026-06-09']]
         assert rating_series['ratings'] == [[
             point.rating for point in expected_recalculated_history
@@ -338,11 +338,11 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             [full_alice_rating_values[date_start_index]]
         ]
 
-        asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
+        asyncio.run(cog._cmd_queens_performance(ctx, QUEENS_GAME, [alice]))
         assert perf_series['names'] == ['Alice LinkedIn']
 
         asyncio.run(cog._cmd_queens_performance(
-            ctx, [alice], date_bounds=date_bounds))
+            ctx, QUEENS_GAME, [alice], date_bounds=date_bounds))
         assert perf_series['dates'] == [['2026-06-09']]
         assert perf_series['ratings'] == [
             round(full_alice_rating_values[date_start_index])]
@@ -351,12 +351,58 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         monkeypatch.setattr(
             minigames_module.paginator, 'paginate',
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
-        asyncio.run(cog._cmd_queens_history(ctx, alice))
+        asyncio.run(cog._cmd_queens_history(ctx, QUEENS_GAME, alice))
         assert pages
         assert '2026-06-10' in pages[0][1].description
         assert '2026-06-09' in pages[0][1].description
         assert 'solo' in pages[0][1].description
         assert '**#' not in pages[0][1].description
+
+    def test_queens_rating_decay_view_plots_absent_days(self, db, monkeypatch):
+        """``+decay`` threads inactivity days into the Queens rating graph."""
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(100, 'queens', '1')
+        alice = _FakeDiscordMember(300, 'alice', 'Alice')
+        bob = _FakeDiscordMember(301, 'bob', 'Bob')
+        guild = _FakeGuild(100, members=[alice, bob])
+        ctx = self._make_ctx(guild, alice)
+        cog = Minigames(bot=object())
+
+        for member, name in ((alice, 'Alice LinkedIn'), (bob, 'Bob LinkedIn')):
+            db.set_minigame_player_link(
+                100, 'linkedin', member.id, name,
+                normalize_queens_name(name), None, 1.0, alice.id)
+        self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
+        self._save_queens_result(db, 2, bob.id, '2026-06-08', 10)
+        self._save_queens_result(db, 3, alice.id, '2026-06-09', 4)
+        self._save_queens_result(db, 4, bob.id, '2026-06-09', 9)
+        # Alice skips the last concluded day; bob keeps playing.
+        self._save_queens_result(db, 5, bob.id, '2026-06-10', 7)
+        cog._recompute_minigame_ratings(100, QUEENS_GAME)
+
+        captured = {}
+        fake_file = SimpleNamespace(filename='plot.png')
+
+        def _rating(series):
+            captured['dates'] = [
+                [str(point.puzzle_date) for point in history]
+                for history, _name in series
+            ]
+            captured['is_decay'] = [
+                [bool(getattr(point, 'is_decay', False)) for point in history]
+                for history, _name in series
+            ]
+            return fake_file
+        monkeypatch.setattr(minigames_module, 'plot_akari_rating', _rating)
+
+        asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice]))
+        assert captured['dates'] == [['2026-06-08', '2026-06-09']]
+        assert captured['is_decay'] == [[False, False]]
+
+        asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice], include_decay=True))
+        assert captured['dates'] == [
+            ['2026-06-08', '2026-06-09', '2026-06-10']]
+        assert captured['is_decay'] == [[False, False, True]]
 
     def test_queens_history_shows_solo_only_days(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -366,7 +412,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=object())
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'), None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         pages = []
@@ -374,7 +420,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             minigames_module.paginator, 'paginate',
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
 
-        asyncio.run(cog._cmd_queens_history(ctx, alice))
+        asyncio.run(cog._cmd_queens_history(ctx, QUEENS_GAME, alice))
 
         assert pages
         assert '2026-06-08' in pages[0][1].description
@@ -391,11 +437,11 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         cog = Minigames(bot=object())
 
         db.set_minigame_player_link(
-            100, 'queens', alice.id, 'Alice LinkedIn',
+            100, 'linkedin', alice.id, 'Alice LinkedIn',
             normalize_queens_name('Alice LinkedIn'),
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER, 1.0, alice.id)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Bob LinkedIn',
+            100, 'linkedin', bob.id, 'Bob LinkedIn',
             normalize_queens_name('Bob LinkedIn'), None, 1.0, alice.id)
         self._save_queens_result(db, 1, alice.id, '2026-06-08', 5)
         self._save_queens_result(db, 2, bob.id, '2026-06-08', 10)
@@ -415,16 +461,16 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             lambda series: perf_series.update(
                 names=[name for _history, name, _rating in series]) or fake_file)
 
-        asyncio.run(cog._cmd_queens_rating(ctx, [alice]))
+        asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice]))
         assert rating_series['names'] == ['Anonymous']
 
-        asyncio.run(cog._cmd_queens_performance(ctx, [alice]))
+        asyncio.run(cog._cmd_queens_performance(ctx, QUEENS_GAME, [alice]))
         assert perf_series['names'] == ['Anonymous']
 
         pages = []
         monkeypatch.setattr(
             minigames_module.paginator, 'paginate',
             lambda _bot, _channel, page_list, **_kwargs: pages.extend(page_list))
-        asyncio.run(cog._cmd_queens_history(ctx, alice))
+        asyncio.run(cog._cmd_queens_history(ctx, QUEENS_GAME, alice))
         assert pages
         assert pages[0][1].description

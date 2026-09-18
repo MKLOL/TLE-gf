@@ -122,6 +122,24 @@ class HandleDbMixin:
         res = self.conn.execute(query, (guild_id,)).fetchall()
         return [(int(t[0]), cf.User._make(t[1:])) for t in res]
 
+    def get_cf_users_for_guild_members(self, guild_id, user_ids):
+        """Return cached CF profiles for selected active guild members."""
+        user_ids = tuple(dict.fromkeys(
+            str(user_id) for user_id in user_ids if user_id is not None))
+        if not user_ids:
+            return []
+        placeholders = ', '.join('?' for _ in user_ids)
+        query = (
+            'SELECT u.user_id, u.handle, c.first_name, c.last_name, '
+            'c.country, c.city, c.organization, c.contribution, c.rating, '
+            'c.maxRating, c.last_online_time, c.registration_time, '
+            'c.friend_of_count, c.title_photo FROM user_handle AS u '
+            'LEFT JOIN cf_user_cache AS c ON u.handle = c.handle '
+            f'WHERE u.guild_id = ? AND u.active = 1 '
+            f'AND u.user_id IN ({placeholders})')
+        rows = self.conn.execute(query, (str(guild_id), *user_ids)).fetchall()
+        return [(int(row[0]), cf.User._make(row[1:])) for row in rows]
+
     def reset_status(self, id):
         inactive_query = '''
             UPDATE user_handle

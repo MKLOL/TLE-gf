@@ -1,6 +1,7 @@
 """Queens opt-out and per-result rating prefix commands."""
 
 from tle.cogs._mgcmds_queens import QueensCmdsMixin
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_helpers import (
     CaseInsensitiveMember,
     queens_mod_only,
@@ -14,13 +15,13 @@ class QueensPrivacyCmdsMixin:
         usage='[@user]')
     async def queens_optout(
             self, ctx, member: CaseInsensitiveMember = None):
-        await self._cmd_queens_optout(ctx, member)
+        await self._cmd_queens_optout(ctx, QUEENS_GAME, member)
 
     @QueensCmdsMixin.queens.command(
         name='optin', aliases=['opt-in'],
         brief='Make future Queens results rated')
     async def queens_optin(self, ctx):
-        await self._cmd_queens_optin(ctx)
+        await self._cmd_queens_optin(ctx, QUEENS_GAME)
 
     @QueensCmdsMixin.queens.command(
         name='unrate',
@@ -29,7 +30,7 @@ class QueensPrivacyCmdsMixin:
     @queens_mod_only()
     async def queens_unrate(self, ctx, *, args: str = None):
         await self._cmd_queens_set_result_rating(
-            ctx, args, is_rated=False)
+            ctx, QUEENS_GAME, args, is_rated=False)
 
     @QueensCmdsMixin.queens.command(
         name='rate', brief='(Mod) Restore one Queens result to ratings',
@@ -37,4 +38,4 @@ class QueensPrivacyCmdsMixin:
     @queens_mod_only()
     async def queens_rate(self, ctx, *, args: str = None):
         await self._cmd_queens_set_result_rating(
-            ctx, args, is_rated=True)
+            ctx, QUEENS_GAME, args, is_rated=True)

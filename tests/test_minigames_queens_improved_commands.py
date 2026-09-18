@@ -40,7 +40,7 @@ class _ImprovedQueensBase(_QueensCommandsBase):
             linkedin_name = f'{member.display_name} LinkedIn'
             db.set_minigame_player_link(
                 100,
-                QUEENS_GAME.name,
+                QUEENS_GAME.link_key,
                 member.id,
                 linkedin_name,
                 normalize_queens_name(linkedin_name),
@@ -96,7 +96,7 @@ class TestQueensImprovedLeaderboard(_ImprovedQueensBase):
         monkeypatch.setattr(
             minigames_module, '_get_akari_rating_table_image_file', render)
 
-        asyncio.run(cog._cmd_queens_ratings(ctx, improved=True))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, improved=True))
 
         assert calls and calls[-1]['improved'] is True
         assert captured['rows']
@@ -125,7 +125,7 @@ class TestQueensImprovedLeaderboard(_ImprovedQueensBase):
         monkeypatch.setattr(
             minigames_module, '_get_akari_rating_table_image_file', render)
 
-        asyncio.run(cog._cmd_queens_ratings(ctx))
+        asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME))
 
         assert [tuple(row) for row in captured['rows']] == _rating_snapshot(db)
         assert '(beta testing)' not in captured['title']
@@ -189,21 +189,21 @@ class TestQueensImprovedViews(_ImprovedQueensBase):
 
         rating_ctx = self._make_ctx(guild, alice)
         asyncio.run(cog._cmd_queens_rating(
-            rating_ctx, [alice], improved=True))
+            rating_ctx, QUEENS_GAME, [alice], improved=True))
         assert data_calls[-1]['improved'] is True
         assert plotted_rating['series'][0][0] == beta_history
         assert '(beta testing)' in rating_ctx.sent['embed'].title
 
         performance_ctx = self._make_ctx(guild, alice)
         asyncio.run(cog._cmd_queens_performance(
-            performance_ctx, [alice], improved=True))
+            performance_ctx, QUEENS_GAME, [alice], improved=True))
         assert data_calls[-1]['improved'] is True
         assert plotted_performance['series'][0][0] == beta_history
         assert '(beta testing)' in performance_ctx.sent['embed'].title
 
         history_ctx = self._make_ctx(guild, alice)
         asyncio.run(cog._cmd_queens_history(
-            history_ctx, alice, improved=True))
+            history_ctx, QUEENS_GAME, alice, improved=True))
         assert history_calls[-1]['improved'] is True
         assert pages
         assert '(beta testing)' in pages[0][1].title
@@ -244,7 +244,7 @@ class TestQueensImprovedViews(_ImprovedQueensBase):
         ctx = self._make_ctx(guild, members[0])
 
         asyncio.run(cog._cmd_queens_stats_date(
-            ctx, '2026-06-09', improved=True))
+            ctx, QUEENS_GAME, '2026-06-09', improved=True))
 
         assert calls and calls[-1]['improved'] is True
         assert captured['puzzle_info'] == beta_info
@@ -269,10 +269,10 @@ class TestQueensImprovedPrefixRouting:
         monkeypatch.setattr(
             cog, '_require_enabled', lambda *_args, **_kwargs: None)
 
-        async def ratings(_ctx, **kwargs):
+        async def ratings(_ctx, _game, **kwargs):
             captured['ratings'] = kwargs
 
-        async def performance(_ctx, members, **kwargs):
+        async def performance(_ctx, _game, members, **kwargs):
             captured['performance'] = (members, kwargs)
 
         monkeypatch.setattr(cog, '_cmd_queens_ratings', ratings)

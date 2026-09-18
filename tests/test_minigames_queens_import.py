@@ -89,7 +89,7 @@ class TestQueensImport:
 
         cog = Minigames(bot=None)
         with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, '2026-06-08', content)
+            cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', content)
 
     def test_importer_must_be_linked_even_for_unresolved_only_board(
             self, db, monkeypatch):
@@ -105,7 +105,7 @@ class TestQueensImport:
         )
         cog = Minigames(bot=None)
         with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, '2026-06-08', (
+            cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', (
                 'Alice LinkedIn\n'
                 '\U0001f913\U0001f48e No hints & no mistakes!\n'
                 '0:04\n'
@@ -115,10 +115,10 @@ class TestQueensImport:
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(100, 'queens', '1')
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Ali Farhat',
+            100, 'linkedin', 300, 'Ali Farhat',
             normalize_queens_name('Ali Farhat'), None, 1.0, 999)
         db.set_minigame_player_link(
-            100, 'queens', 301, 'Robert Kocharyan',
+            100, 'linkedin', 301, 'Robert Kocharyan',
             normalize_queens_name('Robert Kocharyan'),
             'https://www.linkedin.com/in/robert/', 1.0, 999)
 
@@ -146,7 +146,7 @@ class TestQueensImport:
         )
 
         cog = Minigames(bot=None)
-        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', content)
 
         assert preview.puzzle_date == dt.date(2026, 6, 8)
         assert preview.puzzle_number == 769
@@ -154,11 +154,11 @@ class TestQueensImport:
         assert [entry.linkedin_name for entry in preview.unresolved] == [
             'Unknown Person',
         ]
-        assert '2026-06-08' in cog._format_queens_import_preview(ctx, preview)
-        assert '#769' in cog._format_queens_import_preview(ctx, preview)
-        assert 'Robert Kocharyan' in cog._format_queens_import_preview(ctx, preview)
+        assert '2026-06-08' in cog._format_queens_import_preview(ctx, QUEENS_GAME, preview)
+        assert '#769' in cog._format_queens_import_preview(ctx, QUEENS_GAME, preview)
+        assert 'Robert Kocharyan' in cog._format_queens_import_preview(ctx, QUEENS_GAME, preview)
 
-        saved = cog._save_queens_import(ctx, preview)
+        saved = cog._save_queens_import(ctx, QUEENS_GAME, preview)
 
         assert saved.resolved == 2
         assert saved.unresolved == 1
@@ -180,12 +180,12 @@ class TestQueensImport:
         assert [row.user_id for row in ratings] == ['300', '301']
         assert ratings[0].rating > ratings[1].rating
 
-        reimport = cog._make_queens_import_preview(ctx, '08/06/2026', (
+        reimport = cog._make_queens_import_preview(ctx, QUEENS_GAME, '08/06/2026', (
             'You\n'
             '\U0001f913\U0001f48e No hints & no mistakes!\n'
             '0:05\n'
         ))
-        saved = cog._save_queens_import(ctx, reimport)
+        saved = cog._save_queens_import(ctx, QUEENS_GAME, reimport)
         assert saved.resolved == 1
         assert saved.unresolved == 0
         rows = db.get_minigame_results_for_guild(100, 'queens')
@@ -211,7 +211,7 @@ class TestQueensImport:
             lambda desc: SimpleNamespace(description=desc))
         db.set_guild_config(100, 'queens', '1')
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Importer Name',
+            100, 'linkedin', 300, 'Importer Name',
             normalize_queens_name('Importer Name'), None, 1.0, 999)
         importer = _FakeDiscordMember(300, 'importer', 'Importer')
         alice = _FakeDiscordMember(301, 'alice', 'Alice')
@@ -224,7 +224,7 @@ class TestQueensImport:
             send=lambda *args, **kwargs: None,
         )
         cog = Minigames(bot=None)
-        preview = cog._make_queens_import_preview(ctx, '2026-06-08', (
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', (
             'Alice LinkedIn\n'
             '\U0001f913\U0001f48e No hints & no mistakes!\n'
             '0:04\n'
@@ -232,7 +232,7 @@ class TestQueensImport:
             '\U0001f913\U0001f48e No hints & no mistakes!\n'
             '0:06\n'
         ))
-        saved = cog._save_queens_import(ctx, preview)
+        saved = cog._save_queens_import(ctx, QUEENS_GAME, preview)
         assert saved.resolved == 1
         assert saved.unresolved == 1
         assert db.get_minigame_result_for_user_puzzle(
@@ -253,7 +253,7 @@ class TestQueensImport:
             sent=sent,
         )
         claimed_count = cog._cmd_queens_register_link(
-            register_ctx, alice, 'Alice LinkedIn')
+            register_ctx, QUEENS_GAME, alice, 'Alice LinkedIn')
 
         claimed = db.get_minigame_result_for_user_puzzle(
             100, 'queens', alice.id, _queens_number('2026-06-08'))
@@ -302,11 +302,11 @@ class TestQueensImport:
             send=send,
             sent=sent,
         )
-        cog._cmd_queens_register_link(alice_ctx, alice, 'Shared LinkedIn')
+        cog._cmd_queens_register_link(alice_ctx, QUEENS_GAME, alice, 'Shared LinkedIn')
         assert db.get_minigame_result_for_user_puzzle(
             100, 'queens', alice.id, _queens_number('2026-06-08')) is not None
 
-        asyncio.run(cog._cmd_queens_unregister(alice_ctx, alice))
+        asyncio.run(cog._cmd_queens_unregister(alice_ctx, QUEENS_GAME, alice))
         assert db.get_minigame_result_for_user_puzzle(
             100, 'queens', alice.id, _queens_number('2026-06-08')) is None
         assert db.get_minigame_unresolved_results_for_name(
@@ -366,7 +366,7 @@ class TestQueensImport:
         cog = Minigames(bot=None)
 
         claimed_count = cog._cmd_queens_register_link(
-            ctx, alice, 'Alice LinkedIn')
+            ctx, QUEENS_GAME, alice, 'Alice LinkedIn')
 
         assert db.get_minigame_result_for_user_puzzle(
             100, 'queens', alice.id, _queens_number('2026-06-08')) is not None
@@ -377,10 +377,10 @@ class TestQueensImport:
     def test_you_row_prefers_importer_even_when_name_is_copied(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_minigame_player_link(
-            100, 'queens', 300, 'Robert Kocharyan',
+            100, 'linkedin', 300, 'Robert Kocharyan',
             normalize_queens_name('Robert Kocharyan'), None, 1.0, 999)
         db.set_minigame_player_link(
-            100, 'queens', 301, 'Importer Name',
+            100, 'linkedin', 301, 'Importer Name',
             normalize_queens_name('Importer Name'), None, 1.0, 999)
         guild = _FakeGuild(100, members=[
             _FakeDiscordMember(300, 'robert', 'Robert'),
@@ -401,6 +401,6 @@ class TestQueensImport:
         )
 
         cog = Minigames(bot=None)
-        preview = cog._make_queens_import_preview(ctx, '2026-06-08', content)
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', content)
 
         assert [entry.user_id for entry in preview.resolved] == ['301']

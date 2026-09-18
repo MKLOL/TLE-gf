@@ -1,13 +1,14 @@
 """High-signal routing and transcript-relevance regression tests."""
 import pytest
 
+from tle import constants
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_history as llm_history
 from tle.cogs import _llm_pipeline as llm_pipeline
 from tle.util import gemini_api, xai_api
 from tle.util.llm_keypool import Lease
 from tests.llm_test_utils import run
-from tests.test_llm_history import FakeHistoryChannel, HistMessage
+from tests.llm_test_utils import FakeHistoryChannel, HistMessage
 
 
 class TestLocalRouting:
@@ -21,6 +22,9 @@ class TestLocalRouting:
         'what did Alice mean above?',
         'why?',
         'what about that?',
+        'summarize this',
+        'summarise that',
+        'recap it',
     ])
     def test_context_dependent_requests_are_detected(self, question):
         assert llm_context.local_mode_hint(question) == \
@@ -47,6 +51,9 @@ class TestLocalRouting:
     def test_a_current_image_resolves_a_bare_referent(self):
         assert llm_context.local_mode_hint(
             'what is this?', has_current_images=True) == \
+            llm_context.MODE_DIRECT
+        assert llm_context.local_mode_hint(
+            'summarize this', has_current_images=True) == \
             llm_context.MODE_DIRECT
 
 
@@ -132,8 +139,19 @@ class TestProviderRouting:
         mode = run(llm_pipeline.classify_grok(
             None, 'does their reasoning hold?', False))
         assert mode == llm_context.MODE_CONTEXT
-        assert seen['reasoning_effort'] == 'none'
-        assert seen['max_output_tokens'] == 32
+        assert seen['reasoning_effort'] == 'low'
+        assert seen['max_output_tokens'] == \
+            constants.XAI_ROUTER_MAX_OUTPUT_TOKENS == 256
+
+    def test_grok_router_failure_falls_back_to_context(
+            self, monkeypatch):
+        async def complete(*args, **kwargs):
+            raise xai_api.XaiError('router unavailable')
+
+        monkeypatch.setattr(xai_api, 'complete', complete)
+        mode = run(llm_pipeline.classify_grok(
+            None, 'does their reasoning hold?', False))
+        assert mode == llm_context.MODE_CONTEXT
 
     def test_context_switch_still_disables_nonreply_history(
             self, monkeypatch):

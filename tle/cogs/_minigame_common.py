@@ -91,6 +91,25 @@ class GameDef:
     scoring_variants: Dict[str, ScoringDef] = field(default_factory=dict)
     manual_ingest_only: bool = False
     rating: Optional[RatingDef] = None
+    # Set for LinkedIn games.  Results then identify players by LinkedIn
+    # display name rather than Discord author, which is what enables
+    # registration, leaderboard import, anonymous linking, per-result opt-out,
+    # and the rated-only-if-registered cut.  Akari and GuessThe.Game leave it
+    # unset and credit the message author directly.
+    # ``_minigame_linkedin.LinkedInDef``; a forward reference keeps this
+    # module free of the parsing layer that imports it.
+    linkedin: Optional['LinkedInDef'] = None
+
+    @property
+    def linkedin_identity(self):
+        return self.linkedin is not None
+
+    @property
+    def link_key(self):
+        """The ``game`` key under which this game's player links are stored."""
+        if self.linkedin is not None:
+            return self.linkedin.link_namespace
+        return self.name
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -339,9 +358,14 @@ def compute_longest_streak(rows, weekdays=None):
     return longest
 
 
-def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None,
-                winner_result_sort_key_fn=None, group_key_fn=None,
-                min_participants=1):
+def winning_rows_per_puzzle(rows, is_eligible=None, best_result_sort_key_fn=None,
+                            winner_result_sort_key_fn=None, group_key_fn=None,
+                            min_participants=1):
+    """Map each puzzle to the row(s) that won it.
+
+    A list longer than one entry means the puzzle was tied: every listed row
+    shares the same winning sort key.
+    """
     if is_eligible is None:
         is_eligible = default_is_eligible_winner
     if best_result_sort_key_fn is None:
@@ -374,13 +398,39 @@ def compute_top(rows, is_eligible=None, best_result_sort_key_fn=None,
         elif row_key == entry['sort_key']:
             entry['rows'].append(row)
 
+    return {key: entry['rows'] for key, entry in best_per_puzzle.items()}
+
+
+def compute_top(rows, **kwargs):
+    """Wins per user, counting a shared best result as a win for everyone tied."""
     wins_by_user = {}
-    for entry in best_per_puzzle.values():
-        for row in entry['rows']:
+    for winners in winning_rows_per_puzzle(rows, **kwargs).values():
+        for row in winners:
             user_id = str(row.user_id)
             wins_by_user[user_id] = wins_by_user.get(user_id, 0) + 1
 
     return sorted(wins_by_user.items(), key=lambda item: (-item[1], int(item[0])))
+
+
+def compute_top_breakdown(rows, **kwargs):
+    """Split each user's wins into outright (solo) and shared (tied) wins.
+
+    Returns ``[(user_id, solo, tied)]`` ordered by total wins and then by solo
+    wins, so a player who won puzzles outright outranks one who only ever
+    shared the top result. ``solo + tied`` reproduces ``compute_top``'s count.
+    """
+    tally = {}
+    for winners in winning_rows_per_puzzle(rows, **kwargs).values():
+        shared = len(winners) > 1
+        for row in winners:
+            user_id = str(row.user_id)
+            solo, tied = tally.get(user_id, (0, 0))
+            tally[user_id] = (solo, tied + 1) if shared else (solo + 1, tied)
+
+    return sorted(
+        ((user_id, solo, tied) for user_id, (solo, tied) in tally.items()),
+        key=lambda item: (-(item[1] + item[2]), -item[1], int(item[0])),
+    )
 
 
 # ── Argument parsing ────────────────────────────────────────────────────

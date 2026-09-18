@@ -29,9 +29,11 @@ def _xai_pool(models=('grok-strong', 'grok-weak'), keys=1, clock=None):
 def _xai_response(text='ok', model='grok-answer', usage=None):
     body = {
         'model': model,
-        'choices': [{
-            'message': {'role': 'assistant', 'content': text},
-            'finish_reason': 'stop',
+        'status': 'completed',
+        'output': [{
+            'type': 'message',
+            'role': 'assistant',
+            'content': [{'type': 'output_text', 'text': text}],
         }],
     }
     if usage is not None:
@@ -248,7 +250,7 @@ class TestXaiReliability:
     def test_usage_is_added_to_shared_stats(self, monkeypatch):
         pool, _ = _xai_pool(models=('grok-strong',))
         body = _xai_response(usage={
-            'prompt_tokens': 13, 'completion_tokens': 5,
+            'input_tokens': 13, 'output_tokens': 5,
             'total_tokens': 18,
         })
 
@@ -263,11 +265,45 @@ class TestXaiReliability:
             'output_tokens': 5, 'total_tokens': 20,
         }
 
+    def test_legacy_usage_fallback_includes_reasoning_tokens(self, monkeypatch):
+        pool, _ = _xai_pool(models=('grok-strong',))
+        body = _xai_response(usage={
+            'prompt_tokens': 32, 'completion_tokens': 9,
+            'completion_tokens_details': {'reasoning_tokens': 110},
+            'total_tokens': 151,
+        })
+
+        async def generate(*args, **kwargs):
+            return 200, body, {}
+
+        monkeypatch.setattr(xai_api, 'generate_once', generate)
+        stats = {}
+        run(xai_api.complete(pool, 'hello', stats=stats))
+        assert stats['input_tokens'] == 32
+        assert stats['output_tokens'] == 119
+        assert stats['total_tokens'] == 151
+
+    def test_legacy_usage_without_total_still_counts_reasoning(self, monkeypatch):
+        pool, _ = _xai_pool(models=('grok-strong',))
+        body = _xai_response(usage={
+            'prompt_tokens': 32, 'completion_tokens': 9,
+            'completion_tokens_details': {'reasoning_tokens': 110},
+        })
+
+        async def generate(*args, **kwargs):
+            return 200, body, {}
+
+        monkeypatch.setattr(xai_api, 'generate_once', generate)
+        stats = {}
+        run(xai_api.complete(pool, 'hello', stats=stats))
+        assert stats['input_tokens'] == 32
+        assert stats['output_tokens'] == 119
+
     def test_exact_billed_cost_ticks_are_converted_to_microusd(
             self, monkeypatch):
         pool, _ = _xai_pool(models=('grok-strong',))
         body = _xai_response(usage={
-            'prompt_tokens': 1, 'completion_tokens': 1,
+            'input_tokens': 1, 'output_tokens': 1,
             'total_tokens': 2, 'cost_in_usd_ticks': '123450',
         })
 

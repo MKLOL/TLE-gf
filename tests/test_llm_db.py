@@ -157,9 +157,9 @@ class TestUsage:
 
 
 class TestXaiRequestLimits:
-    USER_LIMIT = 10
-    WINDOW = 30 * 60
-    DAILY_LIMIT = 100
+    USER_LIMIT = 15
+    WINDOW = 60 * 60
+    DAILY_LIMIT = 200
 
     def reserve(self, db, user_id, now):
         return db.llm_reserve_xai_request(
@@ -171,12 +171,35 @@ class TestXaiRequestLimits:
             'SELECT COUNT(*) AS count FROM llm_xai_request'
         ).fetchone().count
 
-    def test_tenth_request_is_accepted_and_eleventh_is_rejected(self, db):
+    def test_fifteenth_request_is_accepted_and_next_is_rejected(self, db):
         for _ in range(self.USER_LIMIT):
             assert self.reserve(db, 7, now=1_000) is None
 
-        assert self.reserve(db, 7, now=1_000) == 'user'
+        denial = self.reserve(db, 7, now=1_000)
+        assert isinstance(denial, str) and denial == 'user'
+        assert denial.retry_at == 1_000 + self.WINDOW
         assert self.event_count(db) == self.USER_LIMIT
+
+    def test_retry_handles_more_active_rows_than_the_new_limit(self, db):
+        for offset in range(25):
+            assert db.llm_reserve_xai_request(
+                7, 100, self.WINDOW, self.DAILY_LIMIT,
+                now=1_000 + offset) is None
+
+        denial = self.reserve(db, 7, now=1_025)
+        assert denial == 'user'
+        assert denial.retry_at == 1_010 + self.WINDOW
+
+    def test_user_limit_bypass_still_enforces_shared_daily_limit(self, db):
+        kwargs = dict(
+            user_limit=1, window_seconds=self.WINDOW, daily_limit=2,
+            now=1_000, enforce_user_limit=False)
+
+        assert db.llm_reserve_xai_request(7, **kwargs) is None
+        assert db.llm_reserve_xai_request(7, **kwargs) is None
+        denial = db.llm_reserve_xai_request(7, **kwargs)
+        assert denial == 'daily'
+        assert self.event_count(db) == 2
 
     def test_user_limit_is_global_across_discord_id_representations(self, db):
         for _ in range(self.USER_LIMIT):
@@ -184,6 +207,57 @@ class TestXaiRequestLimits:
 
         assert self.reserve(db, '7', now=1_001) == 'user'
         assert self.reserve(db, 8, now=1_001) is None
+
+    def test_supplied_guild_scopes_only_the_personal_limit(self, db):
+        kwargs = dict(
+            user_limit=2, window_seconds=self.WINDOW,
+            daily_limit=self.DAILY_LIMIT, now=1_000)
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(7, guild_id=100, **kwargs) == 'user'
+        assert db.llm_reserve_xai_request(7, guild_id=200, **kwargs) is None
+
+    def test_scoped_retry_ignores_another_guilds_older_request(self, db):
+        kwargs = dict(
+            user_limit=1, window_seconds=self.WINDOW,
+            daily_limit=self.DAILY_LIMIT)
+        assert db.llm_reserve_xai_request(
+            7, guild_id=200, now=900, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            7, guild_id=100, now=1_000, **kwargs) is None
+        denial = db.llm_reserve_xai_request(
+            7, guild_id=100, now=1_001, **kwargs)
+        assert denial == 'user'
+        assert denial.retry_at == 1_000 + self.WINDOW
+
+    def test_shared_daily_limit_still_spans_supplied_guilds(self, db):
+        kwargs = dict(
+            user_limit=10, window_seconds=self.WINDOW,
+            daily_limit=2, now=100)
+        assert db.llm_reserve_xai_request(1, guild_id=100, **kwargs) is None
+        assert db.llm_reserve_xai_request(2, guild_id=200, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            3, guild_id=300, **kwargs) == 'daily'
+
+    def test_shared_spend_guard_still_spans_supplied_guilds(self, db):
+        kwargs = dict(
+            user_limit=10, window_seconds=self.WINDOW,
+            daily_limit=10, daily_budget_microusd=1_000, now=100)
+        assert db.llm_reserve_xai_request(
+            1, guild_id=100, reserved_microusd=400, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            2, guild_id=200, reserved_microusd=600, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            3, guild_id=300, reserved_microusd=1, **kwargs) == 'budget'
+
+    def test_pruning_preserves_the_active_call_window(self, db):
+        window = 40 * 86400
+        kwargs = dict(user_limit=1, window_seconds=window,
+                      daily_limit=self.DAILY_LIMIT)
+        assert db.llm_reserve_xai_request(
+            7, now=18 * 86400, **kwargs) is None
+        assert db.llm_reserve_xai_request(
+            7, now=50 * 86400, **kwargs) == 'user'
 
     def test_exact_rolling_window_boundary_reopens_a_slot(self, db):
         for _ in range(self.USER_LIMIT):
@@ -196,8 +270,21 @@ class TestXaiRequestLimits:
         for user_id in range(self.DAILY_LIMIT):
             assert self.reserve(db, user_id, now=now) is None
 
-        assert self.reserve(db, 999, now=now) == 'daily'
+        denial = self.reserve(db, 999, now=now)
+        assert denial == 'daily'
+        assert denial.retry_at == 3 * 86_400
         assert self.event_count(db) == self.DAILY_LIMIT
+
+    def test_retry_waits_for_a_later_simultaneous_daily_guard(self, db):
+        now = 1_000
+        for _ in range(self.USER_LIMIT):
+            assert self.reserve(db, 7, now=now) is None
+        for user_id in range(self.DAILY_LIMIT - self.USER_LIMIT):
+            assert self.reserve(db, 100 + user_id, now=now) is None
+
+        denial = self.reserve(db, 7, now=now)
+        assert denial == 'daily'
+        assert denial.retry_at == 86_400
 
     def test_utc_day_resets_but_rolling_user_window_spans_midnight(self, db):
         before_midnight = 86_400 - 10

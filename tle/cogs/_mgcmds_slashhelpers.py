@@ -36,6 +36,13 @@ class SlashHelpersMixin:
         await self._slash_send_error(interaction, self._mod_role_error_message())
         return False
 
+    async def _slash_require_tango_mod(self, interaction):
+        if self._has_tango_mod_access(interaction.guild.id, interaction.user):
+            return True
+        await self._slash_send_error(
+            interaction, self._tango_mod_role_error_message())
+        return False
+
     async def _slash_require_akari_mod(self, interaction):
         if self._has_akari_mod_access(interaction.guild.id, interaction.user):
             return True

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle import constants
 from tle.cogs import _mgimpl_queenscmdb as queens_cmd_impl
 from tle.cogs import minigames as minigames_module
@@ -36,7 +37,8 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         fake_file = SimpleNamespace(filename='queens-stats.png')
 
         def fake_queens_stats(results, display_name, *, title_suffix='',
-                              weekdays=None, as_of_date=None):
+                              weekdays=None, as_of_date=None,
+                              game_label=None):
             rendered.append({
                 'dates': [
                     minigames_module.normalize_puzzle_date(row.puzzle_date)
@@ -60,19 +62,19 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         self._save_queens_result(db, 3, alice.id, '2026-06-10', 4, True, 100)
         self._save_queens_result(db, 4, alice.id, '2026-06-11', 6, True, 100)
 
-        asyncio.run(cog._cmd_queens_stats(ctx))
+        asyncio.run(cog._cmd_queens_stats(ctx, QUEENS_GAME))
         assert rendered[-1]['dates'] == [
             '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11',
         ]
         assert rendered[-1]['as_of_date'] == logical_today
-        asyncio.run(cog._cmd_queens_stats(ctx, 'week'))
+        asyncio.run(cog._cmd_queens_stats(ctx, QUEENS_GAME, 'week'))
         assert rendered[-1]['dates'] == [
             '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11',
         ]
-        asyncio.run(cog._cmd_queens_stats(ctx, '+dow=mon,wed'))
+        asyncio.run(cog._cmd_queens_stats(ctx, QUEENS_GAME, '+dow=mon,wed'))
         assert rendered[-1]['dates'] == ['2026-06-08', '2026-06-10']
 
-        asyncio.run(cog._cmd_queens_streak(ctx, 'week'))
+        asyncio.run(cog._cmd_queens_streak(ctx, QUEENS_GAME, 'week'))
         assert '**2** consecutive clean day(s)' in ctx.sent['embed'].description
         assert 'Latest result: **2026-06-11**' in ctx.sent['embed'].description
 
@@ -95,7 +97,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         asyncio.run(Minigames.queens_register.__wrapped__(
             Minigames(bot=None), ctx, 'Artsiom', linkedin='Savich'))
 
-        link = db.get_minigame_player_link(100, 'queens', alice.id)
+        link = db.get_minigame_player_link(100, 'linkedin', alice.id)
         assert link.external_name == name
         assert link.normalized_name == normalize_queens_name(name)
         assert db.get_minigame_result_for_user_puzzle(
@@ -116,7 +118,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
             Minigames(bot=None), ctx, '+username',
             linkedin='bob Bob LinkedIn'))
 
-        link = db.get_minigame_player_link(100, 'queens', bob.id)
+        link = db.get_minigame_player_link(100, 'linkedin', bob.id)
         assert link.external_name == 'Bob LinkedIn'
 
     def test_register_again_requires_unregister_even_for_same_name(
@@ -137,7 +139,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
                 cog, ctx, 'Different', linkedin='Name'))
 
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id).external_name == 'Alice LinkedIn'
+            100, 'linkedin', alice.id).external_name == 'Alice LinkedIn'
 
     def test_unregister_allows_self_to_register_again(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
@@ -152,7 +154,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         asyncio.run(Minigames.queens_register.__wrapped__(
             cog, ctx, 'New', linkedin='Name'))
 
-        link = db.get_minigame_player_link(100, 'queens', alice.id)
+        link = db.get_minigame_player_link(100, 'linkedin', alice.id)
         assert link.external_name == 'New Name'
         assert not db.is_minigame_opted_out(100, 'queens', alice.id)
 
@@ -166,14 +168,14 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         guild = _FakeGuild(100, members=[mod, bob])
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', bob.id, 'Old Name',
+            100, 'linkedin', bob.id, 'Old Name',
             normalize_queens_name('Old Name'), None, 1.0, mod.id)
 
         asyncio.run(Minigames.queens_set.__wrapped__(
             cog, self._make_ctx(guild, mod), 'bob',
             linkedin='New Name +anon'))
 
-        link = db.get_minigame_player_link(100, 'queens', bob.id)
+        link = db.get_minigame_player_link(100, 'linkedin', bob.id)
         assert link.external_name == 'New Name'
         assert link.external_url == (
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER)
@@ -198,8 +200,8 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
             Minigames(bot=None), ctx, first, linkedin=rest))
 
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id).external_name == expected
-        assert db.get_minigame_player_link(100, 'queens', bob.id) is None
+            100, 'linkedin', alice.id).external_name == expected
+        assert db.get_minigame_player_link(100, 'linkedin', bob.id) is None
 
     def test_anonymous_registration_is_direct_and_private(
             self, db, monkeypatch):
@@ -214,7 +216,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
         asyncio.run(Minigames.queens_register.__wrapped__(
             Minigames(bot=None), ctx, '+anon', linkedin='Alice LinkedIn'))
 
-        link = db.get_minigame_player_link(100, 'queens', alice.id)
+        link = db.get_minigame_player_link(100, 'linkedin', alice.id)
         assert link.external_url == (
             minigames_module._QUEENS_ANONYMOUS_LINK_MARKER)
         assert 'Anonymous' in ctx.sent['embed'].description
@@ -239,7 +241,7 @@ class TestQueensCommandsRegister(_QueensCommandsBase):
             interaction, 'Alice LinkedIn'))
 
         assert db.get_minigame_player_link(
-            100, 'queens', alice.id).external_name == 'Alice LinkedIn'
+            100, 'linkedin', alice.id).external_name == 'Alice LinkedIn'
         assert interaction.response.deferred is True
         assert interaction.followup.sent
 

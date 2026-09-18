@@ -30,6 +30,7 @@ from tle.util.db.betting_market_db import BettingMarketDbMixin
 from tle.util.db.betting_wager_db import BettingWagerDbMixin
 from tle.util.db.command_gate_db import CommandGateDbMixin
 from tle.util.db.llm_db import LlmDbMixin
+from tle.util.db.counting_db import CountingDbMixin
 from tle.util import file_permissions
 
 logger = logging.getLogger(__name__)
@@ -169,7 +170,7 @@ class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
                  VcDbMixin, LockoutDbMixin, RpollDbMixin, ComplaintDbMixin,
                  GreatdayDbMixin, KvsDbMixin, MiscDbMixin,
                  BettingWalletDbMixin, BettingMarketDbMixin, BettingWagerDbMixin,
-                 CommandGateDbMixin, LlmDbMixin,
+                 CommandGateDbMixin, LlmDbMixin, CountingDbMixin,
                  MinigameDbMixin, StarboardDbMixin, MigrationDbMixin):
     def __init__(self, dbfile):
         # Pre-creation avoids a world-readable window before chmod. The private
@@ -234,6 +235,7 @@ class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
         self._create_rpoll_tables()
         self._create_command_gate_tables()
         self._create_llm_tables()
+        self._create_counting_tables()
         self._create_migration_tables()
 
     # Helper functions.

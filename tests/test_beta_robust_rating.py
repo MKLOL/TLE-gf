@@ -3,13 +3,19 @@
 import math
 import random
 
-from tle.util.akari_beta_rating import compute_akari_beta_ratings
+from tle.util.akari_beta_rating import (
+    _AKARI_RATING_K,
+    _AKARI_RATING_POINT_SCALE,
+    compute_akari_beta_ratings,
+)
 from tle.util.queens_improved_rating import (
+    _FIELD_DEFLATION,
     _RATING_K,
     _compute_round,
+    _compute_round_from_pair_score,
     _elo_expected,
     _field_expected,
-    _soft_time_score,
+    _hybrid_time_score,
 )
 
 from tests.test_akari_beta_rating import _row
@@ -31,7 +37,7 @@ def _manual_deltas(ratings, times):
         for opponent in users:
             if opponent == user:
                 continue
-            score = _soft_time_score(times[user], times[opponent])
+            score = _hybrid_time_score(times[user], times[opponent])
             expected = _elo_expected(
                 ratings[user], ratings[opponent])
             residual += (
@@ -40,10 +46,10 @@ def _manual_deltas(ratings, times):
     return deltas
 
 
-def _mean_soft_score(user, ratings, times):
+def _mean_hybrid_score(user, ratings, times):
     return sum(
         0.5 if opponent == user
-        else _soft_time_score(times[user], times[opponent])
+        else _hybrid_time_score(times[user], times[opponent])
         for opponent in sorted(ratings)
     ) / len(ratings)
 
@@ -71,6 +77,40 @@ def test_round_uses_pairwise_blended_proper_residuals():
             rel_tol=0, abs_tol=1e-10,
         )
     assert abs(sum(update.delta for update in updates.values())) < 1e-10
+
+
+def test_separate_performance_scores_do_not_change_rating_deltas():
+    ratings = {'a': 1200.0, 'b': 1200.0}
+
+    def rating_score(user, _opponent):
+        return 0.6 if user == 'a' else 0.4
+
+    def performance_score(user, _opponent):
+        return 1.0 if user == 'a' else 0.0
+
+    ordinary = _compute_round_from_pair_score(ratings, rating_score)
+    separated = _compute_round_from_pair_score(
+        ratings, rating_score,
+        performance_pair_score_fn=performance_score)
+
+    assert separated['a'].delta == ordinary['a'].delta
+    assert separated['b'].delta == ordinary['b'].delta
+    assert abs(sum(update.delta for update in separated.values())) < 1e-12
+    assert separated['a'].performance > ordinary['a'].performance
+    assert separated['b'].performance < ordinary['b'].performance
+
+
+def test_skipped_performance_does_not_call_its_pair_callback():
+    def unexpected(_user, _opponent):
+        raise AssertionError('performance callback should not run')
+
+    updates = _compute_round_from_pair_score(
+        {'a': 1200.0, 'b': 1200.0},
+        lambda user, _opponent: 0.6 if user == 'a' else 0.4,
+        compute_performance=False,
+        performance_pair_score_fn=unexpected)
+
+    assert all(update.performance is None for update in updates.values())
 
 
 def test_blend_keeps_an_extreme_probability_floor_without_full_elo_force():
@@ -138,7 +178,7 @@ def test_performance_uniquely_inverts_the_mean_field_score():
     updates = _compute_round(ratings, times)
 
     for user, update in updates.items():
-        target = _mean_soft_score(user, ratings, times)
+        target = _mean_hybrid_score(user, ratings, times)
         assert math.isclose(
             _field_expected(
                 update.performance, list(ratings.values())),
@@ -196,24 +236,27 @@ def test_akari_replay_uses_the_same_blended_update_after_ratings_diverge():
     ]
     states = compute_akari_beta_ratings(rows)
 
-    first_score = _soft_time_score(10, 30)
-    first_delta = _RATING_K / 2 * (first_score - 0.5)
-    pre_one = 1200 + first_delta
-    pre_two = 1200 - first_delta
-    second_score = _soft_time_score(30, 10)
-    second_expected = _elo_expected(pre_one, pre_two)
+    first_score = _hybrid_time_score(10, 30)
+    first_delta = _AKARI_RATING_K / 2 * (first_score - 0.5)
+    pre_one = 1200 + first_delta - _FIELD_DEFLATION
+    pre_two = 1200 - first_delta - _FIELD_DEFLATION
+    second_score = _hybrid_time_score(30, 10)
+    second_expected = _elo_expected(
+        pre_one, pre_two, point_scale=_AKARI_RATING_POINT_SCALE)
     second_delta = (
-        _RATING_K / 2
+        _AKARI_RATING_K / 2
         * _blend_weight(second_expected)
         * (second_score - second_expected)
     )
 
     assert math.isclose(
-        states['1'].rating, pre_one + second_delta,
+        states['1'].rating,
+        pre_one + second_delta - _FIELD_DEFLATION,
         rel_tol=0, abs_tol=1e-9,
     )
     assert math.isclose(
-        states['2'].rating, 2400 - states['1'].rating,
+        states['2'].rating,
+        2400 - 4 * _FIELD_DEFLATION - states['1'].rating,
         rel_tol=0, abs_tol=1e-9,
     )
 

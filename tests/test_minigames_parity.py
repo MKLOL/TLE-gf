@@ -260,7 +260,7 @@ class TestGamesCountsContestedDaysOnly:
         db.set_guild_config(100, 'queens', '1')
         for user_id, name in ((300, 'Alice LinkedIn'), (301, 'Bob LinkedIn')):
             db.set_minigame_player_link(
-                100, 'queens', user_id, name, normalize_queens_name(name),
+                100, 'linkedin', user_id, name, normalize_queens_name(name),
                 None, 1.0, 300)
         db.save_minigame_result(
             1, 100, 'queens', 200, 300, 769, '2026-06-08', 100, 5, True, 'x')

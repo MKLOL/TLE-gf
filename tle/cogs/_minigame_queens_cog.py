@@ -1,9 +1,11 @@
-"""Cog-side LinkedIn Queens helpers: constants, namedtuples, arg parsing,
+"""Cog-side LinkedIn-game helpers: constants, namedtuples, arg parsing,
 formatting, and the anonymous-registration modal/view.
 
-These are the module-level pieces ``minigames.py`` used to carry for Queens.
-They live here to keep the cog module small; ``minigames.py`` re-exports the
-names the test suite imports.
+Written for Queens and now shared by every LinkedIn game (Queens, Tango);
+the ``_queens_*`` names are kept because the cog modules and the test suite
+import them.  Helpers that depend on the game's calendar take ``game`` and
+read ``game.linkedin``; the Queens-bound wrappers at the bottom preserve the
+historical zero-``game`` signatures.
 """
 
 import datetime as dt
@@ -11,7 +13,6 @@ import hashlib
 import re
 from collections import namedtuple
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import discord
 
@@ -20,7 +21,15 @@ from tle.cogs._minigame_common import (
     format_duration, normalize_puzzle_date, pick_best_results,
     previous_streak_day,
 )
-from tle.cogs._minigame_queens import QUEENS_GAME
+# The Queens calendar (anchor, both date/number directions, and the Pacific
+# "today") lives in ``_minigame_queens``.  Re-exported here so every existing
+# ``from _minigame_queens_cog import ...`` keeps working.
+from tle.cogs._minigame_queens import (  # noqa: F401  (re-exports)
+    QUEENS_GAME, _QUEENS_ANCHOR_DATE, _QUEENS_ANCHOR_NUMBER,
+    _QUEENS_TIME_ZONE, _queens_current_puzzle_date,
+    _queens_date_for_puzzle_number, _queens_puzzle_number_for_date,
+    queens_best_result_sort_key, queens_result_group_key,
+)
 from tle.cogs._minigame_helpers import MinigameCogError
 
 
@@ -43,14 +52,14 @@ _QueensBackfillResult = namedtuple(
 
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _QUEENS_HISTORY_PER_PAGE = 15
+# Stored in ``external_url`` on the (shared) LinkedIn link row.  The
+# ``queens`` in the sentinel is historical; it marks the link anonymous for
+# every LinkedIn game and must not change without a data migration.
 _QUEENS_ANONYMOUS_LINK_MARKER = 'tle:queens:anonymous'
 _QUEENS_ANONYMOUS_LABEL = 'Anonymous'
 _QUEENS_ANONYMOUS_FLAGS = {'+anon', '+anonymous'}
-_QUEENS_ANCHOR_DATE = dt.date(2026, 6, 8)
-_QUEENS_ANCHOR_NUMBER = 769
-_QUEENS_TIME_ZONE = ZoneInfo('America/Los_Angeles')
 
-_QUEENS_ADMINS_KEY = 'queens_admin_user_ids'
+_QUEENS_ADMINS_KEY = QUEENS_GAME.linkedin.admins_key
 # Backfill JSON files can be much larger (years of history × many
 # players).  10 MiB covers any realistic LinkedIn export.
 _QUEENS_BACKFILL_MAX_BYTES = 10 * 1024 * 1024
@@ -77,20 +86,11 @@ def _parse_queens_date(date_text):
         except ValueError:
             continue
     raise MinigameCogError(
-        f'Could not parse Queens date `{date_text}`. Use `YYYY-MM-DD`.')
+        f'Could not parse date `{date_text}`. Use `YYYY-MM-DD`.')
 
 
-def _queens_puzzle_number_for_date(puzzle_date):
-    puzzle_date = normalize_puzzle_date(puzzle_date)
-    return _QUEENS_ANCHOR_NUMBER + (puzzle_date - _QUEENS_ANCHOR_DATE).days
-
-
-def _queens_date_for_puzzle_number(puzzle_number):
-    return _QUEENS_ANCHOR_DATE + dt.timedelta(
-        days=int(puzzle_number) - _QUEENS_ANCHOR_NUMBER)
-
-
-def _parse_queens_date_or_number(value):
+def _parse_linkedin_date_or_number(game, value):
+    """A date in any accepted format, or a ``#123`` / ``123`` puzzle number."""
     try:
         return _parse_queens_date(value)
     except MinigameCogError:
@@ -98,33 +98,23 @@ def _parse_queens_date_or_number(value):
         if text.startswith('#'):
             text = text[1:]
         if text.isdigit():
-            return _queens_date_for_puzzle_number(int(text))
+            return game.linkedin.date_for_number(int(text))
         raise
-
-
-def _queens_current_puzzle_date(now=None):
-    """Return the active LinkedIn puzzle date at midnight Pacific Time."""
-    if now is None:
-        now = dt.datetime.now(dt.timezone.utc)
-    return now.astimezone(_QUEENS_TIME_ZONE).date()
-
-
-def _queens_puzzle_numbers_for_date(puzzle_date):
-    puzzle_date = normalize_puzzle_date(puzzle_date)
-    numbers = [_queens_puzzle_number_for_date(puzzle_date)]
-    legacy_number = puzzle_date.toordinal()
-    if legacy_number != numbers[0]:
-        numbers.append(legacy_number)
-    return numbers
 
 
 def _queens_puzzle_date_text(puzzle_date):
     return normalize_puzzle_date(puzzle_date).isoformat()
 
 
-def _queens_result_message_id(guild_id, puzzle_date, user_id):
+def _linkedin_result_message_id(game, guild_id, puzzle_date, user_id):
+    """Deterministic synthetic message id for a projected LinkedIn result.
+
+    Keyed by game so the same person's Queens and Tango rows for one date
+    never collide in ``minigame_result``.  Queens' key is unchanged from
+    before Tango existed, so existing rows re-sync without churn.
+    """
     date_text = _queens_puzzle_date_text(puzzle_date)
-    raw = f'{guild_id}:queens:{date_text}:{user_id}'.encode('utf-8')
+    raw = f'{guild_id}:{game.name}:{date_text}:{user_id}'.encode('utf-8')
     digest = hashlib.blake2b(raw, digest_size=8).digest()
     return str(int.from_bytes(digest, 'big') & ((1 << 63) - 1))
 
@@ -209,10 +199,11 @@ def _format_queens_result(entry, *, name_override=None):
 
 
 def _queens_best_results_by_date(rows):
+    # Time-only sort keys shared by every LinkedIn game.
     return pick_best_results(
         rows,
-        sort_key_fn=QUEENS_GAME.best_result_sort_key,
-        group_key_fn=QUEENS_GAME.result_group_key,
+        sort_key_fn=queens_best_result_sort_key,
+        group_key_fn=queens_result_group_key,
     )
 
 
@@ -251,12 +242,13 @@ def _queens_streak_info(rows, weekdays=None):
 
 
 class _QueensAnonymousRegisterModal(discord.ui.Modal):
-    def __init__(self, cog):
-        super().__init__(title='Register for Queens')
+    def __init__(self, cog, game):
+        super().__init__(title=f'Register for {game.display_name}')
         self.cog = cog
+        self.game = game
         self.linkedin_name = discord.ui.TextInput(
             label='LinkedIn display name',
-            placeholder='Name as it appears on the Queens leaderboard',
+            placeholder='Name as it appears on the LinkedIn leaderboard',
             required=True,
             max_length=100,
         )
@@ -276,7 +268,7 @@ class _QueensAnonymousRegisterModal(discord.ui.Modal):
         )
         try:
             await self.cog._cmd_queens_register(
-                ctx, interaction.user, self.linkedin_name.value,
+                ctx, self.game, interaction.user, self.linkedin_name.value,
                 anonymous=True)
         except MinigameCogError as exc:
             await interaction.response.send_message(
@@ -285,9 +277,10 @@ class _QueensAnonymousRegisterModal(discord.ui.Modal):
 
 
 class _QueensAnonymousRegisterView(discord.ui.View):
-    def __init__(self, cog, requester_id):
+    def __init__(self, cog, game, requester_id):
         super().__init__(timeout=300)
         self.cog = cog
+        self.game = game
         self.requester_id = int(requester_id)
         button = discord.ui.Button(
             label='Enter LinkedIn name',
@@ -308,4 +301,19 @@ class _QueensAnonymousRegisterView(discord.ui.View):
         if not await self.interaction_check(interaction):
             return
         await interaction.response.send_modal(
-            _QueensAnonymousRegisterModal(self.cog))
+            _QueensAnonymousRegisterModal(self.cog, self.game))
+
+
+# ── Queens-bound wrappers (historical signatures) ───────────────────────
+
+def _parse_queens_date_or_number(value):
+    return _parse_linkedin_date_or_number(QUEENS_GAME, value)
+
+
+def _queens_puzzle_numbers_for_date(puzzle_date):
+    return QUEENS_GAME.linkedin.puzzle_numbers_for_date(puzzle_date)
+
+
+def _queens_result_message_id(guild_id, puzzle_date, user_id):
+    return _linkedin_result_message_id(
+        QUEENS_GAME, guild_id, puzzle_date, user_id)

@@ -58,8 +58,8 @@ class GuessGameCmdsMixin:
     async def gg_streak(self, ctx, *args):
         await self._cmd_streak(ctx, GUESSGAME_GAME, *args)
 
-    @guessgame.command(name='top', brief='Show winners leaderboard',
-                       usage='[p>=N] [p<N] [filters...]')
+    @guessgame.command(name='top', brief='Show outright winners leaderboard',
+                       usage='[+ties] [p>=N] [p<N] [filters...]')
     async def gg_top(self, ctx, *args):
         await self._cmd_top(ctx, GUESSGAME_GAME, *args)
 

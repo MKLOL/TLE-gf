@@ -269,3 +269,203 @@ def upgrade_1_49_0(db):
         'ON llm_user_ban (guild_id, banned_at)')
     db.commit()
     logger.info('1.49.0: Upgrade complete')
+
+
+@registry.register('1.50.0', 'Persistent shared LLM cooldowns')
+def upgrade_1_50_0(db):
+    """Add server-wide and parent-channel prompt admission cooldowns."""
+    logger.info('1.50.0: Adding shared LLM cooldowns')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS llm_cooldown (
+            guild_id       TEXT NOT NULL,
+            channel_id     TEXT NOT NULL,
+            seconds        INTEGER NOT NULL
+                           CHECK (seconds BETWEEN 1 AND 86400),
+            last_attempt_at REAL,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+    ''')
+    db.commit()
+    logger.info('1.50.0: Upgrade complete')
+
+
+@registry.register('1.51.0', 'Exact channel and thread LLM cooldown scopes')
+def upgrade_1_51_0(db):
+    """Keep 1.50 parent-channel cooldowns covering their child threads."""
+    logger.info('1.51.0: Migrating shared LLM cooldown scopes')
+    # A prefixed row can only pre-exist after a partial rollout. In that case,
+    # the raw row may already represent an exact scope, so preserve both.
+    db.execute('''
+        UPDATE OR IGNORE llm_cooldown
+        SET channel_id = 'family:' || channel_id
+        WHERE channel_id != '*' AND channel_id NOT LIKE 'family:%'
+    ''')
+    ambiguous = db.execute('''
+        SELECT COUNT(*) FROM llm_cooldown
+        WHERE channel_id != '*' AND channel_id NOT LIKE 'family:%'
+    ''').fetchone()[0]
+    if ambiguous:
+        logger.warning(
+            '1.51.0: Preserved %d ambiguous exact cooldown scope(s)',
+            ambiguous)
+    db.commit()
+    logger.info('1.51.0: Upgrade complete')
+
+
+@registry.register('1.52.0', 'Sticky narcissus self-star marks')
+def upgrade_1_52_0(db):
+    """Seed permanent self-star marks from currently-live self-reactions.
+
+    Narcissus used to be a live reactor count, so un-reacting erased the
+    self-star.  ``starboard_narcissus`` marks are permanent; going forward
+    they are recorded whenever an author has a live self-reaction while
+    their message is on the starboard.  Historical un-reacts are unknowable,
+    so the seed captures what is still visible: every author with a live
+    self-reaction (main emoji or alias, on the original message or a
+    starboard post) on an already-starboarded message.
+    """
+    logger.info('1.52.0: Seeding sticky narcissus self-star marks')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_narcissus (
+            guild_id        TEXT,
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    # Startup order runs create_tables before migrations, but be safe for
+    # DBs upgraded out-of-band: create every table the seed reads so a
+    # partial schema turns the seed into a no-op instead of an error.
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_proxy_reactors (
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_message_v1 (
+            original_msg_id     TEXT,
+            starboard_msg_id    TEXT,
+            guild_id            TEXT,
+            emoji               TEXT,
+            author_id           TEXT,
+            star_count          INTEGER DEFAULT 0,
+            channel_id          TEXT,
+            PRIMARY KEY (original_msg_id, emoji)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_reactors (
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_alias (
+            guild_id    TEXT,
+            alias_emoji TEXT,
+            main_emoji  TEXT,
+            PRIMARY KEY (guild_id, alias_emoji)
+        )
+    ''')
+    db.execute('''
+        INSERT OR IGNORE INTO starboard_narcissus
+            (guild_id, original_msg_id, emoji, user_id)
+        SELECT m.guild_id, m.original_msg_id, m.emoji, m.author_id
+        FROM starboard_message_v1 m
+        JOIN (
+            SELECT original_msg_id, emoji, user_id FROM starboard_reactors
+            UNION
+            SELECT original_msg_id, emoji, user_id FROM starboard_proxy_reactors
+        ) r ON r.original_msg_id = m.original_msg_id
+           AND r.user_id = m.author_id
+        WHERE m.author_id IS NOT NULL AND m.author_id != '__UNKNOWN__'
+          AND (r.emoji = m.emoji OR EXISTS (
+              SELECT 1 FROM starboard_alias a
+              WHERE a.guild_id = m.guild_id
+                AND a.alias_emoji = r.emoji
+                AND a.main_emoji = m.emoji))
+    ''')
+    db.commit()
+    logger.info('1.52.0: Upgrade complete')
+
+
+@registry.register('1.53.0', 'Surface-scoped proxy reactors, board-post entry purge')
+def upgrade_1_53_0(db):
+    """Rebuild proxy reactors with their surface, purge board-post entries.
+
+    ``starboard_proxy_reactors`` gains ``via_starboard_msg_id`` (the post a
+    proxy reaction physically sits on) so deleting a post cascades exactly
+    its own rows.  The table shipped unreleased in this same deploy, so a
+    plain rebuild loses nothing.
+
+    Also deletes ``starboard_message_v1`` entries whose "original" is itself
+    a bot starboard post — rows created by the pre-exclusion abuse (spam
+    reacts on a bot post put the post itself onto another board).  Left in
+    place, the proxy path would redirect the reaction engine at a bot post.
+    """
+    logger.info('1.53.0: Rebuilding proxy reactors, purging board-post entries')
+    db.execute('DROP TABLE IF EXISTS starboard_proxy_reactors')
+    db.execute('''
+        CREATE TABLE starboard_proxy_reactors (
+            original_msg_id      TEXT,
+            emoji                TEXT,
+            user_id              TEXT,
+            via_starboard_msg_id TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id,
+                         via_starboard_msg_id)
+        )
+    ''')
+    # Defensive creates so a partial schema (e.g. an LLM-only test DB running
+    # the registry) turns the purge into a no-op instead of an error.
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_message_v1 (
+            original_msg_id     TEXT,
+            starboard_msg_id    TEXT,
+            guild_id            TEXT,
+            emoji               TEXT,
+            author_id           TEXT,
+            star_count          INTEGER DEFAULT 0,
+            channel_id          TEXT,
+            PRIMARY KEY (original_msg_id, emoji)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_reactors (
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS starboard_narcissus (
+            guild_id        TEXT,
+            original_msg_id TEXT,
+            emoji           TEXT,
+            user_id         TEXT,
+            PRIMARY KEY (original_msg_id, emoji, user_id)
+        )
+    ''')
+    abuse_originals = '''
+        SELECT m.original_msg_id FROM starboard_message_v1 m
+        WHERE EXISTS (
+            SELECT 1 FROM starboard_message_v1 p
+            WHERE p.starboard_msg_id = m.original_msg_id
+        )
+    '''
+    for table in ('starboard_reactors', 'starboard_narcissus'):
+        db.execute(
+            f'DELETE FROM {table} WHERE original_msg_id IN ({abuse_originals})')
+    purged = db.execute(
+        f'DELETE FROM starboard_message_v1 '
+        f'WHERE original_msg_id IN ({abuse_originals})').rowcount
+    if purged:
+        logger.info('1.53.0: Purged %d board-post starboard entrie(s)', purged)
+    db.commit()
+    logger.info('1.53.0: Upgrade complete')

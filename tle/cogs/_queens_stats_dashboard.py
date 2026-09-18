@@ -290,15 +290,17 @@ def _duration_or_dash(value):
 
 
 def plot_queens_stats(results, display_name, *, title_suffix='',
-                      weekdays=None, as_of_date=None):
-    """Render a light, Discord-friendly seven-day Queens dashboard."""
+                      weekdays=None, as_of_date=None,
+                      game_label='LinkedIn Queens'):
+    """Render a light, Discord-friendly seven-day LinkedIn-game dashboard."""
     data = _queens_dashboard_data(results, weekdays, as_of_date)
+    game_word = str(game_label).replace('LinkedIn', '').strip().upper()
     fig = plt.figure(figsize=(16, 10), facecolor=_BG)
 
     header = fig.add_axes((.04, .89, .92, .075))
     header.set_facecolor(_BG)
     header.axis('off')
-    header.text(0, .72, 'QUEENS  /  7-DAY PLAYER DASHBOARD',
+    header.text(0, .72, f'{game_word}  /  7-DAY PLAYER DASHBOARD',
                 transform=header.transAxes, color=_PURPLE, fontsize=10,
                 fontweight='bold')
     draw_player_name(

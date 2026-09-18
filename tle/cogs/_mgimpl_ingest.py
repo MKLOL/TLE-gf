@@ -15,7 +15,6 @@ from tle.cogs._minigame_common import (
 from tle.cogs._minigame_akari import (
     AKARI_GAME, akari_date_number_mismatch, looks_like_non_pro_akari,
 )
-from tle.cogs._minigame_queens import QUEENS_GAME
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +241,8 @@ class ImplIngestMixin:
             return
         queens_source = (
             cf_common.user_db.get_minigame_unresolved_result_for_source_message(
-                after.guild.id, QUEENS_GAME.name, after.id)
-            if game.name == QUEENS_GAME.name
+                after.guild.id, game.name, after.id)
+            if game.linkedin_identity
             else None
         )
         cleaned = strip_codeblock(after.content)
@@ -264,11 +263,11 @@ class ImplIngestMixin:
             if invalid_message is not None:
                 changed = cf_common.user_db.delete_minigame_result(after.id)
                 changed += cf_common.user_db.delete_imported_minigame_result(after.id)
-                if game.name == QUEENS_GAME.name:
+                if game.linkedin_identity:
                     changed += (
                         cf_common.user_db
                         .delete_minigame_unresolved_results_for_source_message(
-                            after.guild.id, QUEENS_GAME.name, after.id)
+                            after.guild.id, game.name, after.id)
                     )
                 await self._notify_invalid_minigame_submission(after, game, cleaned)
                 if changed:
@@ -298,7 +297,7 @@ class ImplIngestMixin:
                 changed += (
                     cf_common.user_db
                     .delete_minigame_unresolved_results_for_source_message(
-                        after.guild.id, QUEENS_GAME.name, after.id)
+                        after.guild.id, game.name, after.id)
                 )
             if results:
                 changed += await self._ingest_message(
@@ -317,17 +316,21 @@ class ImplIngestMixin:
             old = cf_common.user_db.get_minigame_result(payload.message_id)
             deleted = cf_common.user_db.delete_minigame_result(payload.message_id)
             deleted += cf_common.user_db.delete_imported_minigame_result(payload.message_id)
-            queens_deleted = (
-                cf_common.user_db
+            # A raw delete carries only the message id, so every LinkedIn
+            # game is probed for a source row keyed to it.
+            source_games = [
+                game for game in self._linkedin_games()
+                if cf_common.user_db
                 .delete_minigame_unresolved_results_for_source_message(
-                    payload.guild_id, QUEENS_GAME.name, payload.message_id)
-            )
+                    payload.guild_id, game.name, payload.message_id)
+            ]
             cf_common.user_db.delete_raw_message(payload.message_id)
-            if queens_deleted:
-                self._sync_queens_materialized_results(
-                    payload.guild_id, migrate_legacy=False)
-                self._recompute_minigame_ratings(
-                    payload.guild_id, QUEENS_GAME, sync_results=False)
+            if source_games:
+                for game in source_games:
+                    self._sync_queens_materialized_results(
+                        payload.guild_id, game, migrate_legacy=False)
+                    self._recompute_minigame_ratings(
+                        payload.guild_id, game, sync_results=False)
             elif deleted and old is not None and old.game in self.GAMES:
                 self._recompute_game_ratings(
                     payload.guild_id, self.GAMES[old.game])

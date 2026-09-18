@@ -1,4 +1,4 @@
-"""Queens unregister and legacy/materialized result migration. (Minigames cog impl mixin; see minigames.py)."""
+"""LinkedIn-game unregister and legacy/materialized result migration. (Minigames cog impl mixin; see minigames.py)."""
 
 import logging
 import time
@@ -12,78 +12,84 @@ from tle.cogs._minigame_common import (
     normalize_puzzle_date,
 )
 from tle.cogs._minigame_queens import (
-    QUEENS_GAME, normalize_queens_name, parse_queens_leaderboard,
+    normalize_queens_name, parse_queens_leaderboard,
 )
 from tle.cogs._minigame_helpers import (
     MinigameCogError,
 )
 from tle.cogs._minigame_queens_cog import (
-    _queens_puzzle_number_for_date,
-    _queens_puzzle_numbers_for_date,
-    _queens_puzzle_date_text, _queens_result_message_id, _format_queens_date,
+    _queens_puzzle_date_text, _linkedin_result_message_id,
+    _format_queens_date,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class ImplQueensRegBMixin:
-    async def _cmd_queens_unregister(self, ctx, member):
-        self._require_enabled(ctx.guild.id, QUEENS_GAME)
-        target = self._resolve_queens_registrar_target(ctx, member)
+    async def _cmd_queens_unregister(self, ctx, game, member):
+        self._require_enabled(ctx.guild.id, game)
+        target = self._resolve_queens_registrar_target(ctx, game, member)
         target_label = self._queens_public_user_name(ctx.guild, target.id)
         rating_opted_out = cf_common.user_db.is_minigame_opted_out(
-            ctx.guild.id, QUEENS_GAME.name, target.id)
+            ctx.guild.id, game.name, target.id)
         link = cf_common.user_db.get_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, target.id)
+            ctx.guild.id, game.link_key, target.id)
         if link is None:
             raise MinigameCogError(
                 f'`{target_label}` is not registered for '
-                f'{QUEENS_GAME.display_name}.')
-        self._migrate_legacy_queens_results_to_external(ctx.guild.id)
-        self._delete_queens_materialized_results_for_link(
-            ctx.guild.id, link)
+                f'{self._linkedin_games_label()}.')
+        games = self._linkedin_games()
+        for linked_game in games:
+            self._migrate_legacy_queens_results_to_external(
+                ctx.guild.id, linked_game)
+            self._delete_queens_materialized_results_for_link(
+                ctx.guild.id, linked_game, link)
         removed = cf_common.user_db.delete_minigame_player_link(
-            ctx.guild.id, QUEENS_GAME.name, target.id)
+            ctx.guild.id, game.link_key, target.id)
         if not removed:
             raise MinigameCogError(
                 f'Could not remove `{target_label}` from '
-                f'{QUEENS_GAME.display_name}.')
-        self._sync_queens_materialized_results(
-            ctx.guild.id, migrate_legacy=False)
-        self._recompute_minigame_ratings(
-            ctx.guild.id, QUEENS_GAME, sync_results=False)
+                f'{self._linkedin_games_label()}.')
+        for linked_game in games:
+            self._sync_queens_materialized_results(
+                ctx.guild.id, linked_game, migrate_legacy=False)
+            self._recompute_minigame_ratings(
+                ctx.guild.id, linked_game, sync_results=False)
         optout_note = (
-            'Their existing rating opt-out remains active.'
+            f'Their existing {game.display_name} rating opt-out remains '
+            'active.'
             if rating_opted_out
-            else '`;queens unregister` does not create a rating opt-out.'
+            else f'`;{game.name} unregister` does not create a rating '
+                 'opt-out.'
         )
         await ctx.send(embed=discord_common.embed_success('\n'.join([
-            f'Removed {QUEENS_GAME.display_name} link for `{target_label}`.',
+            f'Removed the {self._linkedin_games_label()} link for '
+            f'`{target_label}`.',
             f'Stored results were kept under the LinkedIn name. {optout_note}',
         ])))
 
     def _queens_external_result_values(
-            self, guild_id, channel_id, entry, puzzle_date, raw_content,
+            self, guild_id, game, channel_id, entry, puzzle_date, raw_content,
             *, is_rated=None, stored_at=None, source_message_id=None,
             rating_override=None):
         puzzle_date = normalize_puzzle_date(puzzle_date)
         normalized_name = normalize_queens_name(entry.linkedin_name)
         if is_rated is None:
             link = cf_common.user_db.get_minigame_player_link_by_name(
-                guild_id, QUEENS_GAME.name, normalized_name)
+                guild_id, game.link_key, normalized_name)
             optout = (
                 cf_common.user_db.get_minigame_optout(
-                    guild_id, QUEENS_GAME.name, link.user_id)
+                    guild_id, game.name, link.user_id)
                 if link is not None
                 else cf_common.user_db.get_minigame_optout_by_name(
-                    guild_id, QUEENS_GAME.name, normalized_name)
+                    guild_id, game.name, normalized_name)
             )
             is_rated = optout is None
         return (
             normalized_name,
             entry.linkedin_name,
             channel_id,
-            _queens_puzzle_number_for_date(puzzle_date),
+            game.linkedin.number_for_date(puzzle_date),
             _queens_puzzle_date_text(puzzle_date),
             100 if entry.no_mistakes else 0,
             entry.time_seconds,
@@ -96,16 +102,16 @@ class ImplQueensRegBMixin:
         )
 
     def _save_queens_external_result(
-            self, guild_id, channel_id, entry, puzzle_date, raw_content,
+            self, guild_id, game, channel_id, entry, puzzle_date, raw_content,
             *, is_rated=None, stored_at=None, source_message_id=None,
             rating_override=None):
         values = self._queens_external_result_values(
-            guild_id, channel_id, entry, puzzle_date, raw_content,
+            guild_id, game, channel_id, entry, puzzle_date, raw_content,
             is_rated=is_rated, stored_at=stored_at,
             source_message_id=source_message_id,
             rating_override=rating_override)
         cf_common.user_db.apply_minigame_source_migration(
-            guild_id, QUEENS_GAME.name, [values], [],
+            guild_id, game.name, [values], [],
         )
 
     @staticmethod
@@ -137,73 +143,76 @@ class ImplQueensRegBMixin:
         return None
 
     @staticmethod
-    def _queens_source_row_key(normalized_name, row):
+    def _queens_source_row_key(game, normalized_name, row):
         puzzle_date = normalize_puzzle_date(row.puzzle_date)
         return (
             normalized_name,
-            _queens_puzzle_number_for_date(puzzle_date),
+            game.linkedin.number_for_date(puzzle_date),
             int(row.accuracy),
             int(row.time_seconds),
             int(row.is_perfect),
         )
 
     @staticmethod
-    def _queens_source_identity_key(normalized_name, puzzle_date):
+    def _queens_source_identity_key(game, normalized_name, puzzle_date):
         puzzle_date = normalize_puzzle_date(puzzle_date)
         return (
             normalized_name,
-            _queens_puzzle_number_for_date(puzzle_date),
+            game.linkedin.number_for_date(puzzle_date),
         )
 
-    def _queens_source_row_keys(self, guild_id, rows=None):
+    def _queens_source_row_keys(self, guild_id, game, rows=None):
         if rows is None:
             rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+                guild_id, game.name)
         return {
-            self._queens_source_row_key(row.normalized_name, row)
+            self._queens_source_row_key(game, row.normalized_name, row)
             for row in rows
         }
 
-    def _queens_source_identity_keys(self, guild_id, rows=None):
+    def _queens_source_identity_keys(self, guild_id, game, rows=None):
         if rows is None:
             rows = cf_common.user_db.get_minigame_unresolved_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+                guild_id, game.name)
         return {
-            self._queens_source_identity_key(row.normalized_name, row.puzzle_date)
+            self._queens_source_identity_key(
+                game, row.normalized_name, row.puzzle_date)
             for row in rows
         }
 
     def _is_current_queens_projection_row(
-            self, guild_id, row, link, sources_by_identity):
+            self, guild_id, game, row, link, sources_by_identity):
         if link is None:
             return False
         puzzle_date = normalize_puzzle_date(row.puzzle_date)
         identity_key = self._queens_source_identity_key(
-            link.normalized_name, puzzle_date)
+            game, link.normalized_name, puzzle_date)
         source = sources_by_identity.get(identity_key)
         if source is None:
             return False
         expected_message_id = (
             source.source_message_id
-            or _queens_result_message_id(
-                guild_id, puzzle_date, link.user_id)
+            or _linkedin_result_message_id(
+                game, guild_id, puzzle_date, link.user_id)
         )
         if str(row.message_id) != str(expected_message_id):
             return False
         return (
-            self._queens_source_row_key(link.normalized_name, row)
+            self._queens_source_row_key(game, link.normalized_name, row)
             == self._queens_source_row_key(
-                source.normalized_name, source)
+                game, source.normalized_name, source)
         )
 
-    def _delete_queens_materialized_results_for_link(self, guild_id, link):
+    def _delete_queens_materialized_results_for_link(
+            self, guild_id, game, link):
         deleted = 0
         for row in cf_common.user_db.get_minigame_unresolved_results_for_name(
-                guild_id, QUEENS_GAME.name, link.normalized_name):
+                guild_id, game.name, link.normalized_name):
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
-            for puzzle_number in _queens_puzzle_numbers_for_date(puzzle_date):
+            for puzzle_number in game.linkedin.puzzle_numbers_for_date(
+                    puzzle_date):
                 deleted += cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                    guild_id, QUEENS_GAME.name, link.user_id, puzzle_number)
+                    guild_id, game.name, link.user_id, puzzle_number)
         return deleted
 
     @staticmethod
@@ -222,29 +231,30 @@ class ImplQueensRegBMixin:
             and str(existing.raw_content) == str(source.raw_content)
         )
 
-    def _sync_queens_materialized_results(self, guild_id, *,
+    def _sync_queens_materialized_results(self, guild_id, game, *,
                                           migrate_legacy=True):
         if migrate_legacy:
-            self._migrate_legacy_queens_results_to_external(guild_id)
+            self._migrate_legacy_queens_results_to_external(guild_id, game)
         links_by_name = {
             row.normalized_name: row
             for row in cf_common.user_db.get_minigame_player_links(
-                guild_id, QUEENS_GAME.name)
+                guild_id, game.link_key)
         }
         if not links_by_name:
             return 0
         existing_rows = {
             (str(row.user_id), int(row.puzzle_number)): row
             for row in cf_common.user_db.get_live_minigame_results_for_guild(
-                guild_id, QUEENS_GAME.name)
+                guild_id, game.name)
         }
+        calendar = game.linkedin
         canonical_sources = {}
         for row in (
                 cf_common.user_db
                 .get_minigame_unresolved_results_for_guild(
-                    guild_id, QUEENS_GAME.name)):
+                    guild_id, game.name)):
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
-            puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
+            puzzle_number = calendar.number_for_date(puzzle_date)
             key = (row.normalized_name, puzzle_number)
             current = canonical_sources.get(key)
             priority = (
@@ -263,16 +273,16 @@ class ImplQueensRegBMixin:
             puzzle_date = normalize_puzzle_date(row.puzzle_date)
             message_id = (
                 row.source_message_id
-                or _queens_result_message_id(
-                    guild_id, puzzle_date, link.user_id)
+                or _linkedin_result_message_id(
+                    game, guild_id, puzzle_date, link.user_id)
             )
-            puzzle_number = _queens_puzzle_number_for_date(puzzle_date)
+            puzzle_number = calendar.number_for_date(puzzle_date)
             result_key = (str(link.user_id), int(puzzle_number))
             existing = existing_rows.get(result_key)
             if not bool(row.is_rated):
                 if existing is not None:
                     cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                        guild_id, QUEENS_GAME.name, link.user_id,
+                        guild_id, game.name, link.user_id,
                         puzzle_number)
                     existing_rows.pop(result_key, None)
                 continue
@@ -284,12 +294,12 @@ class ImplQueensRegBMixin:
                 continue
             if existing is not None and str(existing.message_id) != str(message_id):
                 cf_common.user_db.delete_minigame_result_for_user_puzzle(
-                    guild_id, QUEENS_GAME.name, link.user_id,
+                    guild_id, game.name, link.user_id,
                     puzzle_number)
             pending.append((
                 message_id,
                 guild_id,
-                QUEENS_GAME.name,
+                game.name,
                 row.channel_id,
                 link.user_id,
                 puzzle_number,
@@ -314,10 +324,10 @@ class ImplQueensRegBMixin:
             return 0
         return cf_common.user_db.save_minigame_results(pending)
 
-    def _claim_queens_unresolved_results(self, guild_id, user_id,
+    def _claim_queens_unresolved_results(self, guild_id, game, user_id,
                                          normalized_name):
         name_optout = cf_common.user_db.get_minigame_optout_by_name(
-            guild_id, QUEENS_GAME.name, normalized_name)
+            guild_id, game.name, normalized_name)
         if (
                 name_optout is not None
                 and str(name_optout.user_id) != str(user_id)
@@ -326,19 +336,20 @@ class ImplQueensRegBMixin:
             # account. Keep already-stored per-result states, but stop the
             # former owner's opt-out from classifying future unlinked rows.
             cf_common.user_db.set_minigame_optout_identity(
-                guild_id, QUEENS_GAME.name, name_optout.user_id, None)
+                guild_id, game.name, name_optout.user_id, None)
         optout = cf_common.user_db.get_minigame_optout(
-            guild_id, QUEENS_GAME.name, user_id)
+            guild_id, game.name, user_id)
         if optout is not None:
             identity_changed = (
                 optout.normalized_name != normalized_name)
             cf_common.user_db.set_minigame_optout_identity(
-                guild_id, QUEENS_GAME.name, user_id, normalized_name)
+                guild_id, game.name, user_id, normalized_name)
             if identity_changed:
                 cf_common.user_db.mark_minigame_unresolved_results_unrated_since(
-                    guild_id, QUEENS_GAME.name, normalized_name,
+                    guild_id, game.name, normalized_name,
                     optout.opted_out_at)
         rows = cf_common.user_db.get_minigame_unresolved_results_for_name(
-            guild_id, QUEENS_GAME.name, normalized_name)
-        self._sync_queens_materialized_results(guild_id, migrate_legacy=False)
+            guild_id, game.name, normalized_name)
+        self._sync_queens_materialized_results(
+            guild_id, game, migrate_legacy=False)
         return len(rows)

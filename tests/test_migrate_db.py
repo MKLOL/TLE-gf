@@ -48,6 +48,25 @@ class FakeMigrateDb(StarboardDbMixin, MigrationDbMixin):
             )
         ''')
         self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_proxy_reactors (
+                original_msg_id      TEXT,
+                emoji                TEXT,
+                user_id              TEXT,
+                via_starboard_msg_id TEXT,
+                PRIMARY KEY (original_msg_id, emoji, user_id,
+                             via_starboard_msg_id)
+            )
+        ''')
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS starboard_narcissus (
+                guild_id        TEXT,
+                original_msg_id TEXT,
+                emoji           TEXT,
+                user_id         TEXT,
+                PRIMARY KEY (original_msg_id, emoji, user_id)
+            )
+        ''')
+        self.conn.execute('''
             CREATE TABLE IF NOT EXISTS starboard_alias (
                 guild_id    TEXT,
                 alias_emoji TEXT,
@@ -323,6 +342,31 @@ class TestCompleteIntegration:
         db.update_starboard_star_count('333', PILL, 12)
         msg = db.get_starboard_message_v1('333', PILL)
         assert msg.star_count == 12
+
+    def test_complete_import_seeds_narcissus_marks(self, db):
+        """;migrate complete's raw-SQL import bypasses the count-update hook,
+        so it must seed sticky narcissus marks itself — guild-scoped."""
+        import asyncio
+        from types import SimpleNamespace
+        from tle.cogs._migrate_complete import MigrateCompleteMixin
+
+        db.create_migration(GUILD, '100', '200', '💊', 1000.0)
+        db.bulk_add_reactors('333', PILL, ['777', 'user1'])  # 777 = author
+        # Live self-react in another guild must not be seeded by this import
+        db.add_starboard_message_v1('444', '999', '424242', PILL,
+                                    author_id='u9')
+        db.bulk_add_reactors('444', PILL, ['u9'])
+
+        entry = SimpleNamespace(
+            original_msg_id='333', new_starboard_msg_id='888', emoji=PILL,
+            author_id='777', source_channel_id='100', star_count=2)
+        imported = asyncio.run(MigrateCompleteMixin()._complete_import(
+            GUILD, db, [entry], [PILL], {}, '200'))
+
+        assert imported == 1
+        rows = db.get_narcissus_leaderboard(GUILD, PILL)
+        assert [(r.user_id, r.self_stars) for r in rows] == [('777', 1)]
+        assert db.get_narcissus_leaderboard('424242', PILL) == []
 
     def test_cleanup_removes_migration_data(self, db):
         db.create_migration(GUILD, '100', '200', '💊', 1000.0)

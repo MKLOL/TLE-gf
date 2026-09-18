@@ -1,5 +1,6 @@
 """Structural regression tests for Queens synchronization hot paths."""
 
+from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_queens import normalize_queens_name
 from tle.cogs.minigames import Minigames
 from tle.util import codeforces_common as cf_common
@@ -35,10 +36,14 @@ def test_first_registration_runs_one_migration_and_one_sync(
         cog, '_sync_queens_materialized_results', record_sync)
 
     claimed = cog._save_queens_registration_link(
-        100, 300, name, normalized, None, 300)
+        100, QUEENS_GAME, 300, name, normalized, None, 300)
 
     assert claimed == 1
-    assert calls == {'migrate': 1, 'sync': 1}
+    # The link is shared by every LinkedIn game, so registration claims in
+    # each of them — exactly one migration and one sync per game, never more.
+    linkedin_games = len(cog._linkedin_games())
+    assert linkedin_games == 2
+    assert calls == {'migrate': linkedin_games, 'sync': linkedin_games}
     assert db.get_minigame_rating(100, 'queens', 300) is not None
 
 
@@ -61,7 +66,7 @@ def test_legacy_migration_reads_existing_sources_once(db, monkeypatch):
     monkeypatch.setattr(
         db, 'get_minigame_unresolved_results_for_guild', record_get)
 
-    assert cog._migrate_legacy_queens_results_to_external(100) == 1
+    assert cog._migrate_legacy_queens_results_to_external(100, QUEENS_GAME) == 1
     assert reads == 1
 
 
@@ -79,4 +84,4 @@ def test_sync_without_links_skips_projection_scans(db, monkeypatch):
     monkeypatch.setattr(db, 'get_minigame_optouts', unexpected_scan)
 
     assert cog._sync_queens_materialized_results(
-        100, migrate_legacy=False) == 0
+        100, QUEENS_GAME, migrate_legacy=False) == 0

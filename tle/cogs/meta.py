@@ -22,7 +22,7 @@ from tle.cogs._starboard_helpers import _parse_jump_url
 logger = logging.getLogger(__name__)
 
 _KNOWN_FEATURES = ['starboard_leaderboard', 'akari', 'guessgame', 'queens',
-                   'migration_ops', 'bet_archived']
+                   'tango', 'migration_ops', 'bet_archived']
 
 RESTART = 42
 
@@ -322,8 +322,11 @@ class Meta(commands.Cog):
                 for guild in self.bot.guilds]
         await ctx.send('```' + '\n'.join(msg) + '```')
 
+    # Feature flags are moderator-manageable: they only switch a feature on or
+    # off, and any command behind a flag that can do damage carries its own
+    # Admin-only check (see ``migrate start``, ``starboard fix``).
     @meta.group(brief='Feature configuration', invoke_without_command=True)
-    @commands.has_role(constants.TLE_ADMIN)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def config(self, ctx):
         """List every known feature flag and its current state for this guild."""
         configs = cf_common.user_db.get_all_guild_configs(ctx.guild.id)
@@ -343,7 +346,7 @@ class Meta(commands.Cog):
         await ctx.send(embed=discord_common.embed_neutral('\n'.join(lines)))
 
     @config.command(brief='Enable a feature')
-    @commands.has_role(constants.TLE_ADMIN)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def enable(self, ctx, feature: str):
         """Enable a feature for this guild."""
         if feature not in _KNOWN_FEATURES:
@@ -356,7 +359,7 @@ class Meta(commands.Cog):
         await ctx.send(embed=discord_common.embed_success(f'Feature `{feature}` enabled.'))
 
     @config.command(brief='Disable a feature')
-    @commands.has_role(constants.TLE_ADMIN)
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def disable(self, ctx, feature: str):
         """Disable a feature for this guild."""
         if feature not in _KNOWN_FEATURES:

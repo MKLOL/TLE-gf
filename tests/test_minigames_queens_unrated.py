@@ -31,12 +31,12 @@ class TestQueensUnrated(_QueensCommandsBase):
                 (300, _ALICE_NAME, _ALICE_NORM, 5),
                 (301, _BOB_NAME, _BOB_NORM, 6)):
             db.set_minigame_player_link(
-                100, 'queens', user_id, name, normalized,
+                100, 'linkedin', user_id, name, normalized,
                 None, 1.0, 999)
             db.save_minigame_unresolved_result(
                 100, 'queens', normalized, name, 200, puzzle,
                 '2026-06-08', 100, seconds, True, 'raw')
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
     def test_source_upsert_preserves_explicit_rating_status(self, db):
@@ -80,7 +80,7 @@ class TestQueensUnrated(_QueensCommandsBase):
         self._seed(db, cog)
 
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Alice LinkedIn 2026-06-08', is_rated=False))
+            ctx, QUEENS_GAME, 'Alice LinkedIn 2026-06-08', is_rated=False))
 
         source = db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0]
@@ -114,7 +114,7 @@ class TestQueensUnrated(_QueensCommandsBase):
         assert '+ Unrated' in captured[-1][2]
 
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Alice LinkedIn #769', is_rated=True))
+            ctx, QUEENS_GAME, 'Alice LinkedIn #769', is_rated=True))
         assert db.get_minigame_unresolved_results_for_name(
             100, 'queens', _ALICE_NORM)[0].is_rated == 1
         assert {row.user_id for row in
@@ -131,9 +131,9 @@ class TestQueensUnrated(_QueensCommandsBase):
         ctx = self._make_ctx(guild, alice)
         cog = Minigames(bot=None)
         db.set_minigame_player_link(
-            100, 'queens', alice.id, _ALICE_NAME, _ALICE_NORM,
+            100, 'linkedin', alice.id, _ALICE_NAME, _ALICE_NORM,
             None, 1.0, alice.id)
-        asyncio.run(cog._cmd_queens_optout(ctx))
+        asyncio.run(cog._cmd_queens_optout(ctx, QUEENS_GAME))
 
         opted_out_post = _FakeMessage(
             10, 100, 200, alice.id,
@@ -156,7 +156,7 @@ class TestQueensUnrated(_QueensCommandsBase):
             cog, ctx, '#774', '+unrated'))
         assert captured[-1] == (['300'], {('300', 774)})
 
-        asyncio.run(cog._cmd_queens_optin(ctx))
+        asyncio.run(cog._cmd_queens_optin(ctx, QUEENS_GAME))
         assert db.get_minigame_results_for_guild(100, 'queens') == []
 
         rated_post = _FakeMessage(
@@ -187,13 +187,13 @@ class TestQueensUnrated(_QueensCommandsBase):
             external = f'{member.display_name} LinkedIn'
             normalized = normalize_queens_name(external)
             db.set_minigame_player_link(
-                100, 'queens', member.id, external, normalized,
+                100, 'linkedin', member.id, external, normalized,
                 None, 1.0, mod.id)
             db.save_minigame_unresolved_result(
                 100, 'queens', normalized, external, 200, puzzle,
                 '2026-06-08', 100, seconds, True, external)
         cog = Minigames(bot=None)
-        cog._sync_queens_materialized_results(100)
+        cog._sync_queens_materialized_results(100, QUEENS_GAME)
         cog._recompute_minigame_ratings(100, QUEENS_GAME)
 
         def snapshot():
@@ -208,7 +208,7 @@ class TestQueensUnrated(_QueensCommandsBase):
         original = snapshot()
         ctx = self._make_ctx(guild, mod)
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Bob LinkedIn #769', is_rated=False))
+            ctx, QUEENS_GAME, 'Bob LinkedIn #769', is_rated=False))
 
         rows = db.get_minigame_results_for_guild(100, 'queens')
         expected = compute_ratings(
@@ -224,7 +224,7 @@ class TestQueensUnrated(_QueensCommandsBase):
         } == actual
 
         asyncio.run(cog._cmd_queens_set_result_rating(
-            ctx, 'Bob LinkedIn 2026-06-08', is_rated=True))
+            ctx, QUEENS_GAME, 'Bob LinkedIn 2026-06-08', is_rated=True))
         assert snapshot() == original
 
 

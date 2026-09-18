@@ -91,6 +91,11 @@ class MigrateCompleteMixin:
                 (str(guild_id), alias_emoji, main_emoji)
             )
 
+        # The raw-SQL import above bypasses the sticky-narcissus hook, so
+        # seed marks for authors whose live self-react the crawl collected.
+        # After alias registration so alias self-reacts resolve to mains.
+        db.seed_narcissus_marks(guild_id)
+
         # Clean up migration data
         conn.execute(
             'DELETE FROM starboard_migration_entry WHERE guild_id = ?',

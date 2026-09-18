@@ -14,11 +14,13 @@ from tle.cogs._minigame_akari import (
 from tle.cogs._minigame_queens import (
     QUEENS_GAME,
 )
+from tle.cogs._minigame_tango import TANGO_GAME
+from tle.cogs._minigame_common import strip_codeblock
 from tle.cogs._minigame_helpers import (
     MinigameCogError, CaseInsensitiveMember, _mg,
 )
 from tle.cogs._minigame_queens_cog import (
-    _QUEENS_ADMINS_KEY, _split_queens_anonymous_flag,
+    _split_queens_anonymous_flag,
 )
 
 # Extra per-guild Akari command admins (mirrors Queens' delegated-admin tier).
@@ -34,7 +36,7 @@ class ImplCoreMixin:
         # group objects don't expose all_commands/get_command — skip in that case.
         if not hasattr(self.minigames, 'all_commands'):
             return
-        for group in (self.akari, self.queens):
+        for group in (self.akari, self.queens, self.tango):
             if not hasattr(group, 'aliases'):
                 continue
             for key in (group.name, *group.aliases):
@@ -42,6 +44,7 @@ class ImplCoreMixin:
                     self.minigames.all_commands[key] = group
 
     async def cog_unload(self):
+        await self._stop_akari_weekly_announcement()
         import_tasks = list(self._import_tasks.values())
         for task in import_tasks:
             task.cancel()
@@ -58,8 +61,9 @@ class ImplCoreMixin:
     def _get_channel(guild_id, game_name):
         return cf_common.user_db.get_minigame_channel(guild_id, game_name)
 
-    def _game_for_channel(self, message):
-        """Return the GameDef whose configured channel matches, or None."""
+    def _games_for_channel(self, message):
+        """Every enabled game whose configured channel is the message's."""
+        games = []
         for game in self.GAMES.values():
             if game.manual_ingest_only:
                 continue
@@ -67,8 +71,41 @@ class ImplCoreMixin:
                 continue
             channel_id = self._get_channel(message.guild.id, game.name)
             if channel_id is not None and str(message.channel.id) == str(channel_id):
+                games.append(game)
+        return games
+
+    def _game_for_channel(self, message):
+        """The game a channel message belongs to, or None.
+
+        One channel may serve several games (Queens and Tango share a
+        LinkedIn channel), so among the games configured for it the one
+        whose parser accepts the message wins.  When nothing parses, a game
+        that already stored this message keeps it (an edit that breaks a
+        share must clean up under the right game); otherwise the first
+        configured game handles it, which preserves the single-game
+        behaviour for near-miss logging and invalid-submission replies.
+        """
+        games = self._games_for_channel(message)
+        if not games:
+            return None
+        if len(games) == 1:
+            return games[0]
+        cleaned = strip_codeblock(message.content)
+        for game in games:
+            if game.parse(cleaned):
                 return game
-        return None
+        stored = cf_common.user_db.get_minigame_result(message.id)
+        if stored is not None and stored.game in self.GAMES:
+            return self.GAMES[stored.game]
+        for game in games:
+            if (
+                    game.linkedin_identity
+                    and cf_common.user_db
+                    .get_minigame_unresolved_result_for_source_message(
+                        message.guild.id, game.name, message.id) is not None
+            ):
+                return game
+        return games[0]
 
     @staticmethod
     def _require_enabled(guild_id, game):
@@ -143,14 +180,42 @@ class ImplCoreMixin:
         else:
             cf_common.user_db.delete_guild_config(guild_id, config_key)
 
+    def _linkedin_games(self):
+        """Every registered game that resolves players by LinkedIn name.
+
+        The player link is shared between them, so registration, unlinking,
+        and message deletion have to touch each one.
+        """
+        return [game for game in self.GAMES.values() if game.linkedin_identity]
+
+    @staticmethod
+    def _linkedin_short_name(game):
+        """``LinkedIn Queens`` -> ``Queens`` for compact user-facing text."""
+        return game.display_name.replace('LinkedIn', '').strip()
+
+    def _linkedin_games_label(self):
+        """``LinkedIn Queens/Tango`` — the games one registration serves."""
+        names = [self._linkedin_short_name(g) for g in self._linkedin_games()]
+        return 'LinkedIn ' + '/'.join(names)
+
+    @staticmethod
+    def _linkedin_admin_ids(guild_id, game):
+        return _mg().Minigames._guild_admin_ids(
+            guild_id, game.linkedin.admins_key)
+
+    @staticmethod
+    def _set_linkedin_admin_ids(guild_id, game, user_ids):
+        _mg().Minigames._set_guild_admin_ids(
+            guild_id, game.linkedin.admins_key, user_ids)
+
     @staticmethod
     def _queens_admin_ids(guild_id):
-        return _mg().Minigames._guild_admin_ids(guild_id, _QUEENS_ADMINS_KEY)
+        return _mg().Minigames._linkedin_admin_ids(guild_id, QUEENS_GAME)
 
     @staticmethod
     def _set_queens_admin_ids(guild_id, user_ids):
-        _mg().Minigames._set_guild_admin_ids(
-            guild_id, _QUEENS_ADMINS_KEY, user_ids)
+        _mg().Minigames._set_linkedin_admin_ids(
+            guild_id, QUEENS_GAME, user_ids)
 
     @staticmethod
     def _akari_admin_ids(guild_id):
@@ -168,11 +233,24 @@ class ImplCoreMixin:
         except (TypeError, ValueError):
             return 1, str(user_id)
 
-    def _has_queens_mod_access(self, guild_id, member):
+    def _has_linkedin_mod_access(self, guild_id, game, member):
         return (
             self._has_server_mod_role(member)
-            or str(getattr(member, 'id', None)) in self._queens_admin_ids(guild_id)
+            or str(getattr(member, 'id', None))
+            in self._linkedin_admin_ids(guild_id, game)
         )
+
+    def _has_queens_mod_access(self, guild_id, member):
+        return self._has_linkedin_mod_access(guild_id, QUEENS_GAME, member)
+
+    def _has_tango_mod_access(self, guild_id, member):
+        return self._has_linkedin_mod_access(guild_id, TANGO_GAME, member)
+
+    @staticmethod
+    def _tango_mod_role_error_message():
+        return (
+            f'You need the `{constants.TLE_ADMIN}` or '
+            f'`{constants.TLE_MODERATOR}` role or Tango admin access.')
 
     @staticmethod
     def _akari_mod_role_error_message():
@@ -187,13 +265,13 @@ class ImplCoreMixin:
         )
 
     def _resolve_queens_registrar_target(
-            self, ctx, member, *, action='register or unregister'):
+            self, ctx, game, member, *, action='register or unregister'):
         if member is None or member.id == ctx.author.id:
             return ctx.author
-        if not self._has_queens_mod_access(ctx.guild.id, ctx.author):
+        if not self._has_linkedin_mod_access(ctx.guild.id, game, ctx.author):
             raise MinigameCogError(
                 f'Only `{constants.TLE_ADMIN}` / `{constants.TLE_MODERATOR}` '
-                f'or Queens admins can {action} other users.')
+                f'or {game.display_name} admins can {action} other users.')
         return member
 
     @staticmethod
@@ -218,7 +296,7 @@ class ImplCoreMixin:
         opt-out only controls whether *new* results are rated. Existing rated
         days and moderator overrides remain visible.
         """
-        if game.name == QUEENS_GAME.name:
+        if game.linkedin_identity:
             return set()
         return self._minigame_opted_out_user_ids(guild_id, game)
 
@@ -234,27 +312,27 @@ class ImplCoreMixin:
             return rows
         return [row for row in rows if str(row.user_id) not in hidden]
 
-    def _ensure_queens_registration_allowed(self, guild_id, actor_id,
+    def _ensure_queens_registration_allowed(self, guild_id, game, actor_id,
                                             target_id, target_label):
-        """Gate ordinary Queens registration against a rating opt-out.
+        """Gate ordinary LinkedIn registration against a rating opt-out.
 
         Registration only controls the LinkedIn identity link and never changes
         the independent rating choice. An opted-out user may link themselves,
-        while moderators can update their link through ``queens set``.
+        while moderators can update their link through ``<game> set``.
         """
         if str(actor_id) == str(target_id):
             return
         if cf_common.user_db.is_minigame_opted_out(
-                guild_id, QUEENS_GAME.name, target_id):
+                guild_id, game.name, target_id):
             raise MinigameCogError(
-                f'`{target_label}` opted out of {QUEENS_GAME.display_name} '
-                'ratings. Use `;queens set` to update their LinkedIn link '
-                'without changing that rating choice.')
+                f'`{target_label}` opted out of {game.display_name} '
+                f'ratings. Use `;{game.name} set` to update their LinkedIn '
+                'link without changing that rating choice.')
 
     def _sync_minigame_results_for_read(self, guild_id, game):
-        if game.name == QUEENS_GAME.name:
+        if game.linkedin_identity:
             self._sync_queens_materialized_results(
-                guild_id, migrate_legacy=False)
+                guild_id, game, migrate_legacy=False)
 
     @staticmethod
     def _ensure_not_minigame_banned(guild_id, game, user_id, member_name):
@@ -262,10 +340,10 @@ class ImplCoreMixin:
             raise MinigameCogError(
                 f'`{member_name}` is banned from {game.display_name}.')
 
-    async def _resolve_queens_registration_args(self, ctx, first, rest):
+    async def _resolve_queens_registration_args(self, ctx, game, first, rest):
         if first is None:
             raise MinigameCogError(
-                'Usage: `;queens register [+username DiscordUser] '
+                f'Usage: `;{game.name} register [+username DiscordUser] '
                 'LinkedIn Name [+anon]`.')
         first = str(first).strip()
         rest = (rest or '').strip()
@@ -276,10 +354,10 @@ class ImplCoreMixin:
             tokens = rest.split(maxsplit=1)
             if len(tokens) < 2:
                 raise MinigameCogError(
-                    'Usage: `;queens register +username DiscordUser '
+                    f'Usage: `;{game.name} register +username DiscordUser '
                     'LinkedIn Name [+anon]`.')
             target = await self._resolve_member(ctx, tokens[0])
-            target = self._resolve_queens_registrar_target(ctx, target)
+            target = self._resolve_queens_registrar_target(ctx, game, target)
             linkedin = tokens[1]
         linkedin, anonymous = _split_queens_anonymous_flag(linkedin)
         if not linkedin:
