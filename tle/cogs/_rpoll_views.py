@@ -8,6 +8,7 @@ import time
 import discord
 
 from tle.util import codeforces_common as cf_common
+from tle.cogs._rpoll_locks import poll_lock
 from tle.cogs._rpoll_helpers import (
     _NUMBER_EMOJIS,
     _get_vote_weight,
@@ -42,17 +43,28 @@ class RpollButton(discord.ui.Button):
         self.option_index = option_index
 
     async def callback(self, interaction: discord.Interaction):
+        lock = poll_lock(self.poll_id)
+        deferred = lock.locked()
+        if deferred:
+            # A repair/expiry or Discord rate limit may hold the lock beyond
+            # the interaction's initial response deadline.
+            await interaction.response.defer()
+        async with lock:
+            await self._vote(interaction, deferred=deferred)
+
+    async def _vote(self, interaction, *, deferred=False):
+        send = interaction.followup.send if deferred else interaction.response.send_message
         if cf_common.user_db is None:
-            await interaction.response.send_message('Bot is still starting up.', ephemeral=True)
+            await send('Bot is still starting up.', ephemeral=True)
             return
 
         # Check if poll is closed or expired before allowing vote
         poll = cf_common.user_db.get_rpoll(self.poll_id)
         if poll is None:
-            await interaction.response.send_message('Poll not found.', ephemeral=True)
+            await send('Poll not found.', ephemeral=True)
             return
         if poll.closed or poll.expires_at <= time.time():
-            await interaction.response.send_message('This poll has ended.', ephemeral=True)
+            await send('This poll has ended.', ephemeral=True)
             return
 
         user_id = interaction.user.id
@@ -94,6 +106,12 @@ class RpollButton(discord.ui.Button):
 
         action = 'voted for' if added else 'removed vote from'
         option_label = next((opt.label for opt in options if opt.option_index == self.option_index), '?')
-        await interaction.response.edit_message(embed=embed)
+        kwargs = {}
+        if interaction.message and interaction.message.flags.suppress_embeds:
+            kwargs['suppress' if deferred else 'suppress_embeds'] = False
+        if deferred:
+            await interaction.message.edit(embed=embed, **kwargs)
+        else:
+            await interaction.response.edit_message(embed=embed, **kwargs)
         logger.info(f'rpoll: user={user_id} {action} option {self.option_index} '
                     f'({option_label}) on poll={self.poll_id} rating={rating}')

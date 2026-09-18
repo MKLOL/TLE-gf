@@ -266,7 +266,7 @@ def _build_poll_embed(question, options, totals_map, vote_count, voters_map=None
     return embed
 
 
-def _build_results_embed(question, options, totals_map, vote_count, formula='exp'):
+def _build_results_embed(question, options, totals_map, vote_count, formula='exp', *, closed=True):
     """Build a compact embed for the poll expiry reply."""
     grand_total = sum(totals_map.get(idx, 0) for idx, _ in options)
     parts = []
@@ -285,7 +285,7 @@ def _build_results_embed(question, options, totals_map, vote_count, formula='exp
         max_total = max(totals_map.get(idx, 0) for idx, _ in options)
         winners = [label for idx, label in options if totals_map.get(idx, 0) == max_total]
         if len(winners) == 1:
-            lines.append(f'Winner: **{winners[0]}**')
+            lines.append(f'{"Winner" if closed else "Leader"}: **{winners[0]}**')
         else:
             lines.append(f'Tied: {", ".join(f"**{w}**" for w in winners)}')
     lines.append(f'{" / ".join(parts)} ({votes_str})')

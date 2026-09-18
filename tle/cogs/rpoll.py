@@ -30,6 +30,8 @@ from tle.cogs._rpoll_helpers import (
     _build_disabled_view,
 )
 from tle.cogs._rpoll_views import RpollView, RpollButton
+from tle.cogs._rpoll_recovery import fix_poll, send_results
+from tle.cogs._rpoll_locks import poll_lock
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,13 @@ class Rpoll(commands.Cog):
                              exc_info=True)
 
     async def _close_poll(self, poll):
+        async with poll_lock(poll.poll_id):
+            poll = cf_common.user_db.get_rpoll(poll.poll_id)
+            if poll is None or poll.closed:
+                return
+            await self._close_poll_locked(poll)
+
+    async def _close_poll_locked(self, poll):
         """Close an expired poll: mark in DB, edit message, send results."""
         cf_common.user_db.close_rpoll(poll.poll_id)
         logger.info(f'rpoll: Closed expired poll {poll.poll_id}')
@@ -174,7 +183,7 @@ class Rpoll(commands.Cog):
         try:
             if msg is None:
                 msg = await channel.fetch_message(int(poll.message_id))
-            await msg.edit(embed=closed_embed, view=disabled_view)
+            await msg.edit(embed=closed_embed, view=disabled_view, suppress=False)
         except Exception as e:
             logger.warning(f'rpoll: Could not edit message for poll {poll.poll_id}: {e}')
 
@@ -188,7 +197,8 @@ class Rpoll(commands.Cog):
                 message_id=int(poll.message_id), channel_id=int(poll.channel_id),
                 fail_if_not_exists=False,
             )
-            await channel.send('Poll done!', embed=results_embed, reference=ref)
+            await channel.send('Poll done!', embed=results_embed, reference=ref,
+                               allowed_mentions=discord.AllowedMentions.none())
         except Exception as e:
             logger.warning(f'rpoll: Could not send results for poll {poll.poll_id}: {e}')
 
@@ -304,6 +314,24 @@ class Rpoll(commands.Cog):
             lines.append(f'{header}\nCloses <t:{int(p.expires_at)}:R>  |  formula: `{p.formula}`')
         embed = discord.Embed(title='Active polls', description='\n\n'.join(lines))
         await ctx.send(embed=embed)
+
+    @rpoll.command(name='results', brief='Show current or final poll results')
+    async def poll_results(self, ctx, *, target: str = None):
+        """Reply to a poll or its results, or supply a poll ID or message link.
+
+        Use in the original channel or thread. Saved results remain available
+        even if the original poll message was deleted.
+        """
+        await send_results(ctx, target)
+
+    @rpoll.command(name='fix', brief='Restore a hidden or missing poll embed')
+    async def poll_fix(self, ctx, *, target: str = None):
+        """Reply to a poll or its results, or supply a poll ID or message link.
+
+        Use in the original channel or thread. Restores the targeted message
+        without changing votes or reopening an ended poll.
+        """
+        await fix_poll(ctx, target)
 
     @discord_common.send_error_if(RpollError)
     async def cog_command_error(self, ctx, error):
