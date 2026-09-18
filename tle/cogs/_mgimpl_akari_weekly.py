@@ -208,7 +208,7 @@ class ImplAkariWeeklyMixin:
             return False
 
         next_monday = completed_start + dt.timedelta(days=7)
-        rating_rows, standings = await self._akari_weekly_preview(
+        _rating_rows, standings = await self._akari_weekly_preview(
             guild.id, as_of_date=next_monday,
             standings_date=completed_start)
         if not standings:
@@ -216,8 +216,6 @@ class ImplAkariWeeklyMixin:
         registrants = cf_common.user_db.get_akari_registrants(guild.id)
         visible = registrants - self._akari_banned_user_ids(guild.id)
         standings = [row for row in standings if row.user_id in visible]
-        ratings = [row for row in rating_rows if row.user_id in visible]
-        ratings = self._active_ranking_rows(ratings, include_inactive=False)
         if not standings:
             return True
 
@@ -226,19 +224,14 @@ class ImplAkariWeeklyMixin:
             guild, standings, start_index=start_index,
             filename=(f'akari-weekly-final-'
                       f'{start_index // _AKARI_IMAGE_MAX_ROWS + 1}.png'),
-            title=(f'Daily Akari Weekly Final Rankings · {completed_start:%b %d}–'
+            title=(f'Daily Akari Final Standings · {completed_start:%b %d}–'
                    f'{completed_end:%b %d}'))
             for start_index in range(0, len(standings), _AKARI_IMAGE_MAX_ROWS)]
-        if ratings:
-            files.append(_mg()._get_akari_rating_table_image_file(
-                guild, ratings, registrants,
-                title='Daily Akari Weekly Ratings', mark_registered=False,
-                games_label='Weeks'))
         for offset in range(0, len(files), 10):
             content = (
                 f'🏆 **Daily Akari week complete · '
                 f'{completed_start:%b %d}–{completed_end:%b %d}**\n'
-                'Final rankings and updated weekly ratings:'
+                'Final standings for the week:'
                 if offset == 0 else 'Daily Akari weekly results (continued):')
             await channel.send(content, files=files[offset:offset + 10])
         return True

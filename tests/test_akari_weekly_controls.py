@@ -83,8 +83,6 @@ def test_weekly_announcement_posts_every_player_once_to_configured_target(
 
     monkeypatch.setattr(cog, '_akari_weekly_preview', preview)
     monkeypatch.setattr(cog, '_resolve_channel', resolve)
-    monkeypatch.setattr(cog, '_active_ranking_rows',
-                        lambda rows, **_kwargs: rows)
     monkeypatch.setattr(cog, '_akari_banned_user_ids', lambda _guild: {'banned'})
     monkeypatch.setattr(
         minigames_module, '_get_akari_weekly_table_image_file',
@@ -103,10 +101,8 @@ def test_weekly_announcement_posts_every_player_once_to_configured_target(
     assert asyncio.run(cog._check_akari_weekly_announcement(
         _FakeGuild(1), start)) is False
     assert all(len(message['kwargs']['files']) <= 10 for message in target.sent)
-    files = [file for message in target.sent
+    pages = [file for message in target.sent
              for file in message['kwargs']['files']]
-    pages = files[:-1]
-    assert files[-1][0] == 'ratings'
     assert len(pages) == (player_count + 39) // 40
     assert all(page[0] == 'standings' and len(page[1]) <= 40 for page in pages)
     assert [row[1] for page in pages for row in page[1]] == user_ids
@@ -115,5 +111,5 @@ def test_weekly_announcement_posts_every_player_once_to_configured_target(
     assert all(row[4] == 7 for page in pages for row in page[1])
     assert len({page[2]['filename'] for page in pages}) == len(pages)
     assert all(page[2]['header'][-1] == 'Days' for page in pages)
-    assert all('Final Rankings' in page[2]['title'] for page in pages)
-    assert 'Final rankings' in target.sent[0]['content']
+    assert all('Final Standings' in page[2]['title'] for page in pages)
+    assert 'Final standings for the week' in target.sent[0]['content']
