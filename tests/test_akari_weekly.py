@@ -56,6 +56,8 @@ class TestWeeklyPerformance:
         values = [difficulty_weight(level) for level in range(1, 6)]
         assert values == sorted(values)
         assert values[2] == 1.0
+        assert all(math.isclose(right / left, 2.0 ** 0.35)
+                   for left, right in zip(values, values[1:]))
         assert math.isclose(values[-1] / values[0], 2.0 ** 1.4)
 
 
@@ -101,6 +103,8 @@ class TestWeeklyScoring:
         standings = score_week([
             _row('10', 526, monday, seconds=60),
             _row('20', 526, monday, seconds=120),
+            _row('10', 527, monday + dt.timedelta(days=1)),
+            _row('10', 527, monday + dt.timedelta(days=1)),
         ])
         guild = _FakeGuild(1, members=[
             _FakeDiscordMember(10, 'Alice'),
@@ -109,6 +113,8 @@ class TestWeeklyScoring:
         rows = _akari_weekly_table_rows(guild, standings)
         assert rows[0][1] == 'Alice'
         assert rows[0][3] == round(standings[0].score * 1000)
+        assert rows[0][4] == 2
+        assert rows[1][4] == 1
 
 
 class TestWeeklyRatings:
