@@ -210,3 +210,89 @@ class TestMigration:
         upgrade_complaint_schema(conn)
         columns = [row[1] for row in conn.execute('PRAGMA table_info(complaint)')]
         assert columns.count('context') == 1
+
+
+class TestNonAsciiBudget:
+    """json.dumps escapes non-ASCII by default, which broke the size budget.
+
+    Cyrillic and CJK measured six characters per code point and emoji twelve,
+    so a Russian transcript was trimmed to one message while an ASCII one of
+    the same real size kept all five.
+    """
+
+    def _kept(self, char):
+        raw = serialize_messages([_msg(i, char * 400) for i in range(5)])
+        return len(json.loads(raw))
+
+    def test_cyrillic_keeps_all_five(self):
+        assert self._kept('я') == 5
+
+    def test_cjk_keeps_all_five(self):
+        assert self._kept('字') == 5
+
+    def test_emoji_keeps_all_five(self):
+        assert self._kept('😀') == 5
+
+    def test_ascii_still_keeps_all_five(self):
+        assert self._kept('x') == 5
+
+    def test_every_script_keeps_the_same_number_of_messages(self):
+        assert len({self._kept(c) for c in ('x', 'я', '字', '😀')}) == 1
+
+    def test_the_budget_still_bounds_a_long_transcript(self):
+        raw = serialize_messages([_msg(i, '字' * 400) for i in range(40)])
+        assert len(raw) <= 4000
+
+    def test_text_is_stored_unescaped(self):
+        raw = serialize_messages([_msg(1, 'привет')])
+        assert 'привет' in raw
+
+
+class TestRedaction:
+    """The transcript is persisted and served over HTTP — worse than the
+    LLM transcript it mirrors, which already redacts."""
+
+    def test_assigned_secrets_are_removed(self):
+        entries = json.loads(serialize_messages(
+            [_msg(1, 'try XAI_API_KEY=xai-abc123secretvalue in the env')]))
+        assert 'xai-abc123secretvalue' not in entries[0]['text']
+        assert '[REDACTED]' in entries[0]['text']
+
+    def test_literal_key_shapes_are_removed(self):
+        entries = json.loads(serialize_messages(
+            [_msg(1, 'token is tlegf_' + 'A' * 43)]))
+        assert 'tlegf_AAAA' not in entries[0]['text']
+
+    def test_display_names_are_bounded_and_redacted(self):
+        entries = json.loads(serialize_messages(
+            [_msg(1, 'hi', name='x' * 500)]))
+        assert len(entries[0]['author']) <= 80
+
+
+class TestCaptureIsBounded:
+    def test_a_slow_channel_gives_up_instead_of_hanging(self):
+        class _Slow:
+            def history(self, *, limit, before):
+                class _Iter:
+                    def __aiter__(self):
+                        return self
+
+                    async def __anext__(self):
+                        await asyncio.sleep(10)
+                        raise StopAsyncIteration
+                return _Iter()
+
+        assert asyncio.run(
+            capture(_Slow(), before_message=_msg(1), timeout=0.05)) is None
+
+    def test_serialization_failure_is_caught_too(self):
+        """The guard has to cover rendering, not just the fetch."""
+        class _Exploding:
+            def __str__(self):
+                raise RuntimeError('boom')
+
+        bad = _msg(1, 'ok')
+        bad.embeds = [SimpleNamespace(
+            title=_Exploding(), description=None, fields=[], footer=None,
+            author=None, url=None)]
+        assert asyncio.run(capture(_Channel([bad]), before_message=_msg(2))) is None

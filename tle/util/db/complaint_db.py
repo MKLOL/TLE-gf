@@ -53,6 +53,13 @@ class ComplaintDbMixin(ComplaintWorkflowDbMixin):
         self.conn.commit()
         return cur.lastrowid
 
+    def set_complaint_context(self, complaint_id, context):
+        """Attach a transcript to an already-recorded complaint."""
+        self.conn.execute(
+            'UPDATE complaint SET context = ? WHERE id = ?',
+            (context, complaint_id))
+        self.conn.commit()
+
     def get_complaints(self, guild_id, status='open', limit=None, before=None):
         """Return visible complaints, optionally bounded by an ID cursor."""
         if status not in ('open', 'resolved', 'all'):

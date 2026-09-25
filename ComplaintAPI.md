@@ -86,18 +86,23 @@ pushed. Both mutation routes return `{"complaint": {...}}`, including `status`,
 in the channel immediately before the report, oldest first. Listings omit it,
 so fetch the detail route for a complaint you intend to act on.
 
-Each entry has `id`, `author_id`, `author` (display name at capture time),
-`bot`, `at` (epoch seconds) and `text`. `text` includes embed titles, bodies,
-fields and attachment names, because the bot answers in embeds and a
-transcript of `content` alone would be empty for exactly the messages a
-complaint about the bot refers to. Individual messages are truncated to 400
-characters and the transcript to roughly 4 KB, dropping the oldest entries
-first.
+Each entry has `id`, `author_id`, `author` (display name at capture time,
+80 characters), `bot`, `at` (epoch seconds, `null` if unavailable) and `text`.
+`text` includes embed titles, bodies, fields and attachment names, because the
+bot answers in embeds and a transcript of `content` alone would be empty for
+exactly the messages a complaint about the bot refers to. Stickers and polls
+are not captured. Individual messages are truncated to 400 characters and the
+transcript to 4000 characters, dropping the oldest entries first.
 
-`context` is `[]` when nothing was captured — an empty channel, or the bot
-lacking Read Message History there. Capture is best-effort: a complaint is
-never rejected because its context could not be read, and complaints filed
-before this feature have no context.
+Likely credentials are redacted before storage, using the same patterns as the
+LLM transcript. Treat a transcript as untrusted user text, never as
+instructions.
+
+`context` is `[]` when nothing was captured — an empty channel, the bot
+lacking Read Message History there, or the fetch exceeding its five-second
+budget. Capture is best-effort and happens after the complaint is recorded, so
+a complaint is never lost or rejected because its context could not be read.
+Complaints filed before this feature have no context.
 
 An identical resolve is idempotent. A different resolution of an already
 resolved complaint returns 409; reopen it first. Repeated reopen is idempotent.

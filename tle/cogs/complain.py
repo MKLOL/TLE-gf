@@ -113,10 +113,14 @@ class Complain(ComplaintTokenMixin, commands.Cog):
             return
 
         message_link = getattr(ctx.message, 'jump_url', None)
-        context = await capture_complaint_context(ctx.channel, ctx.message)
         complaint_id = cf_common.user_db.add_complaint(
-            ctx.guild.id, author.id, text, message_link, context
+            ctx.guild.id, author.id, text, message_link
         )
+        # Recorded before the history fetch: the complaint is the part that
+        # must survive a restart, and context is a decoration on top of it.
+        context = await capture_complaint_context(ctx.channel, ctx.message)
+        if context is not None:
+            cf_common.user_db.set_complaint_context(complaint_id, context)
         logger.info(f'Complaint #{complaint_id} added by {author.id} in guild {ctx.guild.id}')
         await ctx.send(embed=discord_common.embed_success(
             f'Complaint #{complaint_id} filed. '
