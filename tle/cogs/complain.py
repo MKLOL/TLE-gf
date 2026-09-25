@@ -23,6 +23,12 @@ _EMBED_DESCRIPTION_LIMIT = 3900  # headroom under Discord's 4096
 _PAGINATE_WAIT = 300
 
 
+def _has_manage_role(member):
+    """Whether a member may remove complaints, checked at button-press time."""
+    return any(role.name in (constants.TLE_ADMIN, constants.TLE_MODERATOR)
+               for role in getattr(member, 'roles', ()) or ())
+
+
 def _complaint_entry(complaint):
     """Render one complaint as a block of embed description text."""
     ts = datetime.datetime.fromtimestamp(
@@ -72,6 +78,7 @@ class Complain(ComplaintTokenMixin, commands.Cog):
           ;complain <text>             — file a complaint
           ;complain list               — view all complaints
           ;complain withdraw <id>      — withdraw your own complaint
+          ;complain manage             — remove complaints with buttons
           ;complain remove <id or ids> — remove complaints (admin only)
           ;complain resolve <id> <commit_url> <summary> — resolve (admin only)
           ;complain reopen <id>        — reopen (admin only)
@@ -157,7 +164,8 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         guild_id = ctx.guild.id
         view = ComplaintManageView(
             complaints, guild_id=guild_id, author_id=ctx.author.id,
-            delete=lambda ids: cf_common.user_db.delete_complaints(ids, guild_id))
+            delete=lambda ids: cf_common.user_db.delete_complaints(ids, guild_id),
+            can_manage=_has_manage_role)
         view.message = await ctx.send(embed=view.embed(), view=view)
 
     @complain.command(brief='Resolve a complaint and notify its author')

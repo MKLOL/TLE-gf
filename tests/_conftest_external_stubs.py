@@ -250,7 +250,7 @@ _discord_mod.Object = type('Object', (), {'__init__': lambda self, *, id=None: s
 _discord_mod.NotFound = type('NotFound', (Exception,), {})
 _discord_mod.Forbidden = type('Forbidden', (Exception,), {})
 _discord_mod.HTTPException = type('HTTPException', (Exception,), {})
-_discord_mod.ButtonStyle = type('ButtonStyle', (), {'secondary': 2, 'primary': 1})
+_discord_mod.ButtonStyle = type('ButtonStyle', (), {'primary': 1, 'secondary': 2, 'success': 3, 'danger': 4, 'link': 5})
 _discord_mod.Interaction = type('Interaction', (), {})
 _discord_mod.TextChannel = type('TextChannel', (), {})
 
@@ -298,13 +298,24 @@ class _StubView:
         self.children = []
     def add_item(self, item):
         self.children.append(item)
+    def clear_items(self):
+        self.children = []
+    def stop(self):
+        self.stopped = True
 class _StubButton:
-    def __init__(self, *, style=None, emoji=None, custom_id=None, label=None):
+    def __init__(self, *, style=None, emoji=None, custom_id=None, label=None,
+                 row=None, disabled=False):
         self.style = style
         self.emoji = emoji
         self.custom_id = custom_id
         self.label = label
-        self.callback = None
+        self.row = row
+        self.disabled = disabled
+        # Only stand in for a callback when the subclass has not defined one;
+        # assigning unconditionally would shadow a real coroutine method and
+        # make button wiring untestable.
+        if not hasattr(type(self), 'callback'):
+            self.callback = None
 class _StubModal:
     def __init__(self, *, title=None):
         self.title = title
