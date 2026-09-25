@@ -17,6 +17,39 @@ from tle.util import cache_system2
 from tle.cogs._codeforces_helpers import CodeforcesCogError, composeRatings
 
 
+def _problem_key(problem):
+    """Identity shared by every listing of one problem.
+
+    For a cached contest this is ``SubFilter.filter_solved``'s key: a Div. 1 C
+    and the Div. 2 E it mirrors carry the same name and contest start time, so
+    solving either counts as solving the problem.  Both sides of a diff must
+    key the same way or a mirrored solve looks like a gap.
+
+    Gym and acmsguru problems are absent from the contest cache, which is
+    built from ``cf.contest.list()``.  ``filter_solved`` keys those by name
+    alone, which is harmless when deduplicating one person's solves but not
+    here: subtracting by name would let two unrelated problems that happen to
+    share a title cancel, hiding a real gap.  They fall back to their own
+    contest and index instead, and the leading tag keeps the two key shapes
+    from ever meeting.
+    """
+    contest = cf_common.cache2.contest_cache.contest_by_id.get(
+        problem.contestId, None)
+    if contest is not None:
+        return ('contest', problem.name, contest.startTimeSeconds)
+    return ('uncached', problem.contestId, problem.index)
+
+
+def _solved_problem_keys(submissions):
+    """Every problem a handle has ever solved, as ``_problem_key`` values.
+
+    Deliberately unfiltered: the subtrahend of a diff is 'has this person
+    solved it at all', never 'solved it inside the requested window'.
+    """
+    return {_problem_key(sub.problem)
+            for sub in submissions if sub.verdict == 'OK'}
+
+
 class CodeforcesProblemsMixin:
     async def _stalk_impl(self, ctx, args):
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
@@ -64,6 +97,83 @@ class CodeforcesProblemsMixin:
 
         pages = [make_page(chunk) for chunk in paginator.chunkify(submissions[:100], 10)]
         paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60, set_pagenum_footers=True, author_id=ctx.author.id)
+
+    async def _diff_impl(self, ctx, args):
+        (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
+        filt = cf_common.SubFilter(False)
+        # Order is the whole command: A minus B is not B minus A.  Both
+        # SubFilter.parse and resolve_handles take a set of their arguments,
+        # so the handles are re-ordered against the original text here and
+        # resolved one at a time.
+        leftover = set(filt.parse(args))
+        handles = [arg for arg in args if arg in leftover]
+        if len(handles) != 2:
+            raise CodeforcesCogError(
+                'Give exactly two handles: `;diff <handle> <handle>`.')
+        left, = await cf_common.resolve_handles(ctx, self.converter,
+                                                (handles[0],))
+        right, = await cf_common.resolve_handles(ctx, self.converter,
+                                                 (handles[1],))
+        if left.lower() == right.lower():
+            raise CodeforcesCogError(
+                f'`{left}` has solved exactly what `{right}` has solved.')
+
+        if filt.only_rated:
+            # filter_subs looks rated contests up per handle; left empty, the
+            # advertised +rated silently degrades into a plain +contest.
+            try:
+                changes = await cf.user.rating(handle=left)
+                filt.rated_contest_ids_by_handle[left.lower()] = {
+                    rc.contestId for rc in changes
+                }
+            except cf.HandleNotFoundError:
+                filt.rated_contest_ids_by_handle[left.lower()] = set()
+
+        left_subs = await cf.user.status(handle=left)
+        right_subs = await cf.user.status(handle=right)
+        solved_by_right = _solved_problem_keys(right_subs)
+        submissions = [sub for sub in filt.filter_subs(left_subs)
+                       if _problem_key(sub.problem) not in solved_by_right]
+
+        if not submissions:
+            raise CodeforcesCogError(
+                f'`{left}` has solved nothing that `{right}` has not, '
+                f'within the search parameters')
+
+        if hardest:
+            submissions.sort(
+                key=lambda sub: (sub.problem.rating or 0, sub.creationTimeSeconds),
+                reverse=True)
+        else:
+            submissions.sort(key=lambda sub: sub.creationTimeSeconds, reverse=True)
+
+        def profile(handle):
+            return '`{}` (https://codeforces.com/profile/{})'.format(handle, handle)
+
+        def make_line(sub):
+            data = (f'[{sub.problem.name}]({sub.problem.url})',
+                    f'[{sub.problem.rating if sub.problem.rating else "?"}]',
+                    f'({cf_common.days_ago(sub.creationTimeSeconds)})')
+            return '\N{EN SPACE}'.join(data)
+
+        # A diff is large by nature — ;diff <strong> <beginner> is thousands
+        # of problems — so say when the list was cut rather than implying the
+        # last page is the end of it.
+        shown = submissions[:100]
+        suffix = ('' if len(shown) == len(submissions)
+                  else f' (showing {len(shown)} of {len(submissions)})')
+
+        def make_page(chunk):
+            title = '{} problems solved by {} but not {}{}'.format(
+                'Hardest' if hardest else 'Recent', profile(left),
+                profile(right), suffix)
+            hist_str = '\n'.join(make_line(sub) for sub in chunk)
+            embed = discord_common.cf_color_embed(description=hist_str)
+            return title, embed
+
+        pages = [make_page(chunk) for chunk in paginator.chunkify(shown, 10)]
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
+                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     async def _mashup_impl(self, ctx, args):
         delta = 100

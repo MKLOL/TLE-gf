@@ -127,6 +127,7 @@ _cf_api.RatingChange = _nt('RatingChange',
                             'contestId contestName handle rank '
                             'ratingUpdateTimeSeconds oldRating newRating')
 _cf_api.GYM_ID_THRESHOLD = 100000
+_cf_api.HandleNotFoundError = type('HandleNotFoundError', (Exception,), {})
 
 class _Contest(_NamedTuple):
     id: int
@@ -162,6 +163,15 @@ class _Problem(_NamedTuple):
     points: _Optional[float] = None
     rating: _Optional[int] = None
     tags: _List[str] = []
+    @property
+    def url(self):
+        # Mirrors _cf_api_types.Problem.url so renderers can be exercised.
+        if self.contestId is None:
+            return f'https://codeforces.com/problemsets/acmsguru/problem/99999/{self.index}'
+        base = ('https://codeforces.com/contest/'
+                if self.contestId < _cf_api.GYM_ID_THRESHOLD
+                else 'https://codeforces.com/gym/')
+        return f'{base}{self.contestId}/problem/{self.index}'
     def matches_all_tags(self, match_tags):
         match_tags = set(match_tags)
         return all(any(mt in t for t in self.tags) for mt in match_tags) if match_tags else True

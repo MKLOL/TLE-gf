@@ -66,6 +66,21 @@ class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin, commands.Cog):
         """
         await self._stalk_impl(ctx, args)
 
+    @commands.command(brief='List problems solved by one handle but not another',
+                      aliases=['solvediff'],
+                      usage='<handle> <handle> [+hardest] [+practice] [+contest] [+rated] [+virtual] [+outof] [+team] [+tag..] [~tag..] [r>=rating] [r<=rating] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy] [c+marker..] [i+index..]')
+    async def diff(self, ctx, *args):
+        """Print problems the first handle solved that the second one has not.
+
+        Order matters: ;diff tourist Petr is not ;diff Petr tourist.
+        Filters narrow the first handle's problems only — the second handle
+        subtracts everything they have ever solved, so a problem they solved
+        outside the filter still counts as solved.
+        Sorted by time solved, or by rating with +hardest.
+        Prefix -c to force a Codeforces handle (e.g. -ctourist).
+        """
+        await self._diff_impl(ctx, args)
+
     @commands.command(brief='Create a mashup', usage='[handles] [+tag..] [~tag..] [+divX] [~divX] [?[-]delta]')
     async def mashup(self, ctx, *args):
         """Create a mashup contest using problems within -200 and +400 of average rating of handles provided.
