@@ -2,6 +2,7 @@
 import asyncio
 import os
 from pathlib import Path
+import socket
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -223,6 +224,36 @@ async def check_lifecycle():
             assert 'port' in str(exc)
         else:
             raise AssertionError('Invalid port accepted')
+    # Exercise the production start() path, not just create_app(). Older
+    # aiohttp can bind a socket successfully yet reject its handler options
+    # only when the first connection arrives.
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        port = reservation.getsockname()[1]
+    with patch.dict(os.environ, {'COMPLAINT_API_ENABLED': '1',
+                                'COMPLAINT_API_HOST': '127.0.0.1',
+                                'COMPLAINT_API_PORT': str(port)}):
+        await server.start()
+        runner = server.runner
+        await server.start()
+        assert server.runner is runner
+        try:
+            async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=5)) as client:
+                async with client.get(f'http://127.0.0.1:{port}/v1/complaints') as response:
+                    assert response.status == 401
+                    assert (await response.json())['error'] == 'Invalid or expired bearer token.'
+        finally:
+            await server.close()
+        assert server.runner is None
+        try:
+            reader, writer = await asyncio.open_connection('127.0.0.1', port)
+        except OSError:
+            pass
+        else:
+            writer.close()
+            await writer.wait_closed()
+            raise AssertionError('Production HTTP listener was left open')
     service.start()
     task = service._worker
     service.start()

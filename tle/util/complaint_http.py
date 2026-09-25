@@ -155,7 +155,9 @@ class ComplaintHttpServer:
             return
         host = os.environ.get('COMPLAINT_API_HOST', '0.0.0.0')
         port = positive_int(os.environ.get('COMPLAINT_API_PORT', '8080'), 'port', 65535)
-        runner = web.AppRunner(self.create_app(), access_log=None, shutdown_timeout=30)
+        # aiohttp 3.8 forwards unknown runner options to RequestHandler: passing
+        # shutdown_timeout here binds successfully but resets every connection.
+        runner = web.AppRunner(self.create_app(), access_log=None)
         try:
             await runner.setup()
             await web.TCPSite(runner, host, port).start()
