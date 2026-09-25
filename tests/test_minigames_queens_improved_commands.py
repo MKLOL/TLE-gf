@@ -172,12 +172,12 @@ class TestQueensImprovedViews(_ImprovedQueensBase):
         monkeypatch.setattr(
             minigames_module,
             'plot_akari_rating',
-            lambda series: plotted_rating.update(series=series) or fake_file,
+            lambda series, **_kwargs: plotted_rating.update(series=series) or fake_file,
         )
         monkeypatch.setattr(
             minigames_module,
             'plot_akari_performance',
-            lambda series:
+            lambda series, **_kwargs:
                 plotted_performance.update(series=series) or fake_file,
         )
         monkeypatch.setattr(

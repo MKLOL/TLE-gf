@@ -239,7 +239,8 @@ def _get_queens_results_table_image_file(guild, rows, title,
                                          sort_key_fn=None,
                                          rank_key_fn=None,
                                          unrated_keys=None,
-                                         filename='queens-results.png'):
+                                         filename='queens-results.png',
+                                         ranks=None):
     if sort_key_fn is None:
         sort_key_fn = _queens_result_sort_key
     rows = _sort_akari_puzzle_results(rows, sort_key_fn=sort_key_fn)
@@ -247,7 +248,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
     displayed_rows = _queens_results_table_rows(
         guild, displayed, puzzle_info=puzzle_info, registrants=registrants,
         identity_fn=identity_fn, name_fn=name_fn, sort_key_fn=sort_key_fn,
-        rank_key_fn=rank_key_fn, unrated_keys=unrated_keys)
+        rank_key_fn=rank_key_fn, unrated_keys=unrated_keys, ranks=ranks)
     annotated = puzzle_info is not None and registrants is not None
     row_colors = None
     cell_colors = None
@@ -255,7 +256,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
         row_colors, cell_colors = _result_table_text_colors(
             displayed, puzzle_info, registrants,
             column_count=6, time_index=3, performance_index=4,
-            delta_index=5)
+            delta_index=5, ranks=ranks)
     footer = None
     if len(rows) > len(displayed_rows):
         footer = f'Showing top {len(displayed_rows)} of {len(rows)} results'
@@ -278,7 +279,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
 
 def _akari_rating_table_rows(guild, rating_rows, registrants, *,
                              mark_registered=True, identity_fn=None,
-                             name_fn=None):
+                             name_fn=None, ranks=None):
     """Build display rows (#, Name[✓], Handle, Rating · Rank, Games) for the leaderboard.
 
     ``rating`` is rounded only here for display, and the rank abbreviation
@@ -297,7 +298,7 @@ def _akari_rating_table_rows(guild, rating_rows, registrants, *,
         if mark_registered and row.user_id in registrants:
             name = f'{name} \N{CHECK MARK}'
         rating = round(row.rating)
-        rank = rank_for_rating(rating)
+        rank = rank_for_rating(rating, ranks)
         rows.append((
             index,
             name,
@@ -308,20 +309,20 @@ def _akari_rating_table_rows(guild, rating_rows, registrants, *,
     return rows
 
 
-def _akari_row_text_color(rating):
+def _akari_row_text_color(rating, ranks=None):
     """Per-row text colour for the rating leaderboard image.
 
     Uses the rank's ``color_embed`` (the darker integer variant) so the text
     stays legible on the light-gray alternating row backgrounds — the pastel
     ``color_graph`` shades are tuned for plot fills and would wash out here.
     """
-    embed = rank_for_rating(round(rating)).color_embed
+    embed = rank_for_rating(round(rating), ranks).color_embed
     return ((embed >> 16) & 0xFF, (embed >> 8) & 0xFF, embed & 0xFF)
 
 
 def _result_table_text_colors(rows, puzzle_info, registrants, *,
                               column_count, time_index, performance_index,
-                              delta_index):
+                              delta_index, ranks=None):
     """Apply rating, performance, time, and delta colours to result cells."""
     row_colors = []
     cell_colors = []
@@ -329,11 +330,13 @@ def _result_table_text_colors(rows, puzzle_info, registrants, *,
         visible = row.user_id in registrants and row.user_id in puzzle_info
         info = puzzle_info[row.user_id] if visible else None
         base_color = (
-            _akari_row_text_color(info.pre_rating) if visible else _BLACK)
+            _akari_row_text_color(info.pre_rating, ranks)
+            if visible else _BLACK)
         colors = [base_color] * column_count
         colors[time_index] = _BLACK
         if info is not None and info.performance is not None:
-            colors[performance_index] = _akari_row_text_color(info.performance)
+            colors[performance_index] = _akari_row_text_color(
+                info.performance, ranks)
         if info is not None:
             colors[delta_index] = (
                 _DELTA_GREEN if round(info.delta) > 0 else _DELTA_GRAY)
@@ -348,12 +351,13 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
                                        games_label='Games',
                                        identity_label='Handle',
                                        identity_fn=None,
-                                       name_fn=None):
+                                       name_fn=None, ranks=None):
     displayed = rating_rows[:_AKARI_IMAGE_MAX_ROWS]
     table_rows = _akari_rating_table_rows(
         guild, displayed, registrants, mark_registered=mark_registered,
-        identity_fn=identity_fn, name_fn=name_fn)
-    row_colors = [_akari_row_text_color(row.rating) for row in displayed]
+        identity_fn=identity_fn, name_fn=name_fn, ranks=ranks)
+    row_colors = [_akari_row_text_color(row.rating, ranks)
+                  for row in displayed]
     footer = None
     if len(rating_rows) > len(table_rows):
         footer = f'Showing top {len(table_rows)} of {len(rating_rows)} rated players'

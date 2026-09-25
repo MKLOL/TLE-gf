@@ -239,12 +239,18 @@ def _format_akari_history_line(point):
     )
 
 
-def _format_minigame_history_line(point):
+def game_ranks(game):
+    """The display rank table for ``game`` (``None`` → shared Akari bands)."""
+    rating = getattr(game, 'rating', None)
+    return getattr(rating, 'ranks', None)
+
+
+def _format_minigame_history_line(point, *, ranks=None):
     """One rating-history line for date-keyed minigames such as Queens."""
     new_rating = round(point.rating)
     old_rating = round(point.rating - point.delta)
     delta = round(point.delta)
-    rank_abbr = rank_for_rating(new_rating).title_abbr
+    rank_abbr = rank_for_rating(new_rating, ranks).title_abbr
     result_str = format_duration(point.time_seconds)
     if point.is_perfect:
         result_str = f'{result_str} clean'

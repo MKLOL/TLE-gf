@@ -33,8 +33,8 @@ from tle.util.queens_video_decode import (
     BLOCK, SCALE_W, VideoTooLongError, decode, decode_strip, probe_frame_count,
 )
 from tle.util.queens_video_timer import (
-    SCENE_FRACTION, MIN_FLIPS, find_timer_blocks, load_templates, longest_chain,
-    merge_runs, normalise_polarity, read_timer, segment_timer,
+    SCENE_FRACTION, MIN_FLIPS, find_timer_blocks, last_chain, load_templates,
+    longest_chain, merge_runs, normalise_polarity, read_timer, segment_timer,
 )
 
 EARLY_MIN_CHAIN = 6     # flips needed before trusting an early timer location during streaming
@@ -184,14 +184,24 @@ def _analyze(path, debug, _return_strip, templates_path, use_ocr, deadline, dila
             continue
         result = _measure(path, decoded, scene, timer, debug, _return_strip, templates_path,
                           use_ocr, deadline, min_events)
+        if 'error' in result and 'no finishing move' in result['error']:
+            paused = _measure(path, decoded, scene, timer, debug, _return_strip,
+                              templates_path, use_ocr, deadline, min_events, use_last_chain=True)
+            if 'error' not in paused:
+                paused['anchor'] = 'timer paused mid-solve (last chain); ' + paused['anchor']
+                result = paused
         if 'error' not in result:
             break
     return result
 
 
 def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, use_ocr,
-             deadline, min_events):
-    """Everything after the timer blocks are known: flips, anchoring, finish, OCR."""
+             deadline, min_events, use_last_chain=False):
+    """Everything after the timer blocks are known: flips, anchoring, finish, OCR.
+    ``use_last_chain`` measures from the last substantial tick chain instead of the
+    longest: a Reset dialog or app switch pauses the timer mid-solve and the finish
+    then follows a later chain.  Only used after the longest chain yields no finish,
+    because clips that go on to a second puzzle would otherwise measure that one."""
     changed, ts, (w0, h0), strip, early_geo = decoded
     # full-resolution strip of the timer row; flips are detected on it (pixel-accurate).
     # `unit` = one analysis block in source pixels ~ one timer digit width; every pixel
@@ -212,7 +222,7 @@ def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, 
     flip_mask = strip_change & ~scene
     flip_idx = np.array(merge_runs(np.nonzero(flip_mask)[0])) + 1      # frame where new digit is visible
     flip_t = ts[flip_idx]
-    start, length = longest_chain(flip_t)
+    start, length = (last_chain if use_last_chain else longest_chain)(flip_t)
     lo, hi = start, start + length + 1
     # a missed flip (2-3 s step) is only credible inside the chain, never at its ends
     while hi - lo >= 2 and round(flip_t[lo + 1] - flip_t[lo]) > 1:
@@ -253,7 +263,7 @@ def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, 
     all_changes = np.nonzero(flip_mask)[0] + 1
     last_i2, last_t2 = int(last_i), float(last_t)
     prev_ocr = read_timer(strip[last_i2], x_units, unit, templates) if templates else None
-    extended = 0
+    extended, ext_secs = 0, 0
     for e in all_changes[all_changes > last_i2]:
         gap = ts[e] - last_t2
         if gap < 0.5:
@@ -267,6 +277,7 @@ def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, 
         elif abs(gap - round(gap)) > 0.4:
             continue
         last_i2, last_t2, prev_ocr, extended = int(e), float(ts[e]), cur, extended + 1
+        ext_secs += int(round(gap))
     if extended:
         anchor += f'; chain extended by {extended} flips via OCR'
     win = np.nonzero((ts[1:] > last_t2) & (ts[1:] < last_t2 + 1.35))[0]
@@ -293,7 +304,7 @@ def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, 
     finish_t = ts[finish_i]
     ocr = read_timer(strip[min(finish_i, len(strip) - 1)], x_units, unit, templates) if templates else None
     ocr_last = read_timer(strip[last_i2], x_units, unit, templates) if templates else None
-    counted = int(sec_at_flip[-1])
+    counted = int(sec_at_flip[-1]) + ext_secs          # seconds at last_t2 by counting
     method = 'last flip + delta'
     if min_events < MIN_FLIPS and not (ocr is not None and ocr == ocr_last == counted):
         return {'file': path, 'error': f'only {len(flip_t)} timer flips found and OCR '
@@ -302,6 +313,8 @@ def _measure(path, decoded, scene, timer, debug, _return_strip, templates_path, 
         if ocr != counted:
             anchor += f'; OCR reads {ocr}s (counted {counted}s) -> using OCR'
             sec_at_flip = sec_at_flip + (ocr - counted)
+            t0 = float(np.mean(flip_t - sec_at_flip))       # re-fit the clock phase
+            phase_resid = flip_t - sec_at_flip - t0
         else:
             anchor += '; OCR agrees'
     elif ocr is not None:

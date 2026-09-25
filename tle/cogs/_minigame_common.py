@@ -64,6 +64,10 @@ class RatingDef:
     decay_grace: Optional[int] = None
     current_puzzle_number_fn: Optional[Callable[[], int]] = None
     max_puzzle_lookahead: Optional[int] = None
+    # Display tiers (``akari_ranks``-style tuple).  ``None`` means the shared
+    # ``AKARI_RANKS``; Queens overrides its top bands.  Display-only: the
+    # rating math never reads this.
+    ranks: Optional[tuple] = None
 
 
 @dataclass(frozen=True)

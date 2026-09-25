@@ -138,7 +138,8 @@ def _format_akari_puzzle_table(guild, rows):
 def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
                                registrants=None, identity_fn=None,
                                name_fn=None, sort_key_fn=None,
-                               rank_key_fn=None, unrated_keys=None):
+                               rank_key_fn=None, unrated_keys=None,
+                               ranks=None):
     if identity_fn is None:
         identity_fn = lambda _g, row: getattr(row, 'user_id', '-')
     if name_fn is None:
@@ -182,7 +183,8 @@ def _queens_results_table_rows(guild, rows, *, puzzle_info=None,
             info = puzzle_info[row.user_id]
             rating = round(info.pre_rating)
             name = _PreserveSuffixText(
-                name, f' ({rating} {rank_for_rating(rating).title_abbr})')
+                name,
+                f' ({rating} {rank_for_rating(rating, ranks).title_abbr})')
             performance_cell = _performance_cell(info)
             delta_cell = f'{round(info.delta):+d}'
         cells = [

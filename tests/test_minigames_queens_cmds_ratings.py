@@ -275,7 +275,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         perf_series = {}
         fake_file = SimpleNamespace(filename='plot.png')
 
-        def _rating(series):
+        def _rating(series, **_kwargs):
             rating_series['names'] = [name for _history, name in series]
             rating_series['dates'] = [
                 [str(point.puzzle_date) for point in history]
@@ -291,7 +291,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
             ]
             return fake_file
 
-        def _performance(series):
+        def _performance(series, **_kwargs):
             perf_series['names'] = [name for _history, name, _rating in series]
             perf_series['dates'] = [
                 [str(point.puzzle_date) for point in history]
@@ -383,7 +383,7 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         captured = {}
         fake_file = SimpleNamespace(filename='plot.png')
 
-        def _rating(series):
+        def _rating(series, **_kwargs):
             captured['dates'] = [
                 [str(point.puzzle_date) for point in history]
                 for history, _name in series
@@ -454,11 +454,11 @@ class TestQueensCommandsRatings(_QueensCommandsBase):
         fake_file = SimpleNamespace(filename='plot.png')
         monkeypatch.setattr(
             minigames_module, 'plot_akari_rating',
-            lambda series: rating_series.update(
+            lambda series, **_kwargs: rating_series.update(
                 names=[name for _history, name in series]) or fake_file)
         monkeypatch.setattr(
             minigames_module, 'plot_akari_performance',
-            lambda series: perf_series.update(
+            lambda series, **_kwargs: perf_series.update(
                 names=[name for _history, name, _rating in series]) or fake_file)
 
         asyncio.run(cog._cmd_queens_rating(ctx, QUEENS_GAME, [alice]))

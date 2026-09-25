@@ -7,7 +7,7 @@ from tle.util.akari_rating import AKARI_RANKS
 from tle.cogs._minigame_common import normalize_puzzle_date
 
 
-def _plot_akari_multi(series, legend_entries):
+def _plot_akari_multi(series, legend_entries, *, ranks=None):
     """Shared body for the rating and performance graphs.
 
     ``series`` is a list of ``(dates, values, marker_indices)`` triples — one
@@ -32,7 +32,7 @@ def _plot_akari_multi(series, legend_entries):
         all_values.extend(values)
 
     plt.ylim(min(min(all_values) - 50, 1100), max(max(all_values) + 50, 1500))
-    gc.plot_rating_bg(AKARI_RANKS)
+    gc.plot_rating_bg(AKARI_RANKS if ranks is None else ranks)
 
     plt.gcf().autofmt_xdate()
     labels = [gc.StrWrap(f'{name} ({round(value)})')
@@ -47,7 +47,7 @@ def _plot_akari_multi(series, legend_entries):
     return gc.get_current_figure_as_file()
 
 
-def plot_akari_rating(series):
+def plot_akari_rating(series, *, ranks=None):
     """Plot Daily Akari rating over time for one or more users.
 
     ``series`` is a list of ``(history, display_name)`` pairs.  Each
@@ -72,10 +72,10 @@ def plot_akari_rating(series):
         )
         plotted.append((dates, ratings, marker_indices))
         legend_entries.append((display_name, ratings[-1]))
-    return _plot_akari_multi(plotted, legend_entries)
+    return _plot_akari_multi(plotted, legend_entries, ranks=ranks)
 
 
-def plot_akari_performance(series):
+def plot_akari_performance(series, *, ranks=None):
     """Plot per-contest performance over time for one or more users.
 
     ``series`` is a list of ``(history, display_name, current_rating)``.
@@ -97,4 +97,4 @@ def plot_akari_performance(series):
         legend_entries.append((display_name, current_rating))
     if not plotted:
         raise ValueError('No contest days to plot performance for.')
-    return _plot_akari_multi(plotted, legend_entries)
+    return _plot_akari_multi(plotted, legend_entries, ranks=ranks)

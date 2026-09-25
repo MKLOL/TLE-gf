@@ -38,7 +38,8 @@ from tle import constants
 # primitives plus the displayed performance in _akari_performance, to keep this
 # module under the 500-line limit. Both are re-exported so
 # akari_rating.<name> still resolves.
-from tle.util.akari_ranks import _AkariRank, AKARI_RANKS, rank_for_rating
+from tle.util.akari_ranks import (  # noqa: F401
+    _AkariRank, AKARI_RANKS, QUEENS_RANKS, rank_for_rating)
 from tle.util._akari_performance import (  # noqa: F401
     _RATING_SCALE,
     _SEARCH_HI,

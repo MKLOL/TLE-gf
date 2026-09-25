@@ -15,7 +15,7 @@ from tle.cogs._minigame_common import (
     format_duration, normalize_puzzle_date, parse_date_args,
 )
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, _mg, _format_minigame_history_line,
+    MinigameCogError, _mg, _format_minigame_history_line, game_ranks,
 )
 from tle.cogs._minigame_queens_filters import (
     _split_queens_weekday_filter, _filter_queens_weekday_rows,
@@ -83,15 +83,16 @@ class ImplQueensCmdBMixin:
             )
             for member, row, history, _contest_history in per_member
         ]
-        discord_file = _mg().plot_akari_performance(series)
+        ranks = game_ranks(game)
+        discord_file = _mg().plot_akari_performance(series, ranks=ranks)
 
         if len(per_member) == 1:
             member, _row, _history, contest_history = per_member[0]
             display_name = self._queens_public_user_name(ctx.guild, member.id)
             last_perf = contest_history[-1].performance
-            last_rank = rank_for_rating(round(last_perf))
+            last_rank = rank_for_rating(round(last_perf), ranks)
             best_perf = max(h.performance for h in contest_history)
-            best_rank = rank_for_rating(round(best_perf))
+            best_rank = rank_for_rating(round(best_perf), ranks)
             embed = discord.Embed(
                 title=(f'{game.display_name} performance'
                        f'{_queens_improved_title_suffix(improved)} — '
@@ -106,11 +107,12 @@ class ImplQueensCmdBMixin:
         else:
             top_rank = rank_for_rating(round(max(
                 contest_history[-1].performance
-                for _member, _row, _history, contest_history in per_member)))
+                for _member, _row, _history, contest_history in per_member)),
+                ranks)
             lines = [
                 f'**{self._queens_public_user_name(ctx.guild, member.id)}**: '
                 f'last {round(contest_history[-1].performance)} '
-                f'({rank_for_rating(round(contest_history[-1].performance)).title_abbr})'
+                f'({rank_for_rating(round(contest_history[-1].performance), ranks).title_abbr})'
                 for member, _row, _history, contest_history in per_member
             ]
             embed = discord.Embed(
@@ -146,7 +148,7 @@ class ImplQueensCmdBMixin:
                 f'`{self._queens_public_user_name(ctx.guild, member.id)}` has no '
                 f'{game.display_name} days yet.')
 
-        lines = [_format_minigame_history_line(h)
+        lines = [_format_minigame_history_line(h, ranks=game_ranks(game))
                  for h in reversed(played_history)]
         day_label = 'day' if len(played_history) == 1 else 'days'
         title = (f'{game.display_name} rating history'
@@ -388,5 +390,6 @@ class ImplQueensCmdBMixin:
                 int(getattr(row, 'time_seconds', 0)),
                 int(getattr(row, 'message_id', 0)),
             ),
-            filename=f'{game.name}-results.png')
+            filename=f'{game.name}-results.png',
+            ranks=game_ranks(game))
         await ctx.send(file=discord_file)

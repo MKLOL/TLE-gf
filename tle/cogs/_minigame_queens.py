@@ -10,6 +10,7 @@ import datetime as dt
 
 from tle import constants
 from tle.cogs._minigame_common import GameDef, RatingDef
+from tle.util.akari_ranks import QUEENS_RANKS
 from tle.cogs._minigame_linkedin import (  # noqa: F401  (re-exported aliases)
     LINKEDIN_WEEKDAY_DIFFICULTIES as QUEENS_WEEKDAY_DIFFICULTIES,
     LinkedInDef, _LINKEDIN_TIME_ZONE, linkedin_current_puzzle_date,
@@ -91,5 +92,6 @@ QUEENS_GAME = GameDef(
         decay_max=constants.QUEENS_DECAY_MAX,
         decay_grace=constants.QUEENS_DECAY_GRACE,
         current_puzzle_number_fn=current_puzzle_number,
+        ranks=QUEENS_RANKS,
     ),
 )

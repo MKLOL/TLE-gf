@@ -17,7 +17,7 @@ from tle.cogs._minigame_queens import (
     queens_weekly_difficulty_map,
 )
 from tle.cogs._minigame_helpers import (
-    MinigameCogError, _mg,
+    MinigameCogError, _mg, game_ranks,
     _display_rating, _display_peak, _display_games,
 )
 from tle.cogs._minigame_queens_filters import (
@@ -261,7 +261,8 @@ class ImplQueensCmdMixin:
                 games_label='Weeks' if weekly else 'Games',
                 identity_label='LinkedIn',
                 identity_fn=self._queens_rating_identity_fn(links_by_user),
-                name_fn=self._queens_name_fn(links_by_user))
+                name_fn=self._queens_name_fn(links_by_user),
+                ranks=game_ranks(game))
             await ctx.send(file=discord_file)
         if weekly:
             await self._send_queens_weekly_scores(
@@ -378,22 +379,23 @@ class ImplQueensCmdMixin:
             (graph_history, self._queens_legend_name(ctx.guild.id, game, member))
             for member, _row, _history, graph_history in per_member
         ]
-        discord_file = _mg().plot_akari_rating(series)
+        ranks = game_ranks(game)
+        discord_file = _mg().plot_akari_rating(series, ranks=ranks)
 
         if len(per_member) == 1:
             member, row, history, _graph_history = per_member[0]
             display_name = self._queens_public_user_name(ctx.guild, member.id)
             rating = round(_display_rating(row, history, date_bounds))
-            rank = rank_for_rating(rating)
+            rank = rank_for_rating(rating, ranks)
             peak = round(_display_peak(row, history, date_bounds))
-            peak_rank = rank_for_rating(peak)
+            peak_rank = rank_for_rating(peak, ranks)
             last_contest = next((h for h in reversed(history)
                                  if h.performance is not None), None)
             last_change_str = (f'{last_contest.delta:+.0f}'
                                if last_contest is not None else '—')
             last_perf_str = (
                 f'{round(last_contest.performance)} '
-                f'({rank_for_rating(round(last_contest.performance)).title_abbr})'
+                f'({rank_for_rating(round(last_contest.performance), ranks).title_abbr})'
                 if last_contest is not None else '—')
             embed = discord.Embed(
                 title=(f'{game.display_name} rating'
@@ -410,13 +412,14 @@ class ImplQueensCmdMixin:
             _top_member, top_row, top_history, _top_graph_history = max(
                 per_member, key=lambda t: _display_rating(t[1], t[2], date_bounds))
             top_rank = rank_for_rating(
-                round(_display_rating(top_row, top_history, date_bounds)))
+                round(_display_rating(top_row, top_history, date_bounds)),
+                ranks)
 
             def _rating_line(member, row, history):
                 rating = round(_display_rating(row, history, date_bounds))
                 return (
                     f'**{self._queens_public_user_name(ctx.guild, member.id)}**: '
-                    f'{rating} ({rank_for_rating(rating).title_abbr})'
+                    f'{rating} ({rank_for_rating(rating, ranks).title_abbr})'
                 )
 
             lines = [

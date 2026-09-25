@@ -70,6 +70,29 @@ def _repaints_neighbourhood(changed, chain, y, x, limit=8):
     return False
 
 
+def last_chain(t, tol=0.3, max_step=3, min_fraction=0.3):
+    """Like ``longest_chain`` but returns the *last* chain that is at least
+    ``min_fraction`` of the longest (and at least MIN_FLIPS-1 intervals).  A Reset
+    confirmation dialog or an app switch pauses the timer mid-solve, splitting the
+    ticks into several chains; the finishing move follows the last one, and the
+    digit OCR re-anchors the absolute count."""
+    if len(t) < 2:
+        return 0, 0
+    dt = np.diff(t)
+    ok = (np.abs(dt - np.round(dt)) < tol) & (np.round(dt) >= 1) & (np.round(dt) <= max_step)
+    runs, cur = [], 0
+    for i, g in enumerate(ok):
+        cur = cur + 1 if g else 0
+        if g and (i + 1 == len(ok) or not ok[i + 1]):
+            runs.append((i + 1 - cur, cur))
+    if not runs:
+        return 0, 0
+    best = max(ln for _, ln in runs)
+    need = max(MIN_FLIPS - 1, int(np.ceil(min_fraction * best)))
+    eligible = [r for r in runs if r[1] >= need]
+    return eligible[-1] if eligible else max(runs, key=lambda r: r[1])
+
+
 def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False, min_events=MIN_FLIPS,
                       ranked=False, max_candidates=5):
     """Blocks with the longest chain of ~1 s spaced change events (the seconds digit).
@@ -100,6 +123,10 @@ def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False, min_even
     # marks (tens), and the result screen / confetti hundreds to thousands.
     frame_change = changed.sum(axis=(1, 2)) if dilate else None
     quiet_limit = QUIET_FRACTION * hb * wb
+    if dilate:
+        # A gradual fade-in (the board appearing) never crosses SCENE_FRACTION in
+        # one frame yet is no tick either: treat every busy frame like a scene cut.
+        scene = scene | (frame_change > quiet_limit)
     for y in range(hb):
         for x in range(wb):
             if counts[y, x] < min_events:
@@ -142,11 +169,15 @@ def find_timer_blocks(changed, ts, scene, min_chain=None, dilate=False, min_even
         out = np.zeros((hb, wb), bool)
         out[ys[near], xs[near]] = True
         if dilate:
+            # erode to the original blocks that changed at (most of) the chain's ticks:
+            # the digit does at every tick, a neighbouring cell at one or two
             ticks = np.array(chains[by, bx])
-            hits = changed[ticks].any(axis=0) | changed[np.minimum(ticks + 1, n1 - 1)].any(axis=0)
-            eroded = out & hits
-            if eroded.any():
-                out = eroded
+            hits = (changed[ticks] | changed[np.minimum(ticks + 1, n1 - 1)]).sum(axis=0)
+            for need in (int(np.ceil(len(ticks) / 2)), 1):
+                eroded = out & (hits >= need)
+                if eroded.any():
+                    out = eroded
+                    break
         clusters.append(out)
         score[max(0, by - 3):by + 4, max(0, bx - 3):bx + 4] = 0     # next distinct cluster
     return clusters if ranked else clusters[0]

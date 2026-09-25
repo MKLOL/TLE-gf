@@ -37,14 +37,30 @@ AKARI_RANKS = (
 )
 
 
-def rank_for_rating(rating):
-    """Return the :data:`AKARI_RANKS` entry that covers ``rating``.
+# Queens-only bands: identical to Akari up to Grandmaster, but the top three
+# tiers are packed tighter (GM 1600, IGM 1700, LGM 1800) because Queens'
+# time-only ranking spreads the field less than Akari's accuracy/time mix, so
+# the Akari IGM/LGM cutoffs were out of reach.  Selected per game through
+# ``RatingDef.ranks``; Tango and Akari keep :data:`AKARI_RANKS`.
+QUEENS_RANKS = tuple(
+    rank for rank in AKARI_RANKS if rank.high <= 1600
+) + (
+    _AkariRank(1600, 1700, 'Grandmaster', 'GM', '#FF7777', 0xff3030),
+    _AkariRank(1700, 1800, 'International Grandmaster', 'IGM', '#FF3333', 0xff0000),
+    _AkariRank(1800, 10 ** 9, 'Legendary Grandmaster', 'LGM', '#AA0000', 0xcc0000),
+)
 
-    Bands are half-open ``[low, high)`` and the first/last extend to ±1e9,
-    so every finite rating maps to exactly one rank.  Pass a rounded display
-    rating to keep boundary behaviour predictable (e.g. 1100.0 → Specialist).
+
+def rank_for_rating(rating, ranks=None):
+    """Return the rank band that covers ``rating``.
+
+    ``ranks`` defaults to :data:`AKARI_RANKS`; games with their own tiers
+    (``RatingDef.ranks``, e.g. :data:`QUEENS_RANKS`) pass theirs.  Bands are
+    half-open ``[low, high)`` and the first/last extend to ±1e9, so every
+    finite rating maps to exactly one rank.  Pass a rounded display rating to
+    keep boundary behaviour predictable (e.g. 1100.0 → Specialist).
     """
-    for rank in AKARI_RANKS:
+    for rank in (AKARI_RANKS if ranks is None else ranks):
         if rank.low <= rating < rank.high:
             return rank
-    raise ValueError(f'Rating {rating} outside known Akari rank range.')
+    raise ValueError(f'Rating {rating} outside known rank range.')
