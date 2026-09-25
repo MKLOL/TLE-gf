@@ -16,6 +16,7 @@ _OLDER_OMITTED = '… (older messages omitted)'
 _LATER_OMITTED = '… (later messages omitted)'
 
 _LITERAL_SECRET_PATTERNS = (
+    re.compile(r'(?<![\w-])tlegf_[A-Za-z0-9_-]{43}(?![\w-])'),
     re.compile(r'(?<![\w-])xai-[A-Za-z0-9_-]{12,}', re.IGNORECASE),
     re.compile(r'(?<![\w-])AIza[A-Za-z0-9_-]{20,}'),
     re.compile(r'\bBearer\s+[A-Za-z0-9._~+/=-]{12,}', re.IGNORECASE),

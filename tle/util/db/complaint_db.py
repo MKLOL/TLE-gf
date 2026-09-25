@@ -1,18 +1,24 @@
 """Complaint DB methods — extracted from user_db_conn.py.
 
-Owns the ``complaint`` table. The ``active`` column is added by a migration
-(it is not part of the fresh-DB CREATE here, matching the original behavior).
+Owns the ``complaint`` table and composes its resolution workflow.
 """
 import logging
 import time
 
+from tle.util.db.complaint_workflow_db import (
+    ComplaintWorkflowDbMixin, upgrade_complaint_schema,
+)
+
 logger = logging.getLogger(__name__)
 
 
-class ComplaintDbMixin:
+class ComplaintDbMixin(ComplaintWorkflowDbMixin):
     """Mixin providing complaint DB methods."""
 
     def _create_complaint_tables(self):
+        existed = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'complaint'"
+        ).fetchone()
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS complaint (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +33,8 @@ class ComplaintDbMixin:
             CREATE INDEX IF NOT EXISTS idx_complaint_guild
                 ON complaint (guild_id, created_at DESC)
         ''')
+        if not existed:
+            upgrade_complaint_schema(self.conn)
 
     def add_complaint(self, guild_id, user_id, text, message_link=None):
         """Insert a complaint and return its id."""
@@ -39,19 +47,28 @@ class ComplaintDbMixin:
         self.conn.commit()
         return cur.lastrowid
 
-    def get_complaints(self, guild_id):
-        """Return all active complaints for a guild, newest first."""
+    def get_complaints(self, guild_id, status='open', limit=None, before=None):
+        """Return visible complaints, optionally bounded by an ID cursor."""
+        if status not in ('open', 'resolved', 'all'):
+            raise ValueError('Status must be open, resolved, or all.')
         guild_id = str(guild_id)
-        return self.conn.execute(
-            'SELECT id, guild_id, user_id, text, created_at, message_link '
-            'FROM complaint WHERE guild_id = ? AND active = 1 ORDER BY created_at DESC',
-            (guild_id,)
-        ).fetchall()
+        query = 'SELECT * FROM complaint WHERE guild_id = ? AND active = 1'
+        args = [guild_id]
+        if status != 'all':
+            query += ' AND resolved_at IS ' + ('NULL' if status == 'open' else 'NOT NULL')
+        if before is not None:
+            query += ' AND id < ?'
+            args.append(before)
+        query += ' ORDER BY id DESC'
+        if limit is not None:
+            query += ' LIMIT ?'
+            args.append(limit)
+        return self.conn.execute(query, args).fetchall()
 
     def get_complaint(self, complaint_id):
         """Return a single active complaint by id, or None."""
         row = self.conn.execute(
-            'SELECT id, guild_id, user_id, text, created_at, message_link '
+            'SELECT * '
             'FROM complaint WHERE id = ? AND active = 1',
             (complaint_id,)
         ).fetchone()

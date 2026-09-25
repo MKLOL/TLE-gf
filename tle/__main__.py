@@ -22,6 +22,7 @@ from matplotlib import pyplot as plt
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, font_downloader
+from tle.util.complaint_http import ComplaintHttpServer
 
 
 
@@ -86,6 +87,8 @@ async def main():
     for extension in cogs:
         await bot.load_extension(f'tle.cogs.{extension}')
     logging.info(f'Cogs loaded: {", ".join(bot.cogs)}')
+    complaints = bot.get_cog('Complain').service
+    complaint_http = ComplaintHttpServer(bot, complaints)
 
     def no_dm_check(ctx):
         if ctx.guild is None:
@@ -101,6 +104,14 @@ async def main():
     async def init():
         logging.info('on_ready fired, starting initialization')
         await cf_common.initialize(args.nodb)
+        if not args.nodb:
+            try:
+                await complaint_http.start()
+                complaints.start()
+            except Exception:
+                logging.exception('Failed to start complaint API')
+                await bot.close()
+                raise
         try:
             synced = await bot.tree.sync()
             logging.info(f'Synced {len(synced)} slash commands globally')
@@ -110,7 +121,12 @@ async def main():
         asyncio.create_task(discord_common.presence(bot))
 
     bot.add_listener(discord_common.bot_error_handler, name='on_command_error')
-    await bot.start(token)
+    try:
+        await bot.start(token)
+    finally:
+        await complaint_http.close()
+        await complaints.close()
+        await bot.close()
 
 
 if __name__ == '__main__':

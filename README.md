@@ -148,6 +148,13 @@ Before submitting your PR, consider running some code formatter on the lines you
 
 Please refrain from formatting the whole file if you just change some small part of it. If you feel the need to tidy up some particularly egregious code, then do that in a separate PR.
 
+## Complaint automation
+
+Admins can use hidden `;maketoken` to receive a server-scoped bearer token by DM,
+then list, resolve, and reopen complaints through the bot's HTTP API. Resolution
+replies include the fix summary and GitHub commit link. See [ComplaintAPI.md](ComplaintAPI.md)
+for commands, endpoint examples, and connection setup.
+
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)

@@ -82,6 +82,18 @@ def test_provider_keys_are_redacted_without_censoring_ordinary_text(monkeypatch)
     assert common.redact_credentials(ordinary) == ordinary
 
 
+def test_complaint_bearer_token_is_redacted(monkeypatch):
+    common = _load_discord_common(monkeypatch)
+    token = 'tlegf_' + 'Ab9_-' * 8 + 'xYZ'
+    assert token not in common.redact_credentials(f'Authorization: Bearer {token}')
+
+
+def test_bare_complaint_token_is_removed_from_llm_context():
+    from tle.cogs._llm_transcript import redact_secrets
+    token = 'tlegf_' + 'a' * 43
+    assert redact_secrets(f'Here is `{token}`.') == 'Here is `[REDACTED]`.'
+
+
 @pytest.mark.parametrize('root', ('llm', 'ai'))
 def test_mention_prefix_key_command_redacts_the_entire_tail(monkeypatch, root):
     common = _load_discord_common(monkeypatch)

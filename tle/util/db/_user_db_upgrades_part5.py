@@ -69,3 +69,12 @@ def upgrade_1_58_0(db):
     create_pending_backfill_index(db)
     db.commit()
     logger.info('1.58.0: Pending starboard backfill index created')
+
+
+@registry.register('1.59.0', 'Complaint resolutions and scoped API tokens')
+def upgrade_1_59_0(db):
+    from tle.util.db.complaint_workflow_db import upgrade_complaint_schema
+    from tle.util.db.api_token_db import create_api_token_schema
+    upgrade_complaint_schema(db)
+    create_api_token_schema(db)
+    db.commit()

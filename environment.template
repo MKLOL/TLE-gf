@@ -1,6 +1,13 @@
 export BOT_TOKEN="XXXXXXXXXXXXXXXXXXXXXXXX.XXXXXX.XXXXXXXXXXXXXXXXXXXXXXXXXXX"
 export LOGGING_COG_CHANNEL_ID="XXXXXXXXXXXXXXXXXX"
 
+# Complaint automation. Mint a server-scoped token with hidden admin command
+# ;maketoken. Keep loopback binding; connect through SSH or an HTTPS proxy.
+# See ComplaintAPI.md for routes, resolution replies, and Docker setup.
+export COMPLAINT_API_ENABLED="1"
+export COMPLAINT_API_HOST="127.0.0.1"
+export COMPLAINT_API_PORT="8080"
+
 # Codeforces API credentials. Generate a key pair at https://codeforces.com/settings/api.
 # Required because most CF API methods now reject unauthenticated requests with HTTP 400.
 export CF_API_KEY=""

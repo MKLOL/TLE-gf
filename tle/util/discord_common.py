@@ -25,6 +25,7 @@ _REDACTED_CREDENTIAL = '[credentials redacted]'
 _PROVIDER_CREDENTIAL_RE = re.compile(
     r'(?<![A-Za-z0-9_-])(?:'
     r'(?:xai-|AIza)[A-Za-z0-9_-]{20,}|'
+    r'tlegf_[A-Za-z0-9_-]{43}|'
     r'(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|'
     r'AKIA[A-Z0-9]{16}|'
     r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'

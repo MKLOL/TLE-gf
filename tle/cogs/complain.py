@@ -8,6 +8,8 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util.complaints import ComplaintError, ComplaintService
+from tle.cogs._complaint_tokens import ComplaintTokenMixin, require_complaint_admin
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +18,10 @@ _RATE_WINDOW = 6 * 3600  # 6 hours in seconds
 _MAX_COMPLAINT_LENGTH = 500
 
 
-class Complain(commands.Cog):
+class Complain(ComplaintTokenMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.service = ComplaintService(bot, lambda: cf_common.user_db)
 
     @commands.group(brief='Complaints', invoke_without_command=True)
     async def complain(self, ctx, *, text: str = None):
@@ -32,6 +35,9 @@ class Complain(commands.Cog):
           ;complain list               — view all complaints
           ;complain withdraw <id>      — withdraw your own complaint
           ;complain remove <id or ids> — remove complaints (admin only)
+          ;complain resolve <id> <commit_url> <summary> — resolve (admin only)
+          ;complain reopen <id>        — reopen (admin only)
+          ;complain list resolved      — view resolved complaints
         """
         if text is None:
             await ctx.send_help(ctx.command)
@@ -72,9 +78,11 @@ class Complain(commands.Cog):
         ))
 
     @complain.command(brief='List complaints')
-    async def list(self, ctx):
-        """View all complaints for this server."""
-        complaints = cf_common.user_db.get_complaints(ctx.guild.id)
+    async def list(self, ctx, status: str = 'open'):
+        """View complaints: open (default), resolved, or all."""
+        if status not in ('open', 'resolved', 'all'):
+            raise commands.BadArgument('Status must be open, resolved, or all.')
+        complaints = cf_common.user_db.get_complaints(ctx.guild.id, status)
         if not complaints:
             await ctx.send(embed=discord_common.embed_neutral('No complaints filed.'))
             return
@@ -86,7 +94,10 @@ class Complain(commands.Cog):
             header = f'**#{c.id}** by <@{c.user_id}> ({ts})'
             if link:
                 header += f' — [context]({link})'
-            lines.append(f'{header}\n{c.text}')
+            detail = f'{header}\n{c.text}'
+            if c.resolved_at is not None:
+                detail += f'\n**Resolved:** {c.resolution}\n[Commit]({c.commit_url})'
+            lines.append(detail)
 
         # Paginate in chunks to stay under 4096 embed limit
         pages = []
@@ -106,6 +117,35 @@ class Complain(commands.Cog):
             title = 'Complaints' if len(pages) == 1 else f'Complaints (page {i+1}/{len(pages)})'
             embed = discord.Embed(title=title, description=page, color=0xffaa10)
             await ctx.send(embed=embed)
+
+    @complain.command(brief='Resolve a complaint and notify its author')
+    @commands.check(require_complaint_admin)
+    async def resolve(self, ctx, complaint_id: int, commit_url: str, *, resolution: str):
+        """Resolve with a GitHub commit: ;complain resolve <id> <commit_url> <summary>."""
+        require_complaint_admin(ctx)
+        try:
+            row = await self.service.resolve(ctx.guild.id, complaint_id, ctx.author.id,
+                                             resolution, commit_url)
+        except ComplaintError as exc:
+            await ctx.send(embed=discord_common.embed_alert(str(exc)))
+            return
+        notice = ('Author notified.' if row.notification_status == 'sent' else
+                  'Author notification failed; delivery will be retried. '
+                  'Repeat this command to retry manually.')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Complaint #{row.id} resolved. {notice}'))
+
+    @complain.command(brief='Reopen a resolved complaint')
+    @commands.check(require_complaint_admin)
+    async def reopen(self, ctx, complaint_id: int):
+        """Reopen a complaint while retaining its resolution audit history."""
+        require_complaint_admin(ctx)
+        try:
+            await self.service.reopen(ctx.guild.id, complaint_id, ctx.author.id)
+        except ComplaintError as exc:
+            await ctx.send(embed=discord_common.embed_alert(str(exc)))
+            return
+        await ctx.send(embed=discord_common.embed_success(f'Complaint #{complaint_id} reopened.'))
 
     @complain.command(brief='Withdraw your own complaint')
     async def withdraw(self, ctx, complaint_id: int):

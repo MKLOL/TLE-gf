@@ -28,6 +28,8 @@ class FakeComplainDb:
             CREATE INDEX IF NOT EXISTS idx_complaint_guild
                 ON complaint (guild_id, created_at DESC)
         ''')
+        from tle.util.db.complaint_workflow_db import upgrade_complaint_schema
+        upgrade_complaint_schema(self.conn)
         self.conn.commit()
 
     add_complaint = UserDbConn.add_complaint
