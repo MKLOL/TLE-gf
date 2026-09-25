@@ -8,6 +8,7 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util import paginator
 from tle.util.complaints import ComplaintError, ComplaintService
 from tle.cogs._complaint_tokens import ComplaintTokenMixin, require_complaint_admin
 
@@ -16,6 +17,41 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT = 5
 _RATE_WINDOW = 6 * 3600  # 6 hours in seconds
 _MAX_COMPLAINT_LENGTH = 500
+_EMBED_DESCRIPTION_LIMIT = 3900  # headroom under Discord's 4096
+_PAGINATE_WAIT = 300
+
+
+def _complaint_entry(complaint):
+    """Render one complaint as a block of embed description text."""
+    ts = datetime.datetime.fromtimestamp(
+        complaint.created_at).strftime('%Y-%m-%d %H:%M')
+    link = getattr(complaint, 'message_link', None)
+    header = f'**#{complaint.id}** by <@{complaint.user_id}> ({ts})'
+    if link:
+        header += f' — [context]({link})'
+    detail = f'{header}\n{complaint.text}'
+    if complaint.resolved_at is not None:
+        detail += (f'\n**Resolved:** {complaint.resolution}'
+                   f'\n[Commit]({complaint.commit_url})')
+    return detail
+
+
+def _complaint_pages(complaints):
+    """Group rendered complaints into embed-sized page descriptions.
+
+    An entry never straddles two pages, so a page may fall well short of the
+    limit rather than split a complaint mid-way.
+    """
+    pages, current, length = [], [], 0
+    for entry in (_complaint_entry(c) for c in complaints):
+        if current and length + len(entry) + 2 > _EMBED_DESCRIPTION_LIMIT:
+            pages.append('\n\n'.join(current))
+            current, length = [], 0
+        current.append(entry)
+        length += len(entry) + 2
+    if current:
+        pages.append('\n\n'.join(current))
+    return pages
 
 
 class Complain(ComplaintTokenMixin, commands.Cog):
@@ -87,36 +123,14 @@ class Complain(ComplaintTokenMixin, commands.Cog):
             await ctx.send(embed=discord_common.embed_neutral('No complaints filed.'))
             return
 
-        lines = []
-        for c in complaints:
-            ts = datetime.datetime.fromtimestamp(c.created_at).strftime('%Y-%m-%d %H:%M')
-            link = getattr(c, 'message_link', None)
-            header = f'**#{c.id}** by <@{c.user_id}> ({ts})'
-            if link:
-                header += f' — [context]({link})'
-            detail = f'{header}\n{c.text}'
-            if c.resolved_at is not None:
-                detail += f'\n**Resolved:** {c.resolution}\n[Commit]({c.commit_url})'
-            lines.append(detail)
-
-        # Paginate in chunks to stay under 4096 embed limit
-        pages = []
-        current = []
-        length = 0
-        for line in lines:
-            if length + len(line) + 2 > 3900 and current:
-                pages.append('\n\n'.join(current))
-                current = []
-                length = 0
-            current.append(line)
-            length += len(line) + 2
-        if current:
-            pages.append('\n\n'.join(current))
-
-        for i, page in enumerate(pages):
-            title = 'Complaints' if len(pages) == 1 else f'Complaints (page {i+1}/{len(pages)})'
-            embed = discord.Embed(title=title, description=page, color=0xffaa10)
-            await ctx.send(embed=embed)
+        pages = [
+            (None, discord.Embed(title='Complaints', description=description,
+                                 color=0xffaa10))
+            for description in _complaint_pages(complaints)
+        ]
+        paginator.paginate(self.bot, ctx.channel, pages,
+                           wait_time=_PAGINATE_WAIT, set_pagenum_footers=True,
+                           author_id=ctx.author.id)
 
     @complain.command(brief='Resolve a complaint and notify its author')
     @commands.check(require_complaint_admin)
