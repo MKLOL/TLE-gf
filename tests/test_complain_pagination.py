@@ -54,6 +54,31 @@ class TestComplaintPages:
     def test_empty_input_yields_no_pages(self):
         assert _complaint_pages([]) == []
 
+    def test_the_largest_possible_entry_still_fits_one_page(self):
+        """The chunker never splits an entry, so a single entry must fit.
+
+        Bounds come from the API contract: 500-char report
+        (``_MAX_COMPLAINT_LENGTH``), 1500-char resolution, 300-char commit
+        URL. If any of those caps is raised past this headroom, ;complain list
+        starts failing with an embed-too-long error inside a background task,
+        where nobody sees it — so the invariant is pinned here.
+        """
+        worst = SimpleNamespace(
+            id=9_999_999, user_id='1' * 19, text='x' * 500,
+            created_at=1_700_000_000.0,
+            message_link='https://discord.com/channels/' + '9' * 60,
+            resolved_at=1_700_000_100.0, resolution='y' * 1500,
+            commit_url='https://github.com/MKLOL/TLE-gf/commit/' + 'a' * 40)
+        entry = _complaint_entry(worst)
+        assert len(entry) < _EMBED_DESCRIPTION_LIMIT
+        assert len(_complaint_pages([worst])) == 1
+
+    def test_resolved_entries_are_packed_within_the_limit(self):
+        rows = [_row(i, 'x' * 500, resolved=True) for i in range(20)]
+        pages = _complaint_pages(rows)
+        assert len(pages) > 1
+        assert all(len(page) <= _EMBED_DESCRIPTION_LIMIT for page in pages)
+
 
 class _Db:
     def __init__(self, rows):
