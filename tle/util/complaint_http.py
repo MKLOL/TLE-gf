@@ -153,7 +153,7 @@ class ComplaintHttpServer:
     async def start(self):
         if self.runner is not None or os.environ.get('COMPLAINT_API_ENABLED', '1') == '0':
             return
-        host = os.environ.get('COMPLAINT_API_HOST', '127.0.0.1')
+        host = os.environ.get('COMPLAINT_API_HOST', '0.0.0.0')
         port = positive_int(os.environ.get('COMPLAINT_API_PORT', '8080'), 'port', 65535)
         runner = web.AppRunner(self.create_app(), access_log=None, shutdown_timeout=30)
         try:

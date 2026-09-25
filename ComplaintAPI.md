@@ -1,6 +1,7 @@
 # Complaint automation
 
-The bot starts a small HTTP API on `127.0.0.1:8080` after database initialization.
+The bot starts a small HTTP API on `0.0.0.0:8080` after database initialization,
+accepting remote connections on port 8080. Every route requires a bearer token.
 It supports reading, resolving, and reopening complaints in the token's server.
 It does not expose SQL, other tables, shell commands, or GitHub credentials.
 Your automation makes/tests/commits the fix in its checkout, pushes the commit,
@@ -90,39 +91,43 @@ unavailable or API busy. Check `notification_status` even after HTTP 200.
 
 ## Connecting automation
 
-Use an SSH tunnel from your workstation to the bot host:
+Connect directly to the bot's public IP on port 8080. If an existing environment
+file sets `COMPLAINT_API_HOST=127.0.0.1`, change it to `0.0.0.0` and restart the
+bot. The host/provider firewall must allow inbound TCP port 8080.
 
 ```sh
-ssh -N -L 8080:127.0.0.1:8080 user@bot-host
+export COMPLAINT_API_URL="http://51.81.82.26:8080"
 ```
 
 Set `COMPLAINT_TOKEN` privately in your client environment, then query:
 
 ```sh
 curl --fail-with-body -H "Authorization: Bearer ${COMPLAINT_TOKEN}" \
-  'http://127.0.0.1:8080/v1/complaints?status=open'
+  "${COMPLAINT_API_URL}/v1/complaints?status=open"
 
 curl --fail-with-body -X POST \
   -H "Authorization: Bearer ${COMPLAINT_TOKEN}" \
   -H 'Content-Type: application/json' \
   --data-binary @resolution.json \
-  http://127.0.0.1:8080/v1/complaints/123/resolve
+  "${COMPLAINT_API_URL}/v1/complaints/123/resolve"
 ```
 
 Write the body shown above to `resolution.json`. Keep the token out of source
-control and request URLs. For a remote endpoint, terminate HTTPS at a reverse
-proxy and forward to loopback; do not expose a bearer token over public HTTP.
+control and request URLs. HTTP does not encrypt the bearer token or complaint
+data in transit. To add transport encryption, terminate HTTPS at a reverse proxy
+and point `COMPLAINT_API_URL` at its HTTPS hostname. Set the bot's listening
+interface to `127.0.0.1` if only a local proxy should reach the API.
 
 Environment settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `COMPLAINT_API_ENABLED` | `1` | Set `0` to disable HTTP; Discord resolution/retries remain active. |
-| `COMPLAINT_API_HOST` | `127.0.0.1` | Listening interface. |
+| `COMPLAINT_API_HOST` | `0.0.0.0` | Listening interface; accepts remote IPv4 connections. |
 | `COMPLAINT_API_PORT` | `8080` | TCP port, 1–65535. |
 
 Docker's existing host-network setup uses the same defaults. With bridge
-networking, bind `0.0.0.0` inside the container and publish to host loopback only,
-for example `-p 127.0.0.1:8080:8080`. `--nodb` disables HTTP and notification
+networking, publish the container's API port with `-p 8080:8080`.
+`--nodb` disables HTTP and notification
 workers. Shutdown closes the HTTP listener and cancels the notification worker.
 The server uses aiohttp, already installed as a discord.py dependency.
