@@ -23,6 +23,7 @@ from tle.cogs._greatday_helpers import (
     _BACKFILL_STOP_GAP_SECONDS,
     _GREATDAY_RE as _GREATDAY_RE,
     _MENTION_RE as _MENTION_RE,
+    _format_mention_list,
     _format_pick_time,
     _parse_greatday_message,
     _personal_rank_line,
@@ -134,7 +135,7 @@ class GreatDay(
         if not user_ids:
             return False
         picked = random.sample(user_ids, min(_PICK_COUNT, len(user_ids)))
-        mentions = ' '.join(f'<@{uid}>' for uid in picked)
+        mentions = _format_mention_list(picked)
         verb = 'is' if len(picked) == 1 else 'are'
         msg = await channel.send(f'I hope {mentions} {verb} having a great day!')
         # Record picks best-effort. Once the message is sent, the day is

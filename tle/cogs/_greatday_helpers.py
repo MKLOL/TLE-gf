@@ -51,3 +51,18 @@ def _format_pick_time(picked_at):
     """Render a stored timestamp in Discord's absolute and relative forms."""
     timestamp = int(picked_at)
     return f'<t:{timestamp}:F> (<t:{timestamp}:R>)'
+
+
+def _format_mention_list(user_ids):
+    """Join mentions with proper list grammar for the broadcast message.
+
+    One name stands alone, two are joined by 'and', and three or more take
+    the serial comma: '<@1>, <@2>, and <@3>'.  ``_GREATDAY_RE`` matches any
+    filler between 'I hope' and the suffix and ``_MENTION_RE`` ignores
+    separators, so backfill keeps parsing both this and the older
+    space-separated posts.
+    """
+    mentions = [f'<@{uid}>' for uid in user_ids]
+    if len(mentions) <= 2:
+        return ' and '.join(mentions)
+    return f'{", ".join(mentions[:-1])}, and {mentions[-1]}'

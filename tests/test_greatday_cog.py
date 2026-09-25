@@ -268,3 +268,62 @@ class TestBanIntegration:
         msg = channel.sent[0]
         assert f'<@{USER_A}>' not in msg
         assert f'<@{USER_B}>' in msg
+
+
+class TestBroadcastGrammar:
+    """Complaint #213 — commas between names and 'and' before the last."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_one_name_stands_alone(self):
+        from tle.cogs._greatday_helpers import _format_mention_list
+        assert _format_mention_list(['1']) == '<@1>'
+
+    def test_two_names_take_and_without_comma(self):
+        from tle.cogs._greatday_helpers import _format_mention_list
+        assert _format_mention_list(['1', '2']) == '<@1> and <@2>'
+
+    def test_three_or_more_take_the_serial_comma(self):
+        from tle.cogs._greatday_helpers import _format_mention_list
+        assert (_format_mention_list(['1', '2', '3'])
+                == '<@1>, <@2>, and <@3>')
+        assert (_format_mention_list(['1', '2', '3', '4'])
+                == '<@1>, <@2>, <@3>, and <@4>')
+
+    def test_sent_message_is_punctuated(self, db, monkeypatch):
+        from tle.cogs.greatday import GreatDay
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        for user in (USER_A, USER_B, USER_C):
+            db.greatday_signup(GUILD, user)
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+        assert self._run(GreatDay(bot=None)._send_greatday(guild)) is True
+        msg = channel.sent[0]
+        assert '>, <@' in msg
+        assert ', and <@' in msg
+        assert msg.endswith(' are having a great day!')
+
+    def test_punctuated_message_still_backfills(self, db, monkeypatch):
+        """The backfill parser keys on the surrounding sentence, so the new
+        separators must not orphan a day's picks from its history."""
+        from tle.cogs._greatday_helpers import _parse_greatday_message
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        db.set_guild_config(GUILD, 'greatday_channel', '999')
+        for user in (USER_A, USER_B, USER_C):
+            db.greatday_signup(GUILD, user)
+
+        channel = _FakeChannel()
+        guild = _FakeGuild(int(GUILD), channel)
+        from tle.cogs.greatday import GreatDay
+        self._run(GreatDay(bot=None)._send_greatday(guild))
+
+        class _Msg:
+            def __init__(self, content):
+                self.content = content
+                self.author = type('A', (), {'id': 42})()
+
+        parsed = _parse_greatday_message(_Msg(channel.sent[0]), 42)
+        assert sorted(parsed) == sorted([USER_A, USER_B, USER_C])
