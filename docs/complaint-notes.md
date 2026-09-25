@@ -98,6 +98,19 @@ Unrelated observation in the same function: `solved` is keyed on
 `(name, contest start time)` identity (`SubFilter.filter_solved`). It
 over-matches distinct problems that share a name.
 
+## Shipped
+
+| # | Complaint | Commit |
+|---|---|---|
+| 213 | comma + "and" in Great Day messages | `1014b3cf0c1bc4f79b829929a6e8c18bee9ab23e` |
+| 278 | paginate the complaint list | `8689901c2be65516ce382fdb2ef81b05b8dc079b` |
+| 279 | problems solved by one account but not another (`;diff`) | `d997b6fc1dd51a213a75dec6913cc271eeb2bf62` |
+
+Also built alongside, not from a complaint: `;complain manage` (remove buttons
+next to each complaint) and complaint context capture — the five messages
+before a report are stored and served on the API's detail route, so automation
+can act on reports like "fix graphs" that say nothing on their own.
+
 ## Close list (already implemented before the complaint was reviewed)
 
 All four verified in source; all four commits are on `origin/master`. Closing
