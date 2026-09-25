@@ -16,6 +16,7 @@ def upgrade_complaint_schema(conn):
         'commit_url': 'TEXT', 'notification_status': 'TEXT',
         'notification_link': 'TEXT', 'notification_attempt_at': 'REAL',
         'notification_attempts': 'INTEGER NOT NULL DEFAULT 0',
+        'context': 'TEXT',
     }
     for name, definition in additions.items():
         if name not in columns:

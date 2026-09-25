@@ -10,7 +10,9 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
 from tle.util.complaints import ComplaintError, ComplaintService
+from tle.cogs._complaint_context import capture as capture_complaint_context
 from tle.cogs._complaint_tokens import ComplaintTokenMixin, require_complaint_admin
+from tle.cogs._complaint_manage import ComplaintManageView
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +106,9 @@ class Complain(ComplaintTokenMixin, commands.Cog):
             return
 
         message_link = getattr(ctx.message, 'jump_url', None)
+        context = await capture_complaint_context(ctx.channel, ctx.message)
         complaint_id = cf_common.user_db.add_complaint(
-            ctx.guild.id, author.id, text, message_link
+            ctx.guild.id, author.id, text, message_link, context
         )
         logger.info(f'Complaint #{complaint_id} added by {author.id} in guild {ctx.guild.id}')
         await ctx.send(embed=discord_common.embed_success(
@@ -131,6 +134,31 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         paginator.paginate(self.bot, ctx.channel, pages,
                            wait_time=_PAGINATE_WAIT, set_pagenum_footers=True,
                            author_id=ctx.author.id)
+
+    @complain.command(brief='Remove complaints with buttons')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def manage(self, ctx, status: str = 'open'):
+        """Browse complaints with a remove button next to each one.
+
+        Usage:
+          ;complain manage [open|resolved|all]
+
+        Red buttons remove the complaint whose ID they carry. Only the
+        moderator who ran the command can press them, and the buttons stop
+        working after five minutes.
+        """
+        if status not in ('open', 'resolved', 'all'):
+            raise commands.BadArgument('Status must be open, resolved, or all.')
+        complaints = cf_common.user_db.get_complaints(ctx.guild.id, status)
+        if not complaints:
+            await ctx.send(embed=discord_common.embed_neutral('No complaints filed.'))
+            return
+
+        guild_id = ctx.guild.id
+        view = ComplaintManageView(
+            complaints, guild_id=guild_id, author_id=ctx.author.id,
+            delete=lambda ids: cf_common.user_db.delete_complaints(ids, guild_id))
+        view.message = await ctx.send(embed=view.embed(), view=view)
 
     @complain.command(brief='Resolve a complaint and notify its author')
     @commands.check(require_complaint_admin)

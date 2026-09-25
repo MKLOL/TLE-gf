@@ -1,6 +1,7 @@
 """Shared complaint workflow for Discord commands and the HTTP API."""
 import asyncio
 import contextlib
+import json
 import logging
 import re
 
@@ -36,12 +37,27 @@ def validate_resolution(resolution, commit_url):
     return resolution.strip(), commit_url
 
 
-def complaint_json(row):
+def load_context(raw):
+    """Parse a stored complaint transcript, tolerating anything unexpected."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def complaint_json(row, *, include_context=False):
     fields = ('id', 'guild_id', 'user_id', 'text', 'created_at', 'message_link',
               'resolved_at', 'resolved_by', 'resolution', 'commit_url',
               'notification_status', 'notification_link', 'notification_attempts')
     result = {field: getattr(row, field) for field in fields}
     result['status'] = 'resolved' if row.resolved_at is not None else 'open'
+    if include_context:
+        # Detail only: a 100-complaint listing would otherwise carry a
+        # hundred transcripts.
+        result['context'] = load_context(getattr(row, 'context', None))
     return result
 
 

@@ -78,3 +78,17 @@ def upgrade_1_59_0(db):
     upgrade_complaint_schema(db)
     create_api_token_schema(db)
     db.commit()
+
+
+@registry.register('1.60.0', 'Store the messages preceding a complaint')
+def upgrade_1_60_0(db):
+    """Add ``complaint.context``.
+
+    ``upgrade_complaint_schema`` only runs for fresh databases and at 1.59.0,
+    so an existing database needs this to pick up the new column.
+    """
+    from tle.util.db.complaint_workflow_db import upgrade_complaint_schema
+    upgrade_complaint_schema(db)
+    db.commit()
+    logger.info('1.60.0: Complaint context column ready')
+

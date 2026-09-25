@@ -80,6 +80,25 @@ pushed. Both mutation routes return `{"complaint": {...}}`, including `status`,
 `resolution`, `commit_url`, `resolved_at`, `resolved_by`, `notification_status`,
 `notification_link`, and `notification_attempts`.
 
+### Complaint context
+
+`GET /v1/complaints/123` also returns `context`: the up to five messages sent
+in the channel immediately before the report, oldest first. Listings omit it,
+so fetch the detail route for a complaint you intend to act on.
+
+Each entry has `id`, `author_id`, `author` (display name at capture time),
+`bot`, `at` (epoch seconds) and `text`. `text` includes embed titles, bodies,
+fields and attachment names, because the bot answers in embeds and a
+transcript of `content` alone would be empty for exactly the messages a
+complaint about the bot refers to. Individual messages are truncated to 400
+characters and the transcript to roughly 4 KB, dropping the oldest entries
+first.
+
+`context` is `[]` when nothing was captured — an empty channel, or the bot
+lacking Read Message History there. Capture is best-effort: a complaint is
+never rejected because its context could not be read, and complaints filed
+before this feature have no context.
+
 An identical resolve is idempotent. A different resolution of an already
 resolved complaint returns 409; reopen it first. Repeated reopen is idempotent.
 Audit events identify the acting admin and token ID without storing token material.

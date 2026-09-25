@@ -115,7 +115,7 @@ class ComplaintHttpServer:
         token, complaint_id = self._target(request)
         row = self.service.get(token.guild_id, complaint_id)
         return web.json_response({
-            'complaint': complaint_json(row),
+            'complaint': complaint_json(row, include_context=True),
             'events': [event._asdict() for event in self.service.db.get_complaint_events(
                 complaint_id, token.guild_id)],
         })

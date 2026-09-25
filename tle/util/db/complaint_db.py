@@ -36,13 +36,19 @@ class ComplaintDbMixin(ComplaintWorkflowDbMixin):
         if not existed:
             upgrade_complaint_schema(self.conn)
 
-    def add_complaint(self, guild_id, user_id, text, message_link=None):
-        """Insert a complaint and return its id."""
+    def add_complaint(self, guild_id, user_id, text, message_link=None,
+                      context=None):
+        """Insert a complaint and return its id.
+
+        ``context`` is the JSON transcript of the messages preceding the
+        report, or None when none could be read.
+        """
         guild_id, user_id = str(guild_id), str(user_id)
         cur = self.conn.execute(
-            'INSERT INTO complaint (guild_id, user_id, text, created_at, message_link) '
-            'VALUES (?, ?, ?, ?, ?)',
-            (guild_id, user_id, text, time.time(), message_link)
+            'INSERT INTO complaint '
+            '(guild_id, user_id, text, created_at, message_link, context) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (guild_id, user_id, text, time.time(), message_link, context)
         )
         self.conn.commit()
         return cur.lastrowid
