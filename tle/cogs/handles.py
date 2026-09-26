@@ -43,6 +43,20 @@ from tle.cogs._handles_gudgitters import GudgittersMixin
 from tle.cogs._handles_rankup import RankUpMixin
 
 
+def _member_cache_complete(guild):
+    """Whether every member of the guild is in the bot's cache.
+
+    ``Guild.chunked`` is discord.py's own answer; the count comparison is a
+    fallback for objects that do not carry it. Nothing that marks a member
+    absent may run while this is False.
+    """
+    chunked = getattr(guild, 'chunked', None)
+    if chunked is not None:
+        return bool(chunked)
+    member_count = getattr(guild, 'member_count', None)
+    return member_count is None or len(guild.members) >= member_count
+
+
 class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -79,11 +93,24 @@ class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
     @tasks.task_spec(name='SetExUsersInactive',
                      waiter=tasks.Waiter.fixed_delay(_UPDATE_HANDLE_STATUS_INTERVAL))
     async def _set_ex_users_inactive_task(self, _):
+        await self._sweep_member_status()
+
+    async def _sweep_member_status(self):
         # To set users inactive in case the bot was dead when they left —
         # and active again in case it was dead when they came back, which
         # otherwise left them out of every rank update and role sync.
         to_set_inactive = []
         for guild in self.bot.guilds:
+            # "Not in the member cache" only means "not in the server" when
+            # the cache is complete. After a reconnect the guild is re-chunked
+            # and, for a while, most members are simply not loaded yet; a
+            # sweep in that window flagged present members inactive by the
+            # hundred and nothing ever flagged them back.
+            if not _member_cache_complete(guild):
+                self.logger.warning('Skipping inactive sweep for guild %s: member cache '
+                                    'holds %d of %s members', guild.id,
+                                    len(guild.members), guild.member_count)
+                continue
             user_id_handle_pairs = cf_common.user_db.get_handles_for_guild(guild.id)
             to_set_inactive += [(guild.id, user_id) for user_id, _ in user_id_handle_pairs
                                 if guild.get_member(user_id) is None]
