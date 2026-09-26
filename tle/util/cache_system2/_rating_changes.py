@@ -27,6 +27,7 @@ class RatingChangesCache:
         self.handle_rating_cache = {}
         self.logger = logging.getLogger(self.__class__.__name__)
         self._to_verify = {}  # contest id -> (contest, ticks remaining)
+        self._seen_recent_contests = set()
 
     async def run(self):
         await self._refresh_handle_cache()
@@ -77,12 +78,22 @@ class RatingChangesCache:
         # A contest also has empty list if it is unrated. We assume that is the case if
         # _RATED_DELAY time has passed since the contest end.
 
-        to_monitor = [
+        recent = [
             contest for contest in
             self.cache_master.contest_cache.contests_by_phase['FINISHED']
-            if self.is_newly_finished_without_rating_changes(contest)
+            if time.time() - contest.end_time < self._RATED_DELAY
                and not _is_blacklisted(contest)
         ]
+        to_monitor = []
+        for contest in recent:
+            if not self.has_rating_changes_saved(contest.id):
+                to_monitor.append(contest)
+            elif contest.id not in self._seen_recent_contests:
+                # A restart loses the in-memory verification queue. Recheck
+                # recent saved contests once, including contests absent or
+                # not yet FINISHED in the first disk snapshot we received.
+                self._to_verify.setdefault(contest.id, (contest, self._VERIFY_AFTER_TICKS))
+            self._seen_recent_contests.add(contest.id)
 
         # Refresh the work list without cancelling a fetch in flight. Once
         # changes are saved, verification is still work even though the

@@ -161,3 +161,50 @@ def test_failed_memory_refresh_is_retried_without_republishing(env, initial_fetc
     assert cache.handle_rating_cache == {'alice': 1100, 'bob': 1100}
     assert cache._to_verify == {}
     dispatch.assert_called_once()
+
+
+@pytest.mark.parametrize('early_snapshot', ['none', 'empty', 'stale'])
+def test_restart_rechecks_recent_saved_contests_once(env, early_snapshot):
+    module, cache, contest, db, monitor, api, dispatch = env
+    db.save_rating_changes([_change('alice')])
+    api.return_value = [_change('alice'), _change('bob')]
+    monitor.running = False
+    phases = cache.cache_master.contest_cache.contests_by_phase
+
+    async def run():
+        # An empty or outdated disk snapshot can arrive before the current
+        # contest list. It must not consume the recovery opportunity.
+        if early_snapshot != 'none':
+            old = SimpleNamespace(id=2, phase='FINISHED',
+                                  end_time=contest.end_time - cache._RATED_DELAY - 1)
+            phases['FINISHED'] = [old] if early_snapshot == 'stale' else []
+            db.save_rating_changes([_change('old', cid=2)])
+            await module.RatingChangesCache._update_task._func(cache, None)
+            assert cache._to_verify == {}
+        phases['FINISHED'] = [contest]
+        await module.RatingChangesCache._update_task._func(cache, None)
+        monitor.start.assert_called_once()
+        assert set(cache._to_verify) == {1}
+        await module.RatingChangesCache._monitor_task._func(cache, None)
+        assert cache._to_verify == {}
+        # Later refreshes do not turn verification into perpetual polling.
+        await module.RatingChangesCache._update_task._func(cache, None)
+        assert cache._to_verify == {}
+
+    asyncio.run(run())
+    assert {change.handle for change in db.get_rating_changes_for_contest(1)} == {'alice', 'bob'}
+    assert dispatch.call_args.kwargs['rating_changes'] == [_change('bob')]
+    dispatch.assert_called_once()
+
+
+def test_restart_does_not_recheck_old_or_blacklisted_contests(env):
+    module, cache, contest, db, monitor, _, _ = env
+    old = SimpleNamespace(id=2, phase='FINISHED',
+                          end_time=contest.end_time - cache._RATED_DELAY - 1)
+    blacklisted = SimpleNamespace(id=1308, phase='FINISHED', end_time=contest.end_time)
+    db.save_rating_changes([_change('old', cid=2), _change('ignored', cid=1308)])
+    cache.cache_master.contest_cache.contests_by_phase['FINISHED'] = [old, blacklisted]
+    monitor.running = False
+    asyncio.run(module.RatingChangesCache._update_task._func(cache, None))
+    assert cache._to_verify == {}
+    monitor.start.assert_not_called()
