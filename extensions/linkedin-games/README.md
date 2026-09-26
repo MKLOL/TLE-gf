@@ -6,6 +6,9 @@ API routes, and adding games.
 
 No build step or third-party JavaScript dependencies are required.
 
+For Chrome Web Store distribution, see the [draft publishing materials](../../docs/chrome-web-store/README.md).
+Run `python3 extra/package_games_extension.py` to create a minimal upload ZIP.
+
 - `manifest.json`: Manifest V3; active-tab reads and optional server access.
 - `options.*`, `api.js`: local token setup and authenticated server requests.
 - `leaderboard.js`, `extract.js`: isolated, credential-free page extraction.

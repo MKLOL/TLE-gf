@@ -1,9 +1,15 @@
 {
   "manifest_version": 3,
   "name": "TLE Games",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Post your Daily Akari and LinkedIn scores, and import leaderboards as a moderator.",
   "minimum_chrome_version": "102",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",
