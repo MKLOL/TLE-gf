@@ -84,15 +84,12 @@ class RatingChangesCache:
                and not _is_blacklisted(contest)
         ]
 
-        cur_ids = {contest.id for contest in self.monitored_contests}
-        new_ids = {contest.id for contest in to_monitor}
-        if new_ids != cur_ids:
-            await self._monitor_task.stop()
-            if to_monitor:
-                self.monitored_contests = to_monitor
-                self._monitor_task.start()
-            else:
-                self.monitored_contests = []
+        # Refresh the work list without cancelling a fetch in flight. Once
+        # changes are saved, verification is still work even though the
+        # contest no longer belongs in to_monitor.
+        self.monitored_contests = to_monitor
+        if (to_monitor or self._to_verify) and not self._monitor_task.running:
+            self._monitor_task.start()
 
     @tasks.task_spec(name='RatingChangesCacheUpdate.MonitorNewlyFinishedContests',
                      waiter=tasks.Waiter.fixed_delay(_RELOAD_DELAY))
@@ -128,24 +125,31 @@ class RatingChangesCache:
         """
         due = []
         for contest_id, (contest, ticks) in list(self._to_verify.items()):
-            if ticks > 0:
+            if ticks > 1:
                 self._to_verify[contest_id] = (contest, ticks - 1)
             else:
                 due.append(contest)
-                del self._to_verify[contest_id]
         for contest, fetched in await self._fetch(due):
             saved = self.cache_master.conn.get_rating_changes_for_contest(contest.id)
             new, changed = late_rating_changes(saved, fetched)
             if not new and not changed:
+                self._to_verify.pop(contest.id, None)
                 self.logger.info('Verified rating changes for contest %s: complete', contest.id)
                 continue
-            await self._save_changes([(contest, new + changed)])
+            # Keep members absent from a still-partial response, and replace
+            # casing variants atomically instead of inserting duplicate rows.
+            merged = {change.handle.lower(): change for change in saved}
+            merged.update((change.handle.lower(), change) for change in fetched)
+            await self._save_changes([(contest, list(merged.values()))],
+                                     replace_contest_id=contest.id)
             self.logger.warning('Contest %s: first rating fetch was incomplete — %d missing, '
                                 '%d recalculated; publishing the late changes',
                                 contest.id, len(new), len(changed))
-            if new:
-                cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
-                                             rating_changes=new)
+            cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
+                                         rating_changes=new + changed)
+            # Failed/empty fetches and cancellation leave the verification
+            # queued for the next monitor tick.
+            self._to_verify.pop(contest.id, None)
 
     async def _fetch(self, contests):
         all_changes = []
@@ -160,11 +164,12 @@ class RatingChangesCache:
                 pass
         return all_changes
 
-    async def _save_changes(self, contest_changes_pairs):
+    async def _save_changes(self, contest_changes_pairs, *, replace_contest_id=None):
         flattened = [change for _, changes in contest_changes_pairs for change in changes]
         if not flattened:
             return
-        rc = self.cache_master.conn.save_rating_changes(flattened)
+        rc = self.cache_master.conn.save_rating_changes(
+            flattened, replace_contest_id=replace_contest_id)
         self.logger.info(f'Saved {rc} changes to database.')
         await self._refresh_handle_cache()
 

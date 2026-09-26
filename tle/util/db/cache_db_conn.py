@@ -156,7 +156,7 @@ class CacheDbConn:
         res = self.conn.execute(query).fetchall()
         return list(map(self._unsquish_tags, res))
 
-    def save_rating_changes(self, changes):
+    def save_rating_changes(self, changes, *, replace_contest_id=None):
         change_tuples = [(change.contestId,
                           change.handle,
                           change.rank,
@@ -166,8 +166,11 @@ class CacheDbConn:
         query = ('INSERT OR REPLACE INTO rating_change '
                  '(contest_id, handle, rank, rating_update_time, old_rating, new_rating) '
                  'VALUES (?, ?, ?, ?, ?, ?)')
-        rc = self.conn.executemany(query, change_tuples).rowcount
-        self.conn.commit()
+        with self.conn:
+            if replace_contest_id is not None:
+                self.conn.execute('DELETE FROM rating_change WHERE contest_id = ?',
+                                  (replace_contest_id,))
+            rc = self.conn.executemany(query, change_tuples).rowcount
         return rc
 
     def clear_rating_changes(self, contest_id=None):
