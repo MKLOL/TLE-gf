@@ -125,4 +125,39 @@ def test_cancelling_memory_refresh_does_not_lose_saved_announcements(env, initia
     assert {change.handle for change in db.get_rating_changes_for_contest(1)} == {'alice', 'bob'}
     assert [change.handle for change in dispatch.call_args.kwargs['rating_changes']] == (
         ['alice', 'bob'] if initial_fetch else ['bob'])
-    assert (1 in cache._to_verify) is initial_fetch
+    assert 1 in cache._to_verify
+
+
+@pytest.mark.parametrize('initial_fetch', [True, False])
+@pytest.mark.parametrize('failure', [RuntimeError, asyncio.CancelledError])
+def test_failed_memory_refresh_is_retried_without_republishing(env, initial_fetch, failure):
+    module, cache, contest, db, _, api, dispatch = env
+    api.return_value = [_change('alice'), _change('bob')]
+    cache.handle_rating_cache = {'alice': 1000}
+    if initial_fetch:
+        cache.monitored_contests = [contest]
+    else:
+        db.save_rating_changes([_change('alice')])
+        cache._to_verify[1] = (contest, 1)
+
+    async def refresh():
+        if cache._refresh_handle_cache.await_count == 1:
+            raise failure()
+        cache.handle_rating_cache = {
+            change.handle: change.newRating
+            for change in db.get_rating_changes_for_contest(1)}
+
+    cache._refresh_handle_cache.side_effect = refresh
+
+    async def run():
+        with pytest.raises(failure):
+            await module.RatingChangesCache._monitor_task._func(cache, None)
+        assert cache.get_current_rating('alice') == 1000
+        assert len(db.get_rating_changes_for_contest(1)) == 2
+        dispatch.assert_called_once()
+        await module.RatingChangesCache._monitor_task._func(cache, None)
+
+    asyncio.run(run())
+    assert cache.handle_rating_cache == {'alice': 1100, 'bob': 1100}
+    assert cache._to_verify == {}
+    dispatch.assert_called_once()

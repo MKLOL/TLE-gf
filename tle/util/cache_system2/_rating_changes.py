@@ -135,6 +135,10 @@ class RatingChangesCache:
             saved = self.cache_master.conn.get_rating_changes_for_contest(contest.id)
             new, changed = late_rating_changes(saved, fetched)
             if not new and not changed:
+                # A prior save may have succeeded while refreshing the
+                # in-memory ratings failed. Keep verification pending until
+                # readers see the committed data, even with no new diff.
+                await self._refresh_handle_cache()
                 self._to_verify.pop(contest.id, None)
                 self.logger.info('Verified rating changes for contest %s: complete', contest.id)
                 continue
@@ -151,8 +155,8 @@ class RatingChangesCache:
                                          rating_changes=new + changed)
             # Failed/empty fetches and cancellation leave the verification
             # queued for the next monitor tick.
-            self._to_verify.pop(contest.id, None)
             await self._refresh_handle_cache()
+            self._to_verify.pop(contest.id, None)
 
     async def _fetch(self, contests):
         all_changes = []
