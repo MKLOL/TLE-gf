@@ -164,7 +164,7 @@ should change.
 | 265 | One word: "formatting". |
 | 281 | The stored text ends "for context:" with the example missing. |
 | 294 | Denominator: boarded messages (small, totals already stored) or all messages sent (needs new counting). |
-| 299 | Reporter's example: `;vc nifeshe temporary1 catgirl` "gave a contest that wasn't fixed". Reproduced against the live CF API: average rating 2409 → Div. 1 markers; top pick is Round 1116 (Div. 1), 2026-08-09, which none of the three has a submission in. Unclear what "fixed" means — need the reporter to say which contest came back and what was wrong with it. |
+| 299 | Reporter's example: `;vc nifeshe temporary1 catgirl` "gave a contest that wasn't fixed". Approximated against the live CF API (average rating 2409 → Div. 1 markers, newest first; the script skipped the writer exclusion — that map only exists inside the running bot — and checked "has a submission in the contest" rather than the bot's problem-level rule that also excludes a parallel Div. 1/Div. 2 round): top pick is Round 1116 (Div. 1), 2026-08-09, which none of the three has a submission in. Unclear what "fixed" means — need the reporter to say which contest came back and what was wrong with it. |
 
 ## Not this repo
 

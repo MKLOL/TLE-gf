@@ -45,6 +45,10 @@ class HandleDbMixin:
             'title_photo         TEXT'
             ')'
         )
+        # canonical_handles filters on LOWER(handle); without this index that
+        # is a full scan of the user cache on every handle resolution.
+        self.conn.execute('CREATE INDEX IF NOT EXISTS idx_cf_user_cache_lower '
+                          'ON cf_user_cache (LOWER(handle))')
 
     def cache_cf_user(self, user):
         query = ('INSERT OR REPLACE INTO cf_user_cache '

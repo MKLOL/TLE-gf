@@ -338,29 +338,33 @@ class CodeforcesProblemsMixin:
                 parse_str = normalize(i.split('*'))
                 if len(parse_str) > 1:
                     try:
-                        handle_counts[parse_str[0]] = int(parse_str[1])
+                        count = int(parse_str[1])
                     except ValueError:
                         raise CodeforcesCogError("Can't multiply by non-integer")
                 else:
-                    handle_counts[parse_str[0]] = 1
+                    count = 1
+                # A handle named twice is that many members, not the last count.
+                handle_counts[parse_str[0]] = handle_counts.get(parse_str[0], 0) + count
                 parsed_handles.append(parse_str[0])
 
-            cf_handles = await cf_common.resolve_handles(ctx, self.converter, parsed_handles, mincnt=1, maxcnt=1000)
-            cf_handles = normalize(cf_handles)
-            cf_to_original = {a: b for a, b in zip(cf_handles, parsed_handles)}
-            original_to_cf = {a: b for a, b in zip(parsed_handles, cf_handles)}
-            users = await cf.user.info(handles=cf_handles)
-            user_strs = []
-            for a, b in handle_counts.items():
-                if b > 1:
-                    user_strs.append(f'{original_to_cf[a]}*{b}')
-                elif b == 1:
-                    user_strs.append(original_to_cf[a])
-                elif b <= 0:
-                    raise CodeforcesCogError('How can you have nonpositive members in team?')
-
-            user_str = ', '.join(user_strs)
-            ratings = [(rating(user), handle_counts[cf_to_original[user.handle.lower()]])
+            if len(handle_counts) > 1000:
+                raise CodeforcesCogError('Too many handles.')
+            if any(count <= 0 for count in handle_counts.values()):
+                raise CodeforcesCogError('How can you have nonpositive members in team?')
+            # Resolved one token at a time and merged by account: two tokens
+            # naming one account in different casings (or a handle and the
+            # Discord user registered to it) add up instead of mispairing.
+            counts_by_cf, display = {}, {}
+            for parsed, count in handle_counts.items():
+                resolved, = await cf_common.resolve_handles(
+                    ctx, self.converter, (parsed,), mincnt=1, maxcnt=1)
+                key = resolved.lower()
+                counts_by_cf[key] = counts_by_cf.get(key, 0) + count
+                display.setdefault(key, resolved)
+            users = await cf.user.info(handles=list(counts_by_cf))
+            user_str = ', '.join(f'{display[key]}*{count}' if count > 1 else display[key]
+                                 for key, count in counts_by_cf.items())
+            ratings = [(rating(user), counts_by_cf[user.handle.lower()])
                        for user in users if user.rating]
 
         if len(ratings) == 0:

@@ -176,8 +176,11 @@ class ResolveHandleError(commands.CommandError):
 
 
 class HandleCountOutOfBoundsError(ResolveHandleError):
-    def __init__(self, mincnt, maxcnt):
-        super().__init__(f'Number of handles must be between {mincnt} and {maxcnt}')
+    def __init__(self, mincnt, maxcnt, detail=None):
+        message = f'Number of handles must be between {mincnt} and {maxcnt}'
+        if detail:
+            message += f' ({detail})'
+        super().__init__(message)
 
 
 class FindMemberFailedError(ResolveHandleError):
@@ -209,14 +212,16 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
       -c<handle>  — Force raw Codeforces handle (skip Discord lookup)
       plain text  — Try Discord username → display name → raw CF handle
     """
-    handles = set(handles)
+    # Order-preserving: ;teamrate pairs multipliers with the handles it
+    # passed in, and a set would hand them back in hash-seed order.
+    handles = list(dict.fromkeys(handles))
     if default_to_all_server and not handles:
-        handles.add('+server')
+        handles.append('+server')
     if '+server' in handles:
         handles.remove('+server')
-        guild_handles = {handle for discord_id, handle
-                            in user_db.get_handles_for_guild(ctx.guild.id)}
-        handles.update(guild_handles)
+        guild_handles = sorted({handle for discord_id, handle
+                                in user_db.get_handles_for_guild(ctx.guild.id)})
+        handles.extend(handle for handle in guild_handles if handle not in handles)
     if len(handles) < mincnt or (maxcnt and maxcnt < len(handles)):
         raise HandleCountOutOfBoundsError(mincnt, maxcnt)
     resolved_handles = []
@@ -284,7 +289,9 @@ def _dedupe_handles(handles, mincnt, maxcnt):
         seen.add(key)
         unique.append(handle)
     if len(unique) < mincnt:
-        raise HandleCountOutOfBoundsError(mincnt, maxcnt)
+        raise HandleCountOutOfBoundsError(
+            mincnt, maxcnt,
+            f'{len(handles) - len(unique)} of them were the same handle spelled differently')
     return unique
 
 
