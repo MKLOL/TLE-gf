@@ -244,6 +244,15 @@ class TestAuthorizationAtPressTime:
                                       response=_Response())
         assert asyncio.run(view.interaction_check(interaction)) is True
 
+    def test_removal_is_attributed_to_the_moderator_who_pressed_it(self, caplog):
+        view = self._view_with_role_check()
+        interaction = SimpleNamespace(user=self._member('Moderator'),
+                                      response=_Response())
+        with caplog.at_level('INFO', logger='tle.cogs._complaint_manage'):
+            asyncio.run(view.remove(interaction, 1))
+        assert 'removed via manage by 7 in guild 1' in caplog.text
+        assert 'by 42' not in caplog.text
+
 
 class TestFailureHandling:
     def test_a_database_error_answers_the_interaction(self):

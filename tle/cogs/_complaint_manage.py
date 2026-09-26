@@ -206,7 +206,7 @@ class ComplaintManageView(discord.ui.View):
                                if c.id != complaint_id]
             self.notice = f'Removed **#{complaint_id}**.'
             logger.info('Complaint #%s removed via manage by %s in guild %s',
-                        complaint_id, self.author_id, self.guild_id)
+                        complaint_id, interaction.user.id, self.guild_id)
         else:
             # Someone else removed it first; drop it from the view anyway so
             # the button cannot linger on a row that no longer exists.
@@ -214,7 +214,7 @@ class ComplaintManageView(discord.ui.View):
                                if c.id != complaint_id]
             self.notice = f'**#{complaint_id}** was already gone.'
             logger.info('Complaint #%s already removed when %s pressed it '
-                        'in guild %s', complaint_id, self.author_id,
+                        'in guild %s', complaint_id, interaction.user.id,
                         self.guild_id)
         await self._redraw(interaction)
 
