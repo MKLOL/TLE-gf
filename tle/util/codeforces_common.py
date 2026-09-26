@@ -234,8 +234,11 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
         guild_handles = sorted({handle for discord_id, handle
                                 in user_db.get_handles_for_guild(ctx.guild.id)})
         seen = set(handles)
-        handles.extend(handle for handle in guild_handles if handle not in seen)
-    if len(handles) < mincnt or (maxcnt and maxcnt < len(handles)):
+        # Database values already are CF handles; a Discord name collision
+        # must not redirect one to another member's registered account.
+        handles.extend('-c' + handle for handle in guild_handles
+                       if '-c' + handle not in seen)
+    if len(handles) < mincnt:
         raise HandleCountOutOfBoundsError(mincnt, maxcnt)
     resolved_handles = []
     for handle in handles:
@@ -290,7 +293,8 @@ def _dedupe_handles(handles, mincnt, maxcnt):
     literally it slips past ``maxcnt`` and then compares a user with
     themselves under every spelling. Each survivor is spelled the way the CF
     user cache has it. Order is kept; the count check is repeated on the
-    result because the pre-resolution count only saw raw tokens.
+    result because the pre-resolution count only saw raw tokens. Limits apply
+    to unique accounts, including aliases and handles expanded by +server.
     """
     canonical = user_db.canonical_handles(handles)
     unique, seen = [], set()
@@ -306,6 +310,8 @@ def _dedupe_handles(handles, mincnt, maxcnt):
         raise HandleCountOutOfBoundsError(
             mincnt, maxcnt,
             f'{dropped} of them named an account already listed')
+    if maxcnt and len(unique) > maxcnt:
+        raise HandleCountOutOfBoundsError(mincnt, maxcnt)
     return unique
 
 

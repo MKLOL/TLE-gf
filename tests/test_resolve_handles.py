@@ -376,3 +376,27 @@ class TestServerWide:
             ctx, CONVERTER, ('bob_cf', '+server'), maxcnt=None))
         assert result == ['bob_cf', 'alice_cf', 'eve_cf']
 
+    def test_registered_handle_is_not_resolved_as_someone_elses_discord_name(self,
+                                                                          monkeypatch):
+        db = FakeUserDb({(100, '999'): 'bob', (200, '999'): 'tourist'})
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        result = run(cf_common.resolve_handles(
+            _make_ctx(), CONVERTER, ('+server',), maxcnt=None))
+        assert result == ['bob', 'tourist']
+
+    def test_explicit_discord_alias_keeps_the_raw_server_handle(self, monkeypatch):
+        db = FakeUserDb({(100, '999'): 'bob', (200, '999'): 'tourist'})
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        result = run(cf_common.resolve_handles(
+            _make_ctx(), CONVERTER, ('bob', '+server'), maxcnt=2))
+        assert result == ['tourist', 'bob']
+
+    def test_account_limit_counts_unique_resolved_handles(self):
+        result = run(cf_common.resolve_handles(
+            _make_ctx(), CONVERTER, ('bob', 'bob_cf', 'BOB_CF'), maxcnt=1))
+        assert result == ['bob_cf']
+
+    def test_server_expansion_still_obeys_account_limit(self):
+        with pytest.raises(cf_common.HandleCountOutOfBoundsError):
+            run(cf_common.resolve_handles(
+                _make_ctx(), CONVERTER, ('+server',), maxcnt=2))
