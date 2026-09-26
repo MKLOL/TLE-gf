@@ -26,10 +26,9 @@ def _problem_key(problem):
     key the same way or a mirrored solve looks like a gap.
 
     Gym and acmsguru problems are absent from the contest cache, which is
-    built from ``cf.contest.list()``.  ``filter_solved`` keys those by name
-    alone, which is harmless when deduplicating one person's solves but not
-    here: subtracting by name would let two unrelated problems that happen to
-    share a title cancel, hiding a real gap.  They fall back to their own
+    built from ``cf.contest.list()``. ``filter_solved`` normally keys those by
+    name alone. Both deduplication and subtraction here must preserve unrelated
+    problems that happen to share a title, or they hide a real gap. They use
     contest and index instead, and the leading tag keeps the two key shapes
     from ever meeting.
     """
@@ -101,10 +100,8 @@ class CodeforcesProblemsMixin:
     async def _diff_impl(self, ctx, args):
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
         filt = cf_common.SubFilter(False)
-        # Order is the whole command: A minus B is not B minus A.  Both
-        # SubFilter.parse and resolve_handles take a set of their arguments,
-        # so the handles are re-ordered against the original text here and
-        # resolved one at a time.
+        # SubFilter.parse loses argument order. Restore it for A minus B,
+        # and resolve each side separately so aliases aren't deduplicated.
         leftover = set(filt.parse(args))
         handles = [arg for arg in args if arg in leftover]
         if len(handles) != 2:
@@ -132,7 +129,7 @@ class CodeforcesProblemsMixin:
         left_subs = await cf.user.status(handle=left)
         right_subs = await cf.user.status(handle=right)
         solved_by_right = _solved_problem_keys(right_subs)
-        submissions = [sub for sub in filt.filter_subs(left_subs)
+        submissions = [sub for sub in filt.filter_subs(left_subs, problem_key=_problem_key)
                        if _problem_key(sub.problem) not in solved_by_right]
 
         if not submissions:

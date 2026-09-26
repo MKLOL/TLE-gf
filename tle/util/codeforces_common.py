@@ -402,7 +402,7 @@ class SubFilter:
         return rest
 
     @staticmethod
-    def filter_solved(submissions):
+    def filter_solved(submissions, *, problem_key=None):
         """Filters and keeps only solved submissions. If a problem is solved multiple times the first
         accepted submission is kept. The unique id for a problem is (problem name, contest start time).
         """
@@ -415,14 +415,15 @@ class SubFilter:
             contest = cache2.contest_cache.contest_by_id.get(problem.contestId, None)
             if submission.verdict == 'OK':
                 # Assume (name, contest start time) is a unique identifier for problems
-                problem_key = (problem.name, contest.startTimeSeconds if contest else 0)
-                if problem_key not in problems:
+                key = (problem_key(problem) if problem_key is not None else
+                       (problem.name, contest.startTimeSeconds if contest else 0))
+                if key not in problems:
                     solved_subs.append(submission)
-                    problems.add(problem_key)
+                    problems.add(key)
         return solved_subs
 
-    def filter_subs(self, submissions):
-        submissions = SubFilter.filter_solved(submissions)
+    def filter_subs(self, submissions, *, problem_key=None):
+        submissions = SubFilter.filter_solved(submissions, problem_key=problem_key)
         filtered_subs = []
         for submission in submissions:
             problem = submission.problem

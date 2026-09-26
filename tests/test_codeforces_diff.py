@@ -172,6 +172,26 @@ class TestDifference:
         _run(('alice', 'bob'), by_handle, monkeypatch)
         assert _names(pages) == ['Ships']
 
+    def test_same_titled_gym_solves_survive_left_side_deduplication(self, pages,
+                                                                  monkeypatch):
+        by_handle = {
+            'alice': [_sub(sid=1, contest_id=100500, name='Ships', created=100),
+                      _sub(sid=2, contest_id=200700, name='Ships', created=200)],
+            'bob': [_sub(sid=3, contest_id=100500, name='Ships')],
+        }
+        _run(('alice', 'bob'), by_handle, monkeypatch)
+        assert _names(pages) == ['Ships']
+        assert '/gym/200700/problem/A' in pages[0][1]
+
+    def test_same_titled_gym_solves_are_both_listed(self, pages, monkeypatch):
+        _run(('alice', 'bob'), {
+            'alice': [_sub(sid=1, contest_id=100500, name='Ships', created=100),
+                      _sub(sid=2, contest_id=200700, name='Ships', created=200),
+                      _sub(sid=3, contest_id=200700, name='Ships', created=300)],
+            'bob': [],
+        }, monkeypatch)
+        assert _names(pages) == ['Ships', 'Ships']
+
     def test_unsolved_attempts_by_the_right_handle_are_still_gaps(self, pages,
                                                                  monkeypatch):
         by_handle = {
