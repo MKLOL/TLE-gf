@@ -111,6 +111,9 @@ constants_mod.LLM_MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 # tle.util.codeforces_common needs a user_db attribute and parse_date for starboard cog
 import time as _time
 import datetime as _datetime
+_cs2 = sys.modules['tle.util.cache_system2']
+_cs2.ContestNotFound = type('ContestNotFound', (Exception,), {})
+_cs2.ProblemsetNotCached = type('ProblemsetNotCached', (Exception,), {})
 cf_common = sys.modules['tle.util.codeforces_common']
 cf_common.user_db = None
 cf_common.fix_urls = lambda user: user  # no-op in tests

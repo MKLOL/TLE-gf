@@ -141,6 +141,16 @@ def is_nonstandard_problem(problem):
 async def get_visited_contests(handles : [str]):
     """ Returns a set of contest ids of contests that any of the given handles
         has at least one non-CE submission.
+
+        The contest a submission was made in is always visited. The
+        problemset map then adds the sibling contests that share the problem
+        (a Div. 1 round and its Div. 2 half). That map is built from the disk
+        problemset cache, which is filled per contest from contest.standings
+        and retried only for two weeks after a contest ends — a contest whose
+        fetch failed inside that window (rate limit, the standings
+        restriction, bot down) has no problems in the map for good. Looking
+        contests up through the map alone therefore made ;vc recommend
+        rounds the user had already done (complaint #299, Spectral Cup 2222).
     """
     user_submissions = [await cf.user.status(handle=handle) for handle in handles]
     problem_to_contests = cache2.problemset_cache.problem_to_contests
@@ -149,6 +159,8 @@ async def get_visited_contests(handles : [str]):
     for sub in itertools.chain.from_iterable(user_submissions):
         if sub.verdict == 'COMPILATION_ERROR':
             continue
+        if sub.problem.contestId is not None:
+            contest_ids.append(sub.problem.contestId)
         try:
             contest = cache2.contest_cache.get_contest(sub.problem.contestId)
             problem_id = (sub.problem.name, contest.startTimeSeconds)
