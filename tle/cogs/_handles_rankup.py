@@ -137,8 +137,7 @@ class RankUpMixin:
             try:
                 return await cf.user.info(handles=handles), skipped
             except (cf.HandleNotFoundError, cf.HandleInvalidError) as error:
-                # Comment format: "handles: User with handle ***** not found"
-                bad = error.comment.partition('not found')[0].split()[-1].lower()
+                bad = error.handle.lower()
                 remaining = [handle for handle in handles if handle.lower() != bad]
                 if len(remaining) == len(handles):
                     raise  # could not tell which handle; do not loop forever
@@ -155,7 +154,12 @@ class RankUpMixin:
         if skipped:
             self.logger.warning('Rank update in guild %s skipped handles Codeforces no longer '
                                 'resolves: %s', guild.id, ', '.join(skipped))
-        member_by_handle = {handle.lower(): member for member, handle in member_handles}
+        # user.info returns one result per surviving input, in order, and
+        # transparently redirects renamed accounts to their new handles.
+        # Matching only the returned spelling would silently lose those users.
+        skipped_handles = set(skipped)
+        members = [member for member, handle in member_handles
+                   if handle.lower() not in skipped_handles]
         for user in users:
             rc = cf_common.user_db.cache_cf_user(user)
             if rc != 1:
@@ -170,10 +174,7 @@ class RankUpMixin:
             raise HandleCogError(f'Role{plural} for rank{plural} {roles_str} not present in the server')
 
         failures = 0
-        for user in users:
-            member = member_by_handle.get(user.handle.lower())
-            if member is None:
-                continue
+        for member, user in zip(members, users):
             role_to_assign = rank2role[user.rank.title]
             try:
                 await self.update_member_rank_role(member, role_to_assign,

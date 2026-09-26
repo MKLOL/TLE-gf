@@ -28,6 +28,12 @@ def _change(handle, old=1857, new=1914):
                            ratingUpdateTimeSeconds=1)
 
 
+def _handle_error(cls, comment, handle):
+    error = cls(comment, handle)
+    error.handle = handle  # Mirror the real API exceptions rather than the stub.
+    return error
+
+
 class TestMatching:
     def test_casing_differences_still_match(self):
         pairs, skipped = rankup.match_members_to_changes(
@@ -71,7 +77,7 @@ class TestTolerantUserInfo:
             calls.append(list(handles))
             for handle in handles:
                 if handle.lower() in bad:
-                    raise cf.HandleNotFoundError(
+                    raise _handle_error(cf.HandleNotFoundError,
                         f'handles: User with handle {handle} not found', handle)
             return [SimpleNamespace(handle=h) for h in handles]
         monkeypatch.setattr(cf, 'user', SimpleNamespace(info=info), raising=False)
@@ -86,10 +92,20 @@ class TestTolerantUserInfo:
 
     def test_an_unparseable_error_is_not_retried_forever(self, monkeypatch):
         async def info(*, handles):
-            raise cf.HandleNotFoundError('handles: something odd', 'x')
+            raise _handle_error(cf.HandleNotFoundError, 'handles: something odd', 'x')
         monkeypatch.setattr(cf, 'user', SimpleNamespace(info=info), raising=False)
         with pytest.raises(cf.HandleNotFoundError):
             asyncio.run(_Cog()._fetch_users_tolerant(['alice']))
+
+    def test_invalid_handle_uses_exception_identity_not_error_wording(self, monkeypatch):
+        async def info(*, handles):
+            if 'bad' in handles:
+                raise _handle_error(cf.HandleInvalidError, 'handles: bad is invalid', 'bad')
+            return [SimpleNamespace(handle=h) for h in handles]
+        monkeypatch.setattr(cf, 'user', SimpleNamespace(info=info), raising=False)
+        users, skipped = asyncio.run(_Cog()._fetch_users_tolerant(['alice', 'bad']))
+        assert [user.handle for user in users] == ['alice']
+        assert skipped == ['bad']
 
 
 def _guild(members, channel):
@@ -150,6 +166,25 @@ class TestEventIsolation:
 
 
 class TestRoleSyncResilience:
+    def test_renamed_account_still_gets_its_role_after_bad_handle_is_dropped(self, monkeypatch):
+        members = [_member(10), _member(20), _member(30)]
+        guild = SimpleNamespace(id=1, get_member={m.id: m for m in members}.get,
+                                roles=[SimpleNamespace(name='Expert')])
+        monkeypatch.setattr(cf_common, 'user_db',
+                            SimpleNamespace(cache_cf_user=lambda user: 1))
+
+        async def info(*, handles):
+            if 'gone' in handles:
+                raise _handle_error(cf.HandleNotFoundError, 'no such user', 'gone')
+            return [SimpleNamespace(handle=h, rank=SimpleNamespace(title='Expert'))
+                    for h in ['new_name', 'Bob']]
+        monkeypatch.setattr(cf, 'user', SimpleNamespace(info=info), raising=False)
+        cog = _Cog()
+        update = AsyncMock()
+        monkeypatch.setattr(cog, 'update_member_rank_role', update)
+        asyncio.run(cog._update_ranks(guild, [(10, 'gone'), (20, 'old_name'), (30, 'bob')]))
+        assert [call.args[0].id for call in update.call_args_list] == [20, 30]
+
     def test_one_forbidden_role_edit_does_not_stop_the_rest(self, monkeypatch, caplog):
         members = [_member(10), _member(20)]
         guild = SimpleNamespace(id=1, get_member={m.id: m for m in members}.get,
