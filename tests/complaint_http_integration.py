@@ -91,7 +91,8 @@ async def check_http():
             db.add_complaint_tag(cid, 1, 'games')
             listed = await request('GET', '/v1/complaints?status=all')
             assert [c['tags'] for c in listed['complaints'] if c['id'] == cid] == [['games']]
-            assert (await request('GET', '/v1/complaints?tag=untagged'))['complaints'] == []
+            untagged = await request('GET', '/v1/complaints?tag=untagged')
+            assert [c['id'] for c in untagged['complaints']] == [second]
             assert [c['id'] for c in (await request('GET', '/v1/complaints?tag=games'))['complaints']] == [cid]
             await request('GET', '/v1/complaints?tag=no%20way', 400)
             resolved = await request('POST', resolve, json=valid)
