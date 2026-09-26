@@ -221,7 +221,8 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
         handles.remove('+server')
         guild_handles = sorted({handle for discord_id, handle
                                 in user_db.get_handles_for_guild(ctx.guild.id)})
-        handles.extend(handle for handle in guild_handles if handle not in handles)
+        seen = set(handles)
+        handles.extend(handle for handle in guild_handles if handle not in seen)
     if len(handles) < mincnt or (maxcnt and maxcnt < len(handles)):
         raise HandleCountOutOfBoundsError(mincnt, maxcnt)
     resolved_handles = []
@@ -289,9 +290,10 @@ def _dedupe_handles(handles, mincnt, maxcnt):
         seen.add(key)
         unique.append(handle)
     if len(unique) < mincnt:
+        dropped = len(handles) - len(unique)
         raise HandleCountOutOfBoundsError(
             mincnt, maxcnt,
-            f'{len(handles) - len(unique)} of them were the same handle spelled differently')
+            f'{dropped} of them named an account already listed')
     return unique
 
 

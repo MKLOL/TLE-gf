@@ -368,3 +368,11 @@ class TestHandleCasing:
         result = run(cf_common.resolve_handles(ctx, CONVERTER, ('-ctourist', '-cPetr')))
         assert sorted(result) == ['Petr', 'tourist']
 
+
+class TestServerWide:
+    def test_plus_server_is_sorted_and_deduplicated(self, patch_user_db):
+        ctx = _make_ctx()
+        result = run(cf_common.resolve_handles(
+            ctx, CONVERTER, ('bob_cf', '+server'), maxcnt=None))
+        assert result == ['bob_cf', 'alice_cf', 'eve_cf']
+

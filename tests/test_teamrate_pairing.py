@@ -15,7 +15,9 @@ class _Cog(CodeforcesProblemsMixin):
 
 def _run(args, monkeypatch, canonical):
     async def resolve(ctx, converter, handles, **kw):
-        return [canonical.get(h.lower(), h) for h in handles]
+        # Reversed on purpose: any code that pairs results with its input
+        # positionally must fail here.
+        return [canonical.get(h.lower(), h) for h in handles][::-1]
     monkeypatch.setattr(cf_common, 'resolve_handles', resolve)
     monkeypatch.setattr(cf_common, 'filter_flags',
                         lambda a, params: ([False, False], list(a)))
@@ -45,3 +47,12 @@ def test_two_spellings_of_one_account_add_up_instead_of_crashing(monkeypatch):
     got = _run(('tourist*2', 'TOURIST'), monkeypatch, {'tourist': 'tourist'})
     assert got['ratings'] == [(2000, 3)]
     assert got['embed'].title == 'tourist*3'
+
+
+def test_a_discord_user_and_their_typed_handle_merge_instead_of_crashing(monkeypatch):
+    """`;teamrate tourist*2 !someone` where !someone is registered as Tourist."""
+    got = _run(('tourist*2', '!someone'), monkeypatch,
+               {'tourist': 'tourist', '!someone': 'Tourist'})
+    assert got['ratings'] == [(2000, 3)]
+    assert got['embed'].title == 'tourist*3'
+
