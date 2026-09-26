@@ -12,6 +12,7 @@ import discord
 
 from tle import constants
 from tle.util import codeforces_common as cf_common
+from tle.cogs._starboard_attachments import _attachment_is_spoiler
 
 logger = logging.getLogger(__name__)
 
@@ -138,27 +139,6 @@ async def resolve_forward_snapshot(message, resolve_channel):
         logger.debug('Could not fetch source of forwarded message %s',
                      getattr(message, 'id', '?'), exc_info=True)
         return None
-
-
-def _attachment_is_spoiler(attachment):
-    """Return whether an attachment must be uploaded as a spoiler.
-
-    Discord encodes spoiler attachments with a ``SPOILER_`` filename prefix.
-    ``Attachment.is_spoiler`` is the normal API, but snapshots and lightweight
-    attachment implementations do not always expose that method.  Checking
-    the wire-format marker as a fallback prevents those messages from being
-    re-uploaded as visible media.
-    """
-    filename = getattr(attachment, 'filename', '') or ''
-    if filename.startswith('SPOILER_'):
-        return True
-    checker = getattr(attachment, 'is_spoiler', None)
-    if checker is None:
-        return False
-    try:
-        return bool(checker())
-    except Exception:
-        return False
 
 
 def _starboard_content(emoji_str, count, jump_url):
