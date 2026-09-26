@@ -183,8 +183,7 @@ def make_share_parser(header_re, calendar):
 def _is_status_line(line):
     lowered = line.casefold()
     return (
-        'hint' in lowered
-        or 'mistake' in lowered
+        re.search(r'\bhints?\b|\bmistakes?\b', lowered) is not None
         or '\U0001f913' in line
         or '\U0001f48e' in line
     )

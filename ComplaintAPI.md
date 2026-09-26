@@ -3,6 +3,8 @@
 The bot starts a small HTTP API on `0.0.0.0:8080` after database initialization,
 accepting remote connections on port 8080. Every route requires a bearer token.
 It supports reading, resolving, and reopening complaints in the token's server.
+The same listener also serves the [games import API](GamesAPI.md), using separate
+games tokens from `;make-games-token`; complaint tokens cannot access games.
 It does not expose SQL, other tables, shell commands, or GitHub credentials.
 Your automation makes/tests/commits the fix in its checkout, pushes the commit,
 then calls the resolve endpoint with its GitHub link and a user-facing summary.

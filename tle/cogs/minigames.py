@@ -35,6 +35,7 @@ from tle.cogs._minigame_akari import AKARI_GAME, expected_puzzle_number  # noqa:
 from tle.cogs._minigame_guessgame import GUESSGAME_GAME
 from tle.cogs._minigame_queens import QUEENS_GAME
 from tle.cogs._minigame_tango import TANGO_GAME
+from tle.cogs._games_tokens import GamesTokenMixin
 from tle.cogs._minigame_common import normalize_puzzle_date  # noqa: F401
 
 # ── Re-exports for the test suite and downstream importers ──────────────
@@ -174,6 +175,7 @@ class Minigames(
     ImplAkariDMixin,
     ImplStatsMixin,
     ImplExportMixin,
+    GamesTokenMixin,
     commands.Cog,
 ):
     GAMES = {

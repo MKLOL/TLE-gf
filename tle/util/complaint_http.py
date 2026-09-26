@@ -9,6 +9,7 @@ from aiohttp import web
 
 from tle.util.db.complaint_db import normalize_tag
 from tle.util.complaints import ComplaintError, complaint_json, is_complaint_admin
+from tle.util.games_http import GamesHttpRoutes
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class ComplaintHttpServer:
         self.service = service
         self.runner = None
         self._active = 0
+        self.games = GamesHttpRoutes(self)
 
     async def _authenticate(self, request):
         if not self.bot.is_ready():
@@ -61,7 +63,10 @@ class ComplaintHttpServer:
         try:
             if self._active > 8:
                 raise ComplaintError(503, 'API is busy; retry later.')
-            await self._authenticate(request)
+            if request.path == '/v1/games' or request.path.startswith('/v1/games/'):
+                await self.games.authenticate(request)
+            else:
+                await self._authenticate(request)
             response = await handler(request)
         except ComplaintError as exc:
             response = web.json_response({'error': str(exc)}, status=exc.status)
@@ -90,6 +95,7 @@ class ComplaintHttpServer:
         app.router.add_get('/v1/complaints/{id}', self._get)
         app.router.add_post('/v1/complaints/{id}/resolve', self._resolve)
         app.router.add_post('/v1/complaints/{id}/reopen', self._reopen)
+        self.games.add_routes(app)
         return app
 
     async def _list(self, request):

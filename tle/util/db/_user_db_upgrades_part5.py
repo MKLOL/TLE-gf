@@ -121,3 +121,9 @@ def upgrade_1_63_0(db):
     db.commit()
     logger.info('1.63.0: virtual_session schema repaired')
 
+
+@registry.register('1.64.0', 'Personal LinkedIn games API tokens')
+def upgrade_1_64_0(db):
+    from tle.util.db.games_token_db import create_games_token_schema
+    create_games_token_schema(db)
+    db.commit()

@@ -80,6 +80,7 @@ _commands_mod.Cog = _StubCog
 _commands_mod.has_role = lambda role: (lambda f: f)
 _commands_mod.has_any_role = lambda *roles: (lambda f: f)
 _commands_mod.check = lambda predicate: (lambda f: f)
+_commands_mod.guild_only = lambda: (lambda f: f)
 def _stub_command(**kw):
     def decorator(f):
         f.__wrapped__ = f

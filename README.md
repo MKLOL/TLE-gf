@@ -155,6 +155,10 @@ then list, resolve, and reopen complaints through the bot's HTTP API. Resolution
 replies include the fix summary and GitHub commit link. See [ComplaintAPI.md](ComplaintAPI.md)
 for commands, endpoint examples, and connection setup.
 
+The [LinkedIn games Chrome extension](GamesAPI.md) imports Queens and Tango
+leaderboards with an in-extension preview and confirmation. Moderators can mint
+one token for every game using `;make-games-token`.
+
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)
