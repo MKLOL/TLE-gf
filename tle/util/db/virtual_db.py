@@ -112,7 +112,9 @@ class VirtualDbMixin:
                              points, finish_time):
         """Record one solved problem as a completed gitgud challenge.
 
-        Returns False if that problem was already credited for the session.
+        Returns False if that problem was already credited, or is reserved
+        for a live gitgud challenge. Completed challenges remain excluded:
+        claiming gitgud first must not make its solve payable a second time.
         The challenge row, the score bump and the session bookkeeping are one
         transaction, so a crash cannot leave points without a log line or a
         credited index without points.
@@ -128,6 +130,14 @@ class VirtualDbMixin:
                 return False
             confirmed_at, credited = row[0], json.loads(row[1])
             if problem.index in credited:
+                return False
+            existing = self.conn.execute(
+                'SELECT 1 FROM challenge WHERE user_id = ? '
+                'AND (problem_name = ? OR (contest_id = ? AND p_index = ?)) '
+                'AND status IN (?, ?) LIMIT 1',
+                (user_id, problem.name, problem.contestId, problem.index,
+                 int(Gitgud.GITGUD), int(Gitgud.GOTGUD))).fetchone()
+            if existing is not None:
                 return False
             credited.append(problem.index)
             self.conn.execute(

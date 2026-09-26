@@ -166,6 +166,27 @@ class TestStatusAndClaim:
             asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
         assert env.db.get_active_virtual_session(GUILD, USER) is not None
 
+    @pytest.mark.parametrize('command', ['_virtual_impl', '_virtual_claim_impl'])
+    def test_expired_solves_survive_a_transient_api_error(self, env, monkeypatch,
+                                                        command):
+        session = self._start(env)
+        env.subs.append(_sub('B', rating=1900))
+        env.clock.now = session.expires_at + 61
+        healthy_status = cf.user.status
+
+        async def flaky(*, handle):
+            raise cf.CodeforcesApiError('busy')
+
+        monkeypatch.setattr(cf.user, 'status', flaky)
+        with pytest.raises(cf.CodeforcesApiError):
+            asyncio.run(getattr(env.cog, command)(_ctx(env.db)))
+        assert env.db.get_active_virtual_session(GUILD, USER).id == session.id
+
+        monkeypatch.setattr(cf.user, 'status', healthy_status)
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+        assert env.db.get_gudgitter_score(USER) == 8
+
     def test_a_forgotten_virtual_is_credited_before_the_next_offer(self, env):
         self._start(env)
         env.subs.append(_sub('B', rating=1900))
@@ -183,6 +204,19 @@ class TestStatusAndClaim:
         asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
         assert env.db.credited_virtual_problems(session.id) == set()
         assert env.db.check_challenge(str(USER))[2] == 'PA'
+
+    def test_completing_gitgud_does_not_make_its_solve_payable_again(self, env):
+        session = self._start(env)
+        env.db.new_challenge(str(USER), NOW, _problem(1, index='A', name='PA'), 0)
+        env.subs.append(_sub('A', name='PA', rating=1900))
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        challenge = env.db.check_challenge(str(USER))
+        assert env.db.complete_challenge(USER, challenge[0], NOW + 600, 8) == 1
+
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_gudgitter_score(USER) == 8
+        assert len(env.db.gitlog(str(USER))) == 1
+        assert env.db.credited_virtual_problems(session.id) == set()
 
     def test_unrated_problems_are_reported_not_paid(self, env):
         self._start(env)

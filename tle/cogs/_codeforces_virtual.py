@@ -235,17 +235,17 @@ class CodeforcesVirtualMixin:
         return lines
 
     async def _finalize_expired(self, ctx, session):
-        """Credit late solves and close an expired session, whatever happens.
+        """Credit late solves and close an expired session after a valid fetch.
 
         The session's handle may no longer resolve on Codeforces (renamed or
         removed). That must not leave the session active forever — nothing
         else can close it and the one-active rule would lock the user out of
-        ``;virtual`` for good — so a failed fetch closes it with no credit
-        and says so.
+        ``;virtual`` for good — so a missing handle closes it with no credit
+        and says so. Transient API failures leave the session claimable.
         """
         try:
             points, names, unrated = await self._credit_virtual(ctx, session)
-        except cf.CodeforcesApiError as error:
+        except cf.HandleNotFoundError as error:
             cf_common.user_db.finish_virtual_session(session.id)
             return (f'Your previous virtual ({session.contest_name}) is over, '
                     f'but Codeforces would not return submissions for '
@@ -332,8 +332,6 @@ class CodeforcesVirtualMixin:
         contest = cf_common.cache2.contest_cache.get_contest(session.contest_id)
         credited = cf_common.user_db.credited_virtual_problems(session.id)
         base = session.base_rating
-        active = cf_common.user_db.check_challenge(ctx.author.id)
-        active_name = active[2] if active else None
         now = int(time.time())
 
         points, names, unrated = 0, [], []
@@ -342,9 +340,6 @@ class CodeforcesVirtualMixin:
             if problem.rating is None or cf_common.is_nonstandard_problem(problem):
                 # Unrated and *special problems are never gitgud material.
                 unrated.append(problem.index)
-                continue
-            if problem.name == active_name:
-                # Their live gitgud challenge; ;gotgud pays that one.
                 continue
             delta = problem.rating - base
             score = _calculateGitgudScoreForDelta(delta)
