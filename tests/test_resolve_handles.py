@@ -48,12 +48,20 @@ class FakeConverter:
 
 
 class FakeUserDb:
-    def __init__(self, handle_map=None):
+    def __init__(self, handle_map=None, cached=()):
         # {(user_id, guild_id): cf_handle}
         self._handles = handle_map or {}
+        # Handles the CF user cache knows, in Codeforces' own casing.
+        self._cached = {h.lower(): h for h in cached}
 
     def get_handle(self, user_id, guild_id):
         return self._handles.get((user_id, str(guild_id)))
+
+    def fetch_cf_user(self, handle):
+        canonical = self._cached.get(handle.lower())
+        if canonical is None:
+            return None
+        return type('User', (), {'handle': canonical})()
 
     def get_handles_for_guild(self, guild_id):
         return [(uid, h) for (uid, gid), h in self._handles.items()
@@ -330,3 +338,35 @@ class TestStalkScenarios:
         ctx = _make_ctx(author=ALICE)
         result = run(cf_common.resolve_handles(ctx, CONVERTER, ('-cbob',)))
         assert result == ['bob']
+
+
+# ── Tests: casing (complaint #281) ────────────────────────────────────────
+
+class TestHandleCasing:
+    """``;versus tfg Tfg tFg`` is one person, and CF spells them one way."""
+
+    def test_spellings_of_one_handle_collapse(self, patch_user_db):
+        ctx = _make_ctx()
+        handles = ('tfg', 'Tfg', 'tFg', 'tfG', 'TFG')
+        result = run(cf_common.resolve_handles(ctx, CONVERTER, handles))
+        assert len(result) == 1
+        assert result[0].lower() == 'tfg'
+
+    def test_cached_casing_wins(self, monkeypatch):
+        db = FakeUserDb({}, cached=['TFG'])
+        monkeypatch.setattr(cf_common, 'user_db', db)
+        ctx = _make_ctx()
+        result = run(cf_common.resolve_handles(ctx, CONVERTER, ('tfg', 'Tfg')))
+        assert result == ['TFG']
+
+    def test_collapsing_below_mincnt_is_an_error(self, patch_user_db):
+        ctx = _make_ctx()
+        with pytest.raises(cf_common.HandleCountOutOfBoundsError):
+            run(cf_common.resolve_handles(ctx, CONVERTER, ('tfg', 'TFG'),
+                                          mincnt=2))
+
+    def test_distinct_handles_are_untouched(self, patch_user_db):
+        ctx = _make_ctx()
+        result = run(cf_common.resolve_handles(ctx, CONVERTER, ('-ctourist', '-cPetr')))
+        assert sorted(result) == ['Petr', 'tourist']
+
