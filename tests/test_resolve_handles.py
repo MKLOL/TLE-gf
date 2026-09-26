@@ -57,11 +57,9 @@ class FakeUserDb:
     def get_handle(self, user_id, guild_id):
         return self._handles.get((user_id, str(guild_id)))
 
-    def fetch_cf_user(self, handle):
-        canonical = self._cached.get(handle.lower())
-        if canonical is None:
-            return None
-        return type('User', (), {'handle': canonical})()
+    def canonical_handles(self, handles):
+        return {h.lower(): self._cached[h.lower()] for h in handles
+                if h.lower() in self._cached}
 
     def get_handles_for_guild(self, guild_id):
         return [(uid, h) for (uid, gid), h in self._handles.items()

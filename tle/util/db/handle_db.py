@@ -54,6 +54,24 @@ class HandleDbMixin:
         with self.conn:
             return self.conn.execute(query, user).rowcount
 
+    def canonical_handles(self, handles):
+        """Map lower-cased handle -> the casing the CF user cache holds.
+
+        One scan of ``cf_user_cache`` for the whole batch; ``+server`` passes
+        every registered handle in a guild, and a per-handle ``UPPER(handle)``
+        lookup cannot use the primary key, so N lookups would be N scans.
+        """
+        wanted = sorted({handle.lower() for handle in handles})
+        found = {}
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start:start + 500]
+            placeholders = ','.join('?' * len(chunk))
+            for (handle,) in self.conn.execute(
+                    f'SELECT handle FROM cf_user_cache '
+                    f'WHERE LOWER(handle) IN ({placeholders})', chunk):
+                found[handle.lower()] = handle
+        return found
+
     def fetch_cf_user(self, handle):
         query = ('SELECT handle, first_name, last_name, country, city, organization, contribution, '
                  '    rating, maxRating, last_online_time, registration_time, friend_of_count, title_photo '

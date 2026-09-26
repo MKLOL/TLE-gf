@@ -265,24 +265,19 @@ async def resolve_handles(ctx, converter, handles, *, mincnt=1, maxcnt=5, defaul
     return _dedupe_handles(resolved_handles, mincnt, maxcnt)
 
 
-def _canonical_handle(handle):
-    """The casing Codeforces itself uses, when the user is in the cache."""
-    user = user_db.fetch_cf_user(handle)
-    return user.handle if user is not None and user.handle else handle
-
-
 def _dedupe_handles(handles, mincnt, maxcnt):
     """Collapse spellings of one handle — Codeforces handles are case-insensitive.
 
     ``;versus tfg Tfg tFg`` is one person three times, not three people; taken
     literally it slips past ``maxcnt`` and then compares a user with
-    themselves under every spelling. Order is kept; the count check is
-    repeated on the result because the pre-resolution count only saw raw
-    tokens.
+    themselves under every spelling. Each survivor is spelled the way the CF
+    user cache has it. Order is kept; the count check is repeated on the
+    result because the pre-resolution count only saw raw tokens.
     """
+    canonical = user_db.canonical_handles(handles)
     unique, seen = [], set()
     for handle in handles:
-        handle = _canonical_handle(handle)
+        handle = canonical.get(handle.lower(), handle)
         key = handle.lower()
         if key in seen:
             continue
