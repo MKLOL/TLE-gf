@@ -82,7 +82,7 @@ class CacheControl(commands.Cog):
             await ctx.send('Fetching problemsets for contests that have none…')
             count, remaining = await cf_common.cache2.problemset_cache.update_missing()
             await ctx.send(f'Done, fetched {count} problems; {remaining} contest(s) '
-                           f'could not be fetched and will be retried after a restart.')
+                           f'remain missing. Run this command again to retry failed fetches.')
             return
         else:
             try:

@@ -64,10 +64,19 @@ class TestBackfill:
 
     def test_a_contest_that_will_not_fetch_is_tried_once_per_run(self, monkeypatch):
         cache, fetched, saved = _cache(set(), {}, monkeypatch)
-        asyncio.run(cache._backfill_missing(limit=10))
-        asyncio.run(cache._backfill_missing(limit=10))
+        assert asyncio.run(cache._backfill_missing(limit=10)) == (0, 4)
+        assert asyncio.run(cache._backfill_missing(limit=10)) == (0, 4)
         assert fetched == [4, 3, 2, 1]  # not eight
         assert cache._unfetchable == {1, 2, 3, 4}
+
+    def test_manual_repair_retries_previously_failed_background_fetches(self, monkeypatch):
+        results = {}
+        cache, fetched, saved = _cache({1, 2, 3}, results, monkeypatch)
+        assert asyncio.run(cache._backfill_missing(limit=10)) == (0, 1)
+        results[4] = ['p4']  # Codeforces has recovered since the background tick.
+        assert asyncio.run(cache.update_missing()) == (1, 0)
+        assert fetched == [4, 4]
+        assert saved == ['p4']
 
     def test_the_gap_is_reported_once(self, monkeypatch, caplog):
         cache, _, _ = _cache(set(), {}, monkeypatch)

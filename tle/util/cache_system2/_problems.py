@@ -161,9 +161,11 @@ class ProblemsetCache:
     async def update_missing(self):
         """Fetch every finished contest with no problemset on disk. Manual trigger.
 
-        Returns (problems saved, contests still missing).
+        Retry failures from earlier background ticks as well. Returns
+        (problems saved, contests still missing).
         """
         async with self.update_lock:
+            self._unfetchable.clear()
             saved, remaining = await self._backfill_missing(limit=None)
             self._update_from_disk()
             return saved, remaining
@@ -172,7 +174,9 @@ class ProblemsetCache:
         contests = self.cache_master.contest_cache.contests_by_phase['FINISHED']
         cached = self.cache_master.conn.problemset_contest_ids()
         batch = select_missing_problemsets(contests, cached, self._unfetchable, limit)
-        total_missing = len(select_missing_problemsets(contests, cached, self._unfetchable))
+        # Deferred failures are still missing even though this background
+        # batch will skip them. Counting only eligible fetches hid old gaps.
+        total_missing = len(select_missing_problemsets(contests, cached, set()))
         if total_missing and not self._gap_reported:
             # Once per process, and at WARNING so the mod log sees the hole.
             self._gap_reported = True
