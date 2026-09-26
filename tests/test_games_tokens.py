@@ -36,18 +36,14 @@ def test_expiration_and_bad_tokens(games):
             games.db.create_games_token(1, 10, days)
 
 
-def test_mint_is_moderator_only_and_failed_dm_revokes(games, monkeypatch):
+def test_members_and_moderators_can_mint_and_failed_dm_revokes(games, monkeypatch):
     import discord
     monkeypatch.setattr(discord, 'AllowedMentions',
                         SimpleNamespace(none=lambda: None), raising=False)
     ctx = SimpleNamespace(guild=games.guild, author=games.member, send=AsyncMock())
     ctx.author.send = AsyncMock()
     games.member.roles = []
-    with pytest.raises(commands.CheckFailure):
-        asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
-    games.db.set_guild_config(1, 'tango_admin_user_ids', '["10"]')
-    with pytest.raises(commands.CheckFailure):
-        asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
+    asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
     games.member.roles = [SimpleNamespace(name='Moderator')]
     asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
     assert 'tlegames_' in ctx.author.send.call_args.args[0]
@@ -71,6 +67,13 @@ def test_new_schema_upgrade_and_token_survives_restart(tmp_path):
     db.conn.close()
     db = UserDbConn(filename)
     assert db.authenticate_games_token(raw).user_id == '10'
+    row = db.claim_games_submission(1, 10, 'akari', 629, 20, 'result')
+    db.mark_games_submission_posted(row.nonce, 100)
+    db.finish_games_submission(row.nonce)
+    db.conn.close()
+    db = UserDbConn(filename)
+    receipt = db.get_games_submission(1, 10, 'akari', 629)
+    assert receipt.message_id == '100' and receipt.completed
     db.conn.close()
 
 

@@ -178,7 +178,7 @@ def extension_load_check(playwright):
             const list = document.querySelector('extensions-manager').shadowRoot
                 .querySelector('extensions-item-list').shadowRoot;
             return [...list.querySelectorAll('extensions-item')]
-                .find(item => item.data.name === 'TLE LinkedIn Games').data.id;
+                .find(item => item.data.name === 'TLE Games').data.id;
         }''')
         page.goto(f'chrome-extension://{extension_id}/popup.html')
         page.wait_for_function('document.querySelector("#status").textContent.includes("Settings")')

@@ -45,8 +45,9 @@ class GamesImportService:
                 'anchor_date': game.linkedin.anchor_date.isoformat(),
                 'anchor_number': game.linkedin.anchor_number,
                 'enabled': self.db.get_guild_config(guild.id, game.feature_flag) == '1',
-                'can_import': self.cog._has_linkedin_mod_access(guild.id, game, member),
+                'can_import': self.cog._has_server_mod_role(member),
             } for game in self.cog._linkedin_games()],
+            'akari_enabled': self.db.get_guild_config(guild.id, 'akari') == '1',
         }
 
     def context(self, guild, member, game_name):
@@ -55,8 +56,8 @@ class GamesImportService:
         game = self.cog.GAMES.get(game_name)
         if game is None or not game.linkedin_identity:
             raise ComplaintError(400, 'Unsupported LinkedIn game.')
-        if not self.cog._has_linkedin_mod_access(guild.id, game, member):
-            raise ComplaintError(403, 'Moderator or delegated admin access required for this game.')
+        if not self.cog._has_server_mod_role(member):
+            raise ComplaintError(403, 'Server Admin or Moderator role required for leaderboard imports.')
         if self.db.get_guild_config(guild.id, game.feature_flag) != '1':
             raise ComplaintError(403, f'{game.display_name} is not enabled in this server.')
         if self.db.is_minigame_banned(guild.id, game.name, member.id):

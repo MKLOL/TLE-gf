@@ -1,0 +1,64 @@
+import {request, settings} from './api.js';
+const $ = selector => document.querySelector(selector);
+let pending, busy = false;
+function show(value) {
+  pending = value;
+  $('#own-preview').hidden = !value;
+  if (value) $('#own-summary').textContent = `${value.name} #${value.body.puzzle_number} · ${value.body.puzzle_date} · ${value.time}. Post as your Discord account (clean result).`;
+}
+async function clear() {
+  show(null);
+  await chrome.storage.session.remove('pendingOwn');
+}
+function status(text) { $('#status').textContent = text; }
+function buttons(value) {
+  busy = value;
+  for (const id of ['#own', '#post-own', '#cancel-own']) $(id).disabled = value;
+}
+$('#cancel-own').addEventListener('click', clear);
+$('#own').addEventListener('click', async () => {
+  if (busy) return;
+  buttons(true);
+  try {
+    await clear();
+    const config = await settings();
+    const catalog = await request(config, '/v1/games');
+    const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+    await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['leaderboard.js', 'extract.js']});
+    const result = await chrome.scripting.executeScript({target: {tabId: tab.id},
+      func: () => globalThis.TleReadLeaderboard(true)});
+    const data = result[0]?.result;
+    if (!data || data.error) throw new Error(data?.error || 'Could not read your score.');
+    const game = catalog.games.find(item => item.path === data.gamePath);
+    if (!game?.enabled) throw new Error('This game is not enabled in your server.');
+    const row = data.rows[0];
+    const date = new Date(game.anchor_date + 'T00:00:00Z');
+    date.setUTCDate(date.getUTCDate() + data.puzzleNumber - game.anchor_number);
+    const time = row.time.split(':').map(Number).reduce((total, part) => total * 60 + part, 0);
+    const value = {server: config.server, user: catalog.user_id, name: game.name, time: row.time,
+      body: {game: game.id, puzzle_date: date.toISOString().slice(0, 10), puzzle_number: data.puzzleNumber,
+        time_seconds: time, accuracy: 100, is_perfect: true}};
+    await chrome.storage.session.set({pendingOwn: value});
+    show(value);
+    status('Check your score, then press Post my score.');
+  } catch (error) { status(error.message); }
+  finally { buttons(false); }
+});
+$('#post-own').addEventListener('click', async () => {
+  if (busy || !pending) return;
+  buttons(true);
+  try {
+    const config = await settings();
+    const catalog = await request(config, '/v1/games');
+    if (config.server !== pending.server || catalog.user_id !== pending.user) throw new Error('Your connection changed. Read your score again.');
+    const result = await request(config, '/v1/games/results', pending.body);
+    await clear();
+    status(result.duplicate ? 'Your score was already registered and posted.' : 'Your score is registered and posted in Discord.');
+  } catch (error) { status(error.message); }
+  finally { buttons(false); }
+});
+const {pendingOwn} = await chrome.storage.session.get('pendingOwn');
+if (pendingOwn) show(pendingOwn);
+const {autoAkari, akariStatus} = await chrome.storage.local.get(['autoAkari', 'akariStatus']);
+$('#akari-status').textContent = autoAkari ? (akariStatus?.text || 'Daily Akari automatic posting is on. Reload the game after first setup.') :
+  'Enable automatic Daily Akari posting in Settings.';

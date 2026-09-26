@@ -313,6 +313,9 @@ class ImplIngestMixin:
         if payload.guild_id is None or cf_common.user_db is None:
             return
         try:
+            mark_removed = getattr(cf_common.user_db, 'mark_games_submission_removed', None)
+            if mark_removed is not None:
+                mark_removed(payload.message_id)
             old = cf_common.user_db.get_minigame_result(payload.message_id)
             deleted = cf_common.user_db.delete_minigame_result(payload.message_id)
             deleted += cf_common.user_db.delete_imported_minigame_result(payload.message_id)

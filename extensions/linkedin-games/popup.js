@@ -93,6 +93,7 @@ try {
   setBusy(true);
   config = await settings();
   catalog = await request(config, "/v1/games");
+  $("#read").hidden = !catalog.games.some(game => game.can_import);
   $("#connection").textContent = `${catalog.guild_name} · ${catalog.user_name}`;
   $("#date").value = catalog.games[0]?.today || "";
   const {pendingImport} = await chrome.storage.session.get("pendingImport");

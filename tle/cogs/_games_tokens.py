@@ -11,9 +11,7 @@ class GamesTokenMixin:
     @commands.command(name='make-games-token')
     @commands.guild_only()
     async def make_games_token(self, ctx, days: int = 30):
-        """DM a personal games import token (1–365 days; default 30)."""
-        if not self._has_server_mod_role(ctx.author):
-            raise commands.CheckFailure('Server Admin or Moderator role required.')
+        """DM a personal games token (1–365 days; default 30)."""
         if not 1 <= days <= 365:
             raise commands.BadArgument('Token lifetime must be 1 to 365 days.')
         db = cf_common.user_db
@@ -22,9 +20,9 @@ class GamesTokenMixin:
         try:
             await asyncio.wait_for(ctx.author.send(
                 f'Games token #{token_id} for server {ctx.guild.id}; expires in '
-                f'{days} days. Paste it into the TLE LinkedIn Games Chrome '
-                'extension. Your existing game import permissions still apply. '
-                'Register your own LinkedIn name with `;queens register NAME` '
+                f'{days} days. Paste it into the TLE Games Chrome '
+                'extension. Members may submit their own scores; only server Admins/Moderators '
+                'may import leaderboards. Register your own LinkedIn name with `;queens register NAME` '
                 'or `;tango register NAME` first.\n\n'
                 f'`{token}`\n\nKeep this private. Revoke it in that server with '
                 f'`;revoke-games-token {token_id}`.',

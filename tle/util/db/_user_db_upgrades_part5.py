@@ -127,3 +127,10 @@ def upgrade_1_64_0(db):
     from tle.util.db.games_token_db import create_games_token_schema
     create_games_token_schema(db)
     db.commit()
+
+
+@registry.register('1.65.0', 'Personal games submission receipts')
+def upgrade_1_65_0(db):
+    from tle.util.db.games_submission_db import create_games_submission_schema
+    create_games_submission_schema(db)
+    db.commit()

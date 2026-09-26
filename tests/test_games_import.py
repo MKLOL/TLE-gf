@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from dataclasses import replace
 
 import pytest
@@ -101,11 +102,12 @@ def test_new_preview_replaces_old_unconfirmed_preview(games):
 def test_recheck_roles_and_enabled_game_before_confirm(games):
     data = preview(games)
     games.member.roles = []
-    with pytest.raises(ComplaintError, match='access required'):
+    with pytest.raises(ComplaintError, match='role required'):
         confirm(games, data)
     games.db.set_guild_config(1, 'tango_admin_user_ids', '["10"]')
-    with pytest.raises(ComplaintError, match='access required'):
+    with pytest.raises(ComplaintError, match='role required'):
         preview(games, game='queens')
+    games.member.roles = [SimpleNamespace(name='Moderator')]
     games.db.set_guild_config(1, 'tango', '0')
     with pytest.raises(ComplaintError, match='not enabled'):
         confirm(games, data)

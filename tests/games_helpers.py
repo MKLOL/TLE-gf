@@ -11,12 +11,14 @@ from tle.util import codeforces_common as cf_common
 from tle.util.db.api_token_db import ApiTokenDbMixin, create_api_token_schema
 from tle.util.db.games_token_db import GamesTokenDbMixin, create_games_token_schema
 from tle.util.games_import import GamesImportService
+from tle.util.db.games_submission_db import GamesSubmissionDbMixin, create_games_submission_schema
 
 
-class GamesDb(FakeMinigameDb, GamesTokenDbMixin, ApiTokenDbMixin):
+class GamesDb(FakeMinigameDb, GamesTokenDbMixin, ApiTokenDbMixin, GamesSubmissionDbMixin):
     def __init__(self):
         super().__init__()
         create_games_token_schema(self.conn)
+        create_games_submission_schema(self.conn)
         create_api_token_schema(self.conn)
         self.conn.commit()
 

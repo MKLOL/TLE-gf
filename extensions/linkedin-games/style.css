@@ -10,6 +10,7 @@ p { margin: 14px 0; }
 .muted, small { color: #63736c; font-size: 12px; }
 label { display: block; font-weight: 650; margin: 16px 0 6px; }
 input { width: 100%; padding: 10px; border: 1px solid #c4cec7; border-radius: 8px; font: inherit; background: white; }
+input[type="checkbox"] { width: auto; margin-right: 8px; padding: 0; accent-color: #235d4e; }
 button { border: 0; padding: 11px 16px; border-radius: 8px; font: inherit; font-weight: 650; background: #235d4e; color: white; cursor: pointer; }
 button:hover { background: #17493d; }
 button:disabled { opacity: 0.55; cursor: wait; }

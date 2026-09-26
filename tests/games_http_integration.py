@@ -45,6 +45,7 @@ async def check_http():
     calls = []
     server.games.service.preview = lambda *args: calls.append(args) or {'preview_id': 'preview'}
     server.games.service.confirm = lambda *args: calls.append(args) or {'registered': 1}
+    server.games.submissions.submit = AsyncMock(return_value={'registered': True, 'posted': True})
     runner = web.AppRunner(server.create_app(), access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
@@ -83,6 +84,14 @@ async def check_http():
             await request('POST', confirm, 400, json={'leaderboard': 'replacement'})
             await request('POST', confirm, json={})
             bot.admin.roles = []
+            await request('GET', '/v1/games')
+            personal = {'game': 'akari', 'puzzle_date': '2026-09-26', 'puzzle_number': 629,
+                        'accuracy': 100, 'is_perfect': False, 'time_seconds': 39}
+            await request('POST', '/v1/games/results', json=personal)
+            call = server.games.submissions.submit.call_args
+            assert call.args[1].id == 10 and call.args[2] == personal
+            await request('POST', '/v1/games/results', 400, json={**personal, 'user_id': '99'})
+            await request('POST', '/v1/games/results', 400, json={k: v for k, v in personal.items() if k != 'is_perfect'})
             await request('POST', confirm, 403, json={})
             bot.admin.roles = [SimpleNamespace(name='Moderator')]
             bot.is_ready = lambda: False
@@ -129,13 +138,6 @@ async def check_commands():
                           author=SimpleNamespace(id=10, roles=[], send=AsyncMock()))
     command = bot.get_command('make-games-token')
     assert command and command.checks
-    try:
-        await command.callback(cog, ctx)
-    except commands.CheckFailure:
-        pass
-    else:
-        raise AssertionError('Non-moderator minted token')
-    ctx.author.roles = [SimpleNamespace(name='Moderator')]
     await command.callback(cog, ctx)
     assert 'tlegames_' in ctx.author.send.call_args.args[0]
     assert 'tlegames_' not in repr(ctx.send.call_args_list)

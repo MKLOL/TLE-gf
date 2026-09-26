@@ -1,14 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "TLE LinkedIn Games",
-  "version": "1.0.0",
-  "description": "Preview and import LinkedIn game leaderboards into your Discord server.",
+  "name": "TLE Games",
+  "version": "1.1.0",
+  "description": "Post your Daily Akari and LinkedIn scores, and import leaderboards as a moderator.",
   "minimum_chrome_version": "102",
-  "permissions": ["activeTab", "scripting", "storage"],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "action": {
-    "default_title": "Import LinkedIn leaderboard",
+    "default_title": "Post game scores",
     "default_popup": "popup.html"
   },
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
 }

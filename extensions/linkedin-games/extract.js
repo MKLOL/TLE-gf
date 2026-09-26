@@ -2,7 +2,7 @@
  * LinkedIn can host the Ember games UI in a same-origin /preload/ frame over
  * its main feed. Never scrape the feed or treat reactions as solve badges.
  */
-(() => {
+globalThis.TleReadLeaderboard = (ownOnly = false) => {
   try {
     const helpers = globalThis.TleLeaderboard;
     const gamePath = helpers.pageGame(location.href);
@@ -41,6 +41,10 @@
     let unplayed = 0;
     for (const container of board.querySelectorAll('.pr-connections-leaderboard-player__container')) {
       if (!visible(container)) continue;
+      const column = container.querySelector('.pr-connections-leaderboard-player__content-column');
+      const isYou = [...(column?.querySelectorAll('*') || [])].some(element =>
+        visible(element) && !element.children.length && element.textContent.trim() === 'You');
+      if (ownOnly && !isYou) continue;
       if (container.classList.contains('pr-connections-leaderboard-player__container-blur')) {
         throw new Error("LinkedIn has hidden some results. Open a leaderboard with visible results first.");
       }
@@ -53,7 +57,6 @@
       if (!name || !score || !helpers.timePattern.test(score)) {
         throw new Error("A leaderboard row has no readable solve time. This game or layout is not supported yet.");
       }
-      const column = container.querySelector('.pr-connections-leaderboard-player__content-column');
       if (!column) throw new Error("Could not identify the player’s result badges.");
       // Only badge text in the identity/result column counts. Reaction controls
       // elsewhere in the row may themselves contain 🤓 or 💎.
@@ -65,16 +68,16 @@
           element.getAttribute('title') || '');
       }
       const status = badgeText.filter(value => /\bno hints?\b|\bno mistakes?\b|🤓|💎/i.test(value)).join(' ');
-      const isYou = name === 'You' || [...column.querySelectorAll('*')].some(element =>
-        visible(element) && !element.children.length && element.textContent.trim() === 'You');
       rows.push({name, isYou, time: score, status});
     }
     if (!rows.length) throw new Error("No completed timed results are visible in this leaderboard.");
     if (rows.length > 200) throw new Error("This leaderboard has more than 200 loaded results.");
+    if (ownOnly && rows.length !== 1) throw new Error("Could not identify exactly one completed You row.");
     const leaderboard = helpers.serialize(rows);
     if (leaderboard.length > 12000) throw new Error("This leaderboard is too large to import.");
-    return {gamePath, puzzleNumber: Number(number[1]), leaderboard, count: rows.length, unplayed};
+    return {gamePath, puzzleNumber: Number(number[1]), leaderboard, count: rows.length, unplayed, rows};
   } catch (error) {
     return {error: error.message};
   }
-})();
+};
+globalThis.TleReadLeaderboard();

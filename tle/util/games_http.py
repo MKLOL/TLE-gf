@@ -6,15 +6,18 @@ from aiohttp import web
 
 from tle.util.complaints import ComplaintError
 from tle.util.games_import import GamesImportService
+from tle.util.games_submit import GamesSubmissionService
 
 
 class GamesHttpRoutes:
     def __init__(self, server):
         self.server = server
         self.service = GamesImportService(server.bot, lambda: server.service.db)
+        self.submissions = GamesSubmissionService(self.service)
 
     def add_routes(self, app):
         app.router.add_get('/v1/games', self.catalog)
+        app.router.add_post('/v1/games/results', self.submit)
         app.router.add_post('/v1/games/imports/preview', self.preview)
         app.router.add_post('/v1/games/imports/{id}/confirm', self.confirm)
 
@@ -41,7 +44,8 @@ class GamesHttpRoutes:
                 raise ComplaintError(503, 'Cannot verify token owner.') from None
         if db.authenticate_games_token(parts[1]) is None:
             raise ComplaintError(401, 'Invalid or expired games token.')
-        if not self.service.cog._has_server_mod_role(member):
+        if (request.path.startswith('/v1/games/imports/')
+                and not self.service.cog._has_server_mod_role(member)):
             raise ComplaintError(403, 'Token owner no longer has game import access.')
         request['token'], request['guild'], request['member'] = token, guild, member
         if request.query:
@@ -63,3 +67,11 @@ class GamesHttpRoutes:
         await self.authenticate(request)
         return web.json_response(self.service.confirm(
             request['token'], request['guild'], request['member'], request.match_info['id']))
+
+    async def submit(self, request):
+        body = await self.server._body(request, (
+            'game', 'puzzle_date', 'puzzle_number', 'time_seconds', 'accuracy', 'is_perfect'))
+        await self.authenticate(request)
+        return web.json_response(await self.submissions.submit(
+            request['guild'], request['member'], body,
+            reauthenticate=lambda: self.authenticate(request)))
