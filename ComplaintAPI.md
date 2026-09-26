@@ -51,10 +51,11 @@ but before its receipt is saved can cause a duplicate.
 **Resolutions made through the HTTP API do not notify immediately.** A pushed
 commit is not a deployed one, so the API parks the notification with
 `notification_status: queued`. The bot records the commit it started on
-(`git rev-parse HEAD` in its own checkout, the same place `;meta git` reads)
-and releases a queued notification only when its commit is an ancestor of
-that SHA — checked at every start for everything queued, and at resolve time
-so a fix the bot already runs is not made to wait for another restart. A
+(`git rev-parse HEAD` in its own checkout, read when the cog loads, the same
+place `;meta git` reads) and releases a queued notification only when its
+commit is an ancestor of that SHA — checked at every start for everything
+queued, and at resolve time (including an identical repeat of the resolve) so
+a fix the bot already runs is not made to wait for another restart. A
 `git pull` without a restart changes nothing, because the comparison is
 against the SHA the process started on, not live HEAD. A fix that is pushed
 but not yet deployed stays queued across restarts until one runs it.

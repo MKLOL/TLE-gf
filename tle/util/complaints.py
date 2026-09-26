@@ -72,27 +72,21 @@ class ComplaintService:
         self._lock = asyncio.Lock()
         self._worker = None
         self._is_deployed = is_deployed
-        self._head = head
-        self._head_captured = head is not None
         self._released_this_run = False
+        # Captured now, at cog load, not on first use: a `git pull` while the
+        # bot is up moves HEAD but not the loaded code, so the SHA must be
+        # read before anyone can have pulled. None means it cannot be known
+        # here (no git, no repository — the Dockerfile copies the tree
+        # without ``.git``); every API resolution then stays queued, and that
+        # is said once per process at WARNING so it does not go unnoticed.
+        self._head = head if head is not None else git_state.current_head()
+        if self._head is None:
+            logger.warning('Cannot determine the running commit; API '
+                           'complaint resolutions will stay queued until '
+                           'the bot runs from a git checkout')
 
     def running_head(self):
-        """The commit this process runs, captured once and never refreshed.
-
-        A ``git pull`` while the bot is up moves HEAD but not the loaded
-        code, so deploy checks compare against the SHA the process started
-        on. None means it cannot be known here (no git, no repository — the
-        Dockerfile copies the tree without ``.git``); every API resolution
-        then stays queued, and that is said once per process at WARNING so
-        it does not go unnoticed.
-        """
-        if not self._head_captured:
-            self._head_captured = True
-            self._head = git_state.current_head()
-            if self._head is None:
-                logger.warning('Cannot determine the running commit; API '
-                               'complaint resolutions will stay queued until '
-                               'the bot runs from a git checkout')
+        """The commit this process runs, captured at construction."""
         return self._head
 
     async def _deployed(self, commit_url):
@@ -130,6 +124,11 @@ class ComplaintService:
             if row.resolved_at is not None:
                 if (row.resolution, row.commit_url) != (resolution, commit_url):
                     raise ComplaintError(409, 'Already resolved differently; reopen it first.')
+                # An identical repeat re-runs the deploy check: a git timeout
+                # at the first resolve must not park the row until a restart.
+                if (row.notification_status == 'queued'
+                        and await self._deployed(commit_url)):
+                    self.db.release_complaint_notification(complaint_id, commit_url)
             else:
                 self.db.resolve_complaint(complaint_id, guild_id, actor_id,
                                           resolution, commit_url, token_id,

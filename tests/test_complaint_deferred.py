@@ -80,13 +80,38 @@ class TestApiResolveIsQueued:
         assert row.notification_status == 'sent'
         bot.channel.send.assert_awaited_once()
 
-    def test_without_a_known_running_commit_everything_stays_queued(self, env):
+    def test_without_a_known_running_commit_everything_stays_queued(self, env, monkeypatch):
         db, bot, cid = env
+        monkeypatch.setattr(git_state, 'current_head', lambda cwd=None: None)
         service = _service(db, bot, {SHA}, head=None)
-        service._head_captured = True  # simulate: git could not answer
         _resolve_via_api(service, cid)
         assert asyncio.run(service.release_deployed()) == 0
         assert db.get_complaint(cid).notification_status == 'queued'
+
+    def test_the_running_commit_is_captured_at_construction(self, env, monkeypatch):
+        """Not on first use: a git pull before the first API resolve must
+        not be mistaken for the running code."""
+        db, bot, cid = env
+        heads = iter(['a' * 40, 'b' * 40])
+        monkeypatch.setattr(git_state, 'current_head', lambda cwd=None: next(heads))
+        service = ComplaintService(bot, lambda: db, is_deployed=lambda sha, h: True)
+        assert service.running_head() == 'a' * 40
+        assert service.running_head() == 'a' * 40  # never re-read
+
+    def test_an_identical_repeat_rechecks_the_deploy(self, env):
+        """A git hiccup at the first resolve must not park the row until a
+        restart: repeating the same resolve asks again."""
+        db, bot, cid = env
+        deployed = set()
+        service = ComplaintService(
+            bot, lambda: db, head=HEAD,
+            is_deployed=lambda sha, running: sha in deployed)
+        _resolve_via_api(service, cid)
+        assert db.get_complaint(cid).notification_status == 'queued'
+        deployed.add(SHA)
+        row = _resolve_via_api(service, cid)
+        assert row.notification_status == 'sent'
+        bot.channel.send.assert_awaited_once()
 
     def test_the_retry_worker_ignores_queued_rows(self, env):
         db, bot, cid = env
@@ -182,6 +207,44 @@ class TestReleaseOnDeploy:
         asyncio.run(two_ticks())
         assert calls == [1]
         bot.channel.send.assert_awaited_once()
+
+
+class TestWorkerResilience:
+    def test_a_failing_release_does_not_starve_retries(self, env, monkeypatch):
+        """A Discord-resolved row whose delivery failed must still be retried
+        even if the deploy check keeps blowing up."""
+        db, bot, cid = env
+        service = _service(db, bot, set())
+        bot.channel.send.side_effect = discord.HTTPException('down')
+        bot.user.send.side_effect = discord.HTTPException('down')
+        asyncio.run(service.resolve(1, cid, 10, 'fixed', COMMIT))
+        assert db.get_complaint(cid).notification_status == 'failed'
+        bot.channel.send.side_effect = None
+        db.conn.execute('UPDATE complaint SET notification_attempt_at = 0 WHERE id = ?', (cid,))
+        db.conn.commit()
+
+        async def boom():
+            raise RuntimeError('git exploded')
+        monkeypatch.setattr(service, 'release_deployed', boom)
+
+        async def one_tick():
+            async def stop(seconds):
+                raise asyncio.CancelledError
+            monkeypatch.setattr(asyncio, 'sleep', stop)
+            try:
+                await service._run_notifications()
+            except asyncio.CancelledError:
+                pass
+        asyncio.run(one_tick())
+        assert db.get_complaint(cid).notification_status == 'sent'
+
+    def test_a_row_reopened_before_delivery_is_not_sent(self, env):
+        db, bot, cid = env
+        service = _service(db, bot, set())
+        db.resolve_complaint(cid, 1, 10, 'fixed', COMMIT)  # pending
+        db.reopen_complaint(cid, 1, 10)
+        asyncio.run(service._notify(cid))
+        bot.channel.send.assert_not_awaited()
 
 
 class TestReleaseRace:
