@@ -13,6 +13,8 @@ import logging
 
 import discord
 
+from tle.cogs._complaint_tags import format_tags
+
 logger = logging.getLogger(__name__)
 
 PER_PAGE = 5
@@ -42,7 +44,7 @@ def manage_entry(complaint, tags=()):
     if complaint.resolved_at is not None:
         header += ' — *resolved*'
     if tags:
-        header += ' — ' + ' '.join(f'`{tag}`' for tag in tags)
+        header += ' — ' + format_tags(tags)
     link = getattr(complaint, 'message_link', None)
     if link:
         header += f' — [context]({link})'

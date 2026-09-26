@@ -14,6 +14,7 @@ from tle.util.db.complaint_db import normalize_tag
 from tle.cogs._complaint_context import capture as capture_complaint_context
 from tle.cogs._complaint_tokens import ComplaintTokenMixin, require_complaint_admin
 from tle.cogs._complaint_manage import ComplaintManageView
+from tle.cogs._complaint_tags import format_tags, tag_pages
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _complaint_entry(complaint, tags=()):
     link = getattr(complaint, 'message_link', None)
     header = f'**#{complaint.id}** by <@{complaint.user_id}> ({ts})'
     if tags:
-        header += ' — ' + ' '.join(f'`{tag}`' for tag in tags)
+        header += ' — ' + format_tags(tags)
     if link:
         header += f' — [context]({link})'
     detail = f'{header}\n{complaint.text}'
@@ -272,9 +273,12 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         if not counts:
             await ctx.send(embed=discord_common.embed_neutral('No tags in use.'))
             return
-        lines = [f'`{row.tag}` — {row.count}' for row in counts]
-        await ctx.send(embed=discord.Embed(
-            title='Complaint tags', description='\n'.join(lines), color=0xffaa10))
+        pages = [(None, discord.Embed(
+            title='Complaint tags', description=description, color=0xffaa10))
+            for description in tag_pages(counts)]
+        paginator.paginate(self.bot, ctx.channel, pages,
+                           wait_time=_PAGINATE_WAIT, set_pagenum_footers=True,
+                           author_id=ctx.author.id)
 
     @complain.command(brief='Resolve a complaint and notify its author')
     @commands.check(require_complaint_admin)
