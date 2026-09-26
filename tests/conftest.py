@@ -258,6 +258,8 @@ def _task_spec_decorator(*, name, waiter=None, exception_handler=None):
     return decorator
 
 
+# @_update_task.exception_handler() in cache_system2._problems
+_FakeTaskSpec.exception_handler = lambda self: (lambda f: f)
 _tasks.task_spec = _task_spec_decorator
 _tasks.Waiter = _FakeWaiter
 

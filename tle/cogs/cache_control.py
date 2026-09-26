@@ -66,16 +66,24 @@ class CacheControl(commands.Cog):
             count = await cf_common.cache2.rating_changes_cache.fetch_contest(contest_id)
         await ctx.send(f'Done, fetched {count} changes and recached handle ratings')
 
-    @cache.command(usage='contest_id|all')
+    @cache.command(usage='contest_id|all|missing')
     @commands.has_role(constants.TLE_ADMIN)
     @timed_command
     async def problemsets(self, ctx, contest_id):
         """Mode 'all' clears all existing cached problems. Mode 'contest_id'
-        clears existing problems with the given contest id.
+        clears existing problems with the given contest id. Mode 'missing'
+        fetches only finished contests that have no problems cached at all —
+        the gap that made ;vc recommend rounds people had already done.
         """
         if contest_id == 'all':
             await ctx.send('This will take a while')
             count = await cf_common.cache2.problemset_cache.update_for_all()
+        elif contest_id == 'missing':
+            await ctx.send('Fetching problemsets for contests that have none…')
+            count, remaining = await cf_common.cache2.problemset_cache.update_missing()
+            await ctx.send(f'Done, fetched {count} problems; {remaining} contest(s) '
+                           f'could not be fetched and will be retried after a restart.')
+            return
         else:
             try:
                 contest_id = int(contest_id)

@@ -267,6 +267,11 @@ class CacheDbConn:
             query = 'DELETE FROM problem2 WHERE contest_id = ?'
             self.conn.execute(query, (contest_id,))
 
+    def problemset_contest_ids(self):
+        """Contest ids that have at least one problem stored in problem2."""
+        return {row[0] for row in self.conn.execute(
+            'SELECT DISTINCT contest_id FROM problem2').fetchall()}
+
     def fetch_problemset(self, contest_id):
         query = ('SELECT contest_id, problemset_name, [index], name, type, points, rating, tags '
                  'FROM problem2 '

@@ -100,9 +100,29 @@ class ProblemCache:
         self.logger.info(f'{rc} problems stored in database')
 
 
+def select_missing_problemsets(finished_contests, cached_contest_ids, unfetchable,
+                               limit=None):
+    """Finished contests with no problemset on disk, newest first.
+
+    ``unfetchable`` holds ids whose fetch already failed this process, so a
+    contest Codeforces will not serve is tried once per run, not every hour.
+    Newest first because those are the contests ;vc is about to recommend.
+    """
+    missing = [contest for contest in finished_contests
+               if contest.id not in cached_contest_ids
+               and contest.id not in unfetchable]
+    missing.sort(key=lambda contest: contest.startTimeSeconds or 0, reverse=True)
+    return missing if limit is None else missing[:limit]
+
+
 class ProblemsetCache:
     _MONITOR_PERIOD_SINCE_CONTEST_END = 14 * 24 * 60 * 60
     _RELOAD_DELAY = 60 * 60
+    # A contest whose problemset fetch failed inside the two-week monitoring
+    # window used to be missing for good: every submission in it then mapped
+    # to nothing and ;vc kept recommending it (complaint #299). Each hourly
+    # tick now also backfills a bounded batch of such contests, newest first.
+    _MISSING_PER_TICK = 20
 
     def __init__(self, cache_master):
         self.problems = []
@@ -111,6 +131,8 @@ class ProblemsetCache:
         self.cache_master = cache_master
         self.update_lock = asyncio.Lock()
         self.logger = logging.getLogger(self.__class__.__name__)
+        self._unfetchable = set()
+        self._gap_reported = False
 
     async def run(self):
         if self.cache_master.conn.problemset_empty():
@@ -136,6 +158,44 @@ class ProblemsetCache:
             self._save_problems(problemsets)
             return len(problemsets)
 
+    async def update_missing(self):
+        """Fetch every finished contest with no problemset on disk. Manual trigger.
+
+        Returns (problems saved, contests still missing).
+        """
+        async with self.update_lock:
+            saved, remaining = await self._backfill_missing(limit=None)
+            self._update_from_disk()
+            return saved, remaining
+
+    async def _backfill_missing(self, limit):
+        contests = self.cache_master.contest_cache.contests_by_phase['FINISHED']
+        cached = self.cache_master.conn.problemset_contest_ids()
+        batch = select_missing_problemsets(contests, cached, self._unfetchable, limit)
+        total_missing = len(select_missing_problemsets(contests, cached, self._unfetchable))
+        if total_missing and not self._gap_reported:
+            # Once per process, and at WARNING so the mod log sees the hole.
+            self._gap_reported = True
+            self.logger.warning('%d finished contests have no problemset cached; '
+                                'backfilling %d per hour, newest first',
+                                total_missing, self._MISSING_PER_TICK)
+        saved = 0
+        for contest in batch:
+            problems = await self._fetch_for_contest(contest.id)
+            if not problems:
+                self._unfetchable.add(contest.id)
+                continue
+            self._save_problems(problems)
+            saved += len(problems)
+        remaining = total_missing - sum(1 for c in batch if c.id not in self._unfetchable)
+        if batch:
+            self.logger.info('Problemset backfill: %d contests fetched, %d unfetchable '
+                             'this run, %d still missing', len(batch) - len(
+                                 [c for c in batch if c.id in self._unfetchable]),
+                             len([c for c in batch if c.id in self._unfetchable]),
+                             remaining)
+        return saved, remaining
+
     @tasks.task_spec(name='ProblemsetCacheUpdate',
                      waiter=tasks.Waiter.fixed_delay(_RELOAD_DELAY))
     async def _update_task(self, _):
@@ -143,6 +203,12 @@ class ProblemsetCache:
             contests = self.cache_master.contest_cache.contests_by_phase['FINISHED']
             new_problems, updated_problems = await self._fetch_problemsets(contests)
             self._save_problems(new_problems + updated_problems)
+            try:
+                await self._backfill_missing(limit=self._MISSING_PER_TICK)
+            except Exception:
+                # Backfill is a repair on top of the regular refresh; a bad
+                # tick must not take the refresh down with it.
+                self.logger.exception('Problemset backfill failed')
             self._update_from_disk()
             self.logger.info(f'{len(new_problems)} new problems saved and {len(updated_problems)} '
                              'saved problems updated.')
