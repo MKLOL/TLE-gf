@@ -19,7 +19,8 @@ from tle.util import ranking
 from tle.cogs._starboard_helpers import _emoji_str
 from tle.cogs._starboard_render import (
     _starboard_content,
-    _is_forward_reference,
+    _is_starboard_eligible,
+    resolve_forward_snapshot,
     build_starboard_message as _build_sb_msg,
 )
 
@@ -44,7 +45,6 @@ class CoreMixin:
     """
 
     build_starboard_message = staticmethod(_build_sb_msg)
-
     async def _resolve_channel(self, channel_id):
         """Get a channel from cache, falling back to fetch_channel for threads."""
         ch = self.bot.get_channel(channel_id)
@@ -261,9 +261,12 @@ class CoreMixin:
                     except discord.NotFound:
                         return
                     original_message = await source_ch.fetch_message(int(original_msg_id))
-                content, embeds, files = await self.build_starboard_message(
-                    original_message, emoji_str, count, entry.color
-                )
+                forward_snapshot = await resolve_forward_snapshot(
+                    original_message, self._resolve_channel)
+                render_args = (original_message, emoji_str, count, entry.color)
+                if forward_snapshot is not None:
+                    render_args += (forward_snapshot,)
+                content, embeds, files = await self.build_starboard_message(*render_args)
                 await sb_msg.edit(content=content, embeds=embeds, attachments=files)
                 logger.info(f'Full re-render starboard message: msg={original_msg_id} '
                             f'emoji={emoji_str} count={count}')
@@ -303,14 +306,11 @@ class CoreMixin:
             raise StarboardCogError(f'Source channel {payload.channel_id} not found')
         message = await channel.fetch_message(payload.message_id)
 
+        forward_snapshot = await resolve_forward_snapshot(
+            message, self._resolve_channel)
         snapshots = getattr(message, 'message_snapshots', None) or ()
-        is_forward = bool(snapshots) or _is_forward_reference(
-            getattr(message, 'reference', None))
-        if ((message.type not in (discord.MessageType.default,
-                                  discord.MessageType.reply)
-             and not is_forward)
-                or (len(message.content) == 0 and len(message.attachments) == 0
-                    and len(message.embeds) == 0 and not snapshots)):
+        rendered = snapshots[0] if snapshots else forward_snapshot
+        if not _is_starboard_eligible(message, rendered):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')
 
         if record_reactor:
@@ -382,9 +382,10 @@ class CoreMixin:
             if reaction_count < threshold:
                 return  # Concurrent remove dropped count below threshold
 
-            content, embeds, files = await self.build_starboard_message(
-                message, emoji_str, reaction_count, color
-            )
+            render_args = (message, emoji_str, reaction_count, color)
+            if forward_snapshot is not None:
+                render_args += (forward_snapshot,)
+            content, embeds, files = await self.build_starboard_message(*render_args)
             starboard_message = await starboard_channel.send(
                 content=content, embeds=embeds, files=files,
             )

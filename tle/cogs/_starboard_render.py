@@ -58,7 +58,7 @@ _AUDIO_EXTENSIONS = ('mp3', 'ogg', 'wav', 'flac', 'm4a', 'aac', 'wma')
 # added after the reference payload itself, so deployments on older discord.py
 # releases can receive ordinary replies without exposing MessageReferenceType.
 _FORWARD_REFERENCE_VALUE = 1
-
+_FORWARDED_MESSAGE_FLAG = 1 << 14
 
 def _is_forward_reference(reference):
     """Recognize forwards without requiring a recent discord.py enum."""
@@ -71,6 +71,73 @@ def _is_forward_reference(reference):
         return True
     return getattr(reference_type, 'value', reference_type) == \
         _FORWARD_REFERENCE_VALUE
+
+
+def _is_forward_message(message):
+    if getattr(message, 'message_snapshots', None):
+        return True
+    if _is_forward_reference(getattr(message, 'reference', None)):
+        return True
+    flags = getattr(message, 'flags', 0)
+    if getattr(flags, 'forwarded', False):
+        return True
+    value = getattr(flags, 'value', flags)
+    try:
+        return bool(int(value) & _FORWARDED_MESSAGE_FLAG)
+    except (TypeError, ValueError):
+        return False
+
+def _has_renderable_content(message):
+    return bool(getattr(message, 'content', None)
+                or getattr(message, 'attachments', None)
+                or getattr(message, 'embeds', None))
+
+def _is_starboard_eligible(message, rendered=None):
+    is_forward = _is_forward_message(message)
+    message_type = getattr(message, 'type', None)
+    message_types = getattr(discord, 'MessageType', None)
+    allowed = {
+        getattr(message_types, 'default', 0),
+        getattr(message_types, 'reply', 1),
+    }
+    source = rendered or message
+    if message_type not in allowed and not is_forward:
+        return False
+    return _has_renderable_content(source)
+
+
+async def resolve_forward_snapshot(message, resolve_channel):
+    """Recover a forward's source when Discord omitted its snapshot field.
+
+    The API marks a forward with ``message_reference.type`` and requires the
+    source message/channel IDs.  ``message_snapshots`` is normally present,
+    but the field is optional in the message schema and can be absent from a
+    lightweight fetch.  Use the resolved source first, then fetch it through
+    the caller's thread-aware channel resolver.  ``None`` means the forward
+    still has no renderable body and must be rejected by the caller.
+    """
+    if getattr(message, 'message_snapshots', None):
+        return None
+    reference = getattr(message, 'reference', None)
+    if not _is_forward_message(message):
+        return None
+    resolved = getattr(reference, 'resolved', None)
+    if (resolved is not None
+            and not isinstance(resolved, discord.DeletedReferencedMessage)
+            and _has_renderable_content(resolved)):
+        return resolved
+    channel_id = getattr(reference, 'channel_id', None)
+    message_id = getattr(reference, 'message_id', None)
+    if channel_id is None or message_id is None:
+        return None
+    try:
+        channel = await resolve_channel(channel_id)
+        source = await channel.fetch_message(message_id)
+        return source if _has_renderable_content(source) else None
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        logger.debug('Could not fetch source of forwarded message %s',
+                     getattr(message, 'id', '?'), exc_info=True)
+        return None
 
 
 def _attachment_is_spoiler(attachment):
@@ -187,7 +254,8 @@ def _parse_starboard_args(
     return emoji, dlo, dhi, label
 
 
-async def build_starboard_message(message, emoji_str, count, color):
+async def build_starboard_message(message, emoji_str, count, color,
+                                  forward_snapshot=None):
     """Build content, embeds, and files for a starboard message.
 
     Returns (content, embeds, files) where:
@@ -200,10 +268,10 @@ async def build_starboard_message(message, emoji_str, count, color):
     For non-video: author goes in the main embed via set_author.
     """
     snapshots = getattr(message, 'message_snapshots', None) or ()
-    snapshot = snapshots[0] if snapshots else None
+    snapshot = snapshots[0] if snapshots else forward_snapshot
     rendered = snapshot or message
     reference = getattr(message, 'reference', None)
-    is_forward = snapshot is not None or _is_forward_reference(reference)
+    is_forward = snapshot is not None or _is_forward_message(message)
     forwarder_label = (
         f'Forwarded by {message.author.display_name}'
         if is_forward else message.author.display_name
@@ -428,5 +496,4 @@ async def build_starboard_message(message, emoji_str, count, color):
 
     # Discord allows a maximum of 10 embeds per message
     embeds = embeds[:10]
-
     return content, embeds, files

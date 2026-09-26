@@ -17,6 +17,7 @@ from tests.starboard_test_utils import (
     _run,
 )
 from tle.cogs.starboard import Starboard
+from tle.cogs._starboard_core import StarboardCogError
 
 
 PILL = '\N{PILL}'
@@ -263,19 +264,21 @@ def test_snapshot_only_forward_can_be_added_by_pill_reaction(
     assert stored.star_count == 1
 
 
-def test_forward_pill_reaction_event_uses_snapshot_content(db, monkeypatch):
-    """A raw pill event must pass the forwarded snapshot through the normal
-    listener path, rather than rejecting the empty outer message body."""
+@pytest.mark.parametrize('emoji', [PILL, '\N{WHITE MEDIUM STAR}'])
+def test_forward_reaction_event_uses_snapshot_content(
+        db, monkeypatch, emoji):
+    """Forward snapshots use the normal path for every configured emoji."""
     from tle.util import codeforces_common as cf_common
 
     monkeypatch.setattr(cf_common, 'user_db', db)
-    db.add_starboard_emoji(GUILD_A, PILL, 1, 0x55AA77)
-    db.set_starboard_channel(GUILD_A, PILL, '888')
+    db.add_starboard_emoji(GUILD_A, emoji, 1, 0x55AA77)
+    db.set_starboard_channel(GUILD_A, emoji, '888')
 
     reference = _FakeReference(message_id=123)
     reference.type = discord.MessageReferenceType.forward
     message = _ForwardedMessage(
-        _Snapshot(content='Forwarded pill body'), reference=reference)
+        _Snapshot(content='Forwarded body'), reference=reference,
+        reactions=[_Reaction(emoji, [_Payload.user_id])])
     # Forward references identify the message even if the outer type is an
     # enum value this discord.py version does not know about.
     message.type = 999
@@ -286,7 +289,103 @@ def test_forward_pill_reaction_event_uses_snapshot_content(db, monkeypatch):
     cog.bot = _Bot(guild, source_channel)
     cog.locks = {}
 
-    _run(cog._handle_reaction_add(_Payload()))
+    payload = _Payload()
+    payload.emoji = emoji
+    _run(cog._handle_reaction_add(payload))
 
     assert len(starboard_channel.sent) == 1
-    assert starboard_channel.sent[0]['embeds'][0].description == 'Forwarded pill body'
+    assert starboard_channel.sent[0]['embeds'][0].description == 'Forwarded body'
+
+
+def test_legacy_forward_fetches_source_when_snapshots_are_not_exposed(
+        db, monkeypatch):
+    """Older discord.py builds retain the forward flag but drop snapshots."""
+    from tle.util import codeforces_common as cf_common
+
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    db.add_starboard_emoji(GUILD_A, PILL, 1, 0x55AA77)
+    db.set_starboard_channel(GUILD_A, PILL, '888')
+
+    outer_channel_id = 1538750925265707048
+    source_channel_id = 1511821250018807838
+    source_message_id = 1553305709343547464
+    source = _FakeMessage(content='10101000111')
+    forwarded = _FakeMessage(content='', reference=_FakeReference(
+        message_id=source_message_id))
+    forwarded.reference.channel_id = source_channel_id
+    forwarded.id = 1553305883012763730
+    forwarded.author = _Forwarder()
+    forwarded.flags = SimpleNamespace(value=1 << 14)
+    forwarded.message_snapshots = []
+    forwarded.reactions = [_Reaction(PILL, [_Payload.user_id])]
+    payload = _Payload()
+    payload.channel_id = outer_channel_id
+    payload.message_id = forwarded.id
+
+    class _OuterChannel(_SourceChannel):
+        async def fetch_message(self, message_id):
+            assert message_id == forwarded.id
+            return forwarded
+
+    outer_channel = _OuterChannel(outer_channel_id, forwarded)
+    source_channel = _SourceChannel(source_channel_id, source)
+
+    class _MappedBot(_Bot):
+        def get_channel(self, channel_id):
+            return {
+                outer_channel_id: outer_channel,
+                source_channel_id: source_channel,
+            }.get(channel_id)
+
+        async def fetch_channel(self, channel_id):
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                raise discord.NotFound()
+            return channel
+
+    starboard_channel = _StarboardChannel(888)
+    guild = _Guild(GUILD_A, starboard_channel)
+    cog = Starboard.__new__(Starboard)
+    cog.bot = _MappedBot(guild, outer_channel)
+    cog.locks = {}
+
+    _run(cog.check_and_add_to_starboard(
+        starboard_channel_id=888,
+        threshold=1,
+        color=0x55AA77,
+        emoji_str=PILL,
+        payload=payload,
+    ))
+
+    sent = starboard_channel.sent[0]
+    assert sent['embeds'][0].description == '10101000111'
+    assert sent['embeds'][0].author_data['name'] == 'Forwarded by TestUser'
+
+
+def test_empty_forward_without_snapshot_or_source_is_rejected(db, monkeypatch):
+    from tle.util import codeforces_common as cf_common
+
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    db.add_starboard_emoji(GUILD_A, PILL, 1, 0x55AA77)
+    db.set_starboard_channel(GUILD_A, PILL, '888')
+
+    forwarded = _FakeMessage(content='', reference=_FakeReference(
+        message_id=123))
+    forwarded.id = 5001
+    forwarded.flags = SimpleNamespace(value=1 << 14)
+    forwarded.message_snapshots = []
+    source_channel = _SourceChannel(_Payload.channel_id, forwarded)
+    starboard_channel = _StarboardChannel(888)
+    guild = _Guild(GUILD_A, starboard_channel)
+    cog = Starboard.__new__(Starboard)
+    cog.bot = _Bot(guild, source_channel)
+    cog.locks = {}
+
+    with pytest.raises(StarboardCogError, match='invalid type or empty content'):
+        _run(cog.check_and_add_to_starboard(
+            starboard_channel_id=888,
+            threshold=1,
+            color=0x55AA77,
+            emoji_str=PILL,
+            payload=_Payload(),
+        ))
