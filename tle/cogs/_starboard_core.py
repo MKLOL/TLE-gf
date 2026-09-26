@@ -19,6 +19,7 @@ from tle.util import ranking
 from tle.cogs._starboard_helpers import _emoji_str
 from tle.cogs._starboard_render import (
     _starboard_content,
+    _is_forward_reference,
     build_starboard_message as _build_sb_msg,
 )
 
@@ -303,7 +304,11 @@ class CoreMixin:
         message = await channel.fetch_message(payload.message_id)
 
         snapshots = getattr(message, 'message_snapshots', None) or ()
-        if ((message.type != discord.MessageType.default and message.type != discord.MessageType.reply)
+        is_forward = bool(snapshots) or _is_forward_reference(
+            getattr(message, 'reference', None))
+        if ((message.type not in (discord.MessageType.default,
+                                  discord.MessageType.reply)
+             and not is_forward)
                 or (len(message.content) == 0 and len(message.attachments) == 0
                     and len(message.embeds) == 0 and not snapshots)):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')

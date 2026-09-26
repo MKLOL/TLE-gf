@@ -116,6 +116,7 @@ class _Payload:
     channel_id = 222
     message_id = 5001
     user_id = 99
+    emoji = PILL
 
 
 @pytest.fixture
@@ -260,3 +261,32 @@ def test_snapshot_only_forward_can_be_added_by_pill_reaction(
     assert stored is not None
     assert stored.author_id == str(message.author.id)
     assert stored.star_count == 1
+
+
+def test_forward_pill_reaction_event_uses_snapshot_content(db, monkeypatch):
+    """A raw pill event must pass the forwarded snapshot through the normal
+    listener path, rather than rejecting the empty outer message body."""
+    from tle.util import codeforces_common as cf_common
+
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    db.add_starboard_emoji(GUILD_A, PILL, 1, 0x55AA77)
+    db.set_starboard_channel(GUILD_A, PILL, '888')
+
+    reference = _FakeReference(message_id=123)
+    reference.type = discord.MessageReferenceType.forward
+    message = _ForwardedMessage(
+        _Snapshot(content='Forwarded pill body'), reference=reference)
+    # Forward references identify the message even if the outer type is an
+    # enum value this discord.py version does not know about.
+    message.type = 999
+    source_channel = _SourceChannel(_Payload.channel_id, message)
+    starboard_channel = _StarboardChannel(888)
+    guild = _Guild(GUILD_A, starboard_channel)
+    cog = Starboard.__new__(Starboard)
+    cog.bot = _Bot(guild, source_channel)
+    cog.locks = {}
+
+    _run(cog._handle_reaction_add(_Payload()))
+
+    assert len(starboard_channel.sent) == 1
+    assert starboard_channel.sent[0]['embeds'][0].description == 'Forwarded pill body'

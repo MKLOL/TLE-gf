@@ -67,8 +67,8 @@ def _is_forward_reference(reference):
     reference_type = getattr(reference, 'type', None)
     enum = getattr(discord, 'MessageReferenceType', None)
     forward = getattr(enum, 'forward', None)
-    if forward is not None:
-        return reference_type == forward
+    if forward is not None and reference_type == forward:
+        return True
     return getattr(reference_type, 'value', reference_type) == \
         _FORWARD_REFERENCE_VALUE
 
