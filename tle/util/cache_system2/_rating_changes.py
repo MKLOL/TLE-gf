@@ -110,11 +110,13 @@ class RatingChangesCache:
         # Sort by the rating update time of the first change in the list of changes, assuming
         # every change in the list has the same time.
         contest_changes_pairs.sort(key=lambda pair: pair[1][0].ratingUpdateTimeSeconds)
-        await self._save_changes(contest_changes_pairs)
+        saved = self._store_changes(contest_changes_pairs)
         for contest, changes in contest_changes_pairs:
+            self._to_verify[contest.id] = (contest, self._VERIFY_AFTER_TICKS)
             cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
                                          rating_changes=changes)
-            self._to_verify[contest.id] = (contest, self._VERIFY_AFTER_TICKS)
+        if saved:
+            await self._refresh_handle_cache()
 
     async def _verify_saved(self):
         """Re-fetch recently saved contests once; publish what the first copy missed.
@@ -140,8 +142,8 @@ class RatingChangesCache:
             # casing variants atomically instead of inserting duplicate rows.
             merged = {change.handle.lower(): change for change in saved}
             merged.update((change.handle.lower(), change) for change in fetched)
-            await self._save_changes([(contest, list(merged.values()))],
-                                     replace_contest_id=contest.id)
+            self._store_changes([(contest, list(merged.values()))],
+                                replace_contest_id=contest.id)
             self.logger.warning('Contest %s: first rating fetch was incomplete — %d missing, '
                                 '%d recalculated; publishing the late changes',
                                 contest.id, len(new), len(changed))
@@ -150,6 +152,7 @@ class RatingChangesCache:
             # Failed/empty fetches and cancellation leave the verification
             # queued for the next monitor tick.
             self._to_verify.pop(contest.id, None)
+            await self._refresh_handle_cache()
 
     async def _fetch(self, contests):
         all_changes = []
@@ -164,14 +167,19 @@ class RatingChangesCache:
                 pass
         return all_changes
 
-    async def _save_changes(self, contest_changes_pairs, *, replace_contest_id=None):
+    def _store_changes(self, contest_changes_pairs, *, replace_contest_id=None):
+        """Commit synchronously so callers can publish before their next await."""
         flattened = [change for _, changes in contest_changes_pairs for change in changes]
         if not flattened:
-            return
+            return 0
         rc = self.cache_master.conn.save_rating_changes(
             flattened, replace_contest_id=replace_contest_id)
         self.logger.info(f'Saved {rc} changes to database.')
-        await self._refresh_handle_cache()
+        return rc
+
+    async def _save_changes(self, contest_changes_pairs):
+        if self._store_changes(contest_changes_pairs):
+            await self._refresh_handle_cache()
 
     async def _refresh_handle_cache(self):
         t0 = time.time()

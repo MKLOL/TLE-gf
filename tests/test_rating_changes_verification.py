@@ -106,3 +106,23 @@ def test_recalculation_with_new_casing_replaces_one_row_and_publishes(env):
         ('Alice', 1200), ('other', 1100)}
     assert len(db.get_rating_changes_for_contest(2)) == 1
     assert dispatch.call_args.kwargs['rating_changes'] == [_change('Alice', new=1200)]
+
+
+@pytest.mark.parametrize('initial_fetch', [True, False])
+def test_cancelling_memory_refresh_does_not_lose_saved_announcements(env, initial_fetch):
+    module, cache, contest, db, _, api, dispatch = env
+    api.return_value = [_change('alice'), _change('bob')]
+    cache._refresh_handle_cache.side_effect = asyncio.CancelledError
+    if initial_fetch:
+        cache.monitored_contests = [contest]
+        run = module.RatingChangesCache._monitor_task._func(cache, None)
+    else:
+        db.save_rating_changes([_change('alice')])
+        cache._to_verify[1] = (contest, 1)
+        run = cache._verify_saved()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run)
+    assert {change.handle for change in db.get_rating_changes_for_contest(1)} == {'alice', 'bob'}
+    assert [change.handle for change in dispatch.call_args.kwargs['rating_changes']] == (
+        ['alice', 'bob'] if initial_fetch else ['bob'])
+    assert (1 in cache._to_verify) is initial_fetch
