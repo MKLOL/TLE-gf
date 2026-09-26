@@ -133,6 +133,19 @@ class HandleDbMixin:
         res = self.conn.execute(query, (guild_id,)).fetchall()
         return [(int(user_id), handle) for user_id, handle in res]
 
+    def get_inactive_user_ids_for_guild(self, guild_id):
+        res = self.conn.execute(
+            'SELECT user_id FROM user_handle WHERE guild_id = ? AND active = 0',
+            (guild_id,)).fetchall()
+        return [int(user_id) for user_id, in res]
+
+    def get_handle_status(self, user_id, guild_id):
+        """``(handle, active)`` for a linked user, or None if not linked."""
+        row = self.conn.execute(
+            'SELECT handle, active FROM user_handle WHERE user_id = ? AND guild_id = ?',
+            (user_id, guild_id)).fetchone()
+        return (row[0], bool(row[1])) if row else None
+
     def get_cf_users_for_guild(self, guild_id):
         query = ('SELECT u.user_id, c.handle, c.first_name, c.last_name, c.country, c.city, '
                  '    c.organization, c.contribution, c.rating, c.maxRating, c.last_online_time, '

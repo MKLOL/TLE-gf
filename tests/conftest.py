@@ -132,7 +132,14 @@ _cf_api.RatingChange = _nt('RatingChange',
 _cf_api.GYM_ID_THRESHOLD = 100000
 _cf_api.CONTEST_BASE_URL = 'https://codeforces.com/contest/'
 _cf_api.CodeforcesApiError = type('CodeforcesApiError', (Exception,), {})
-_cf_api.HandleNotFoundError = type('HandleNotFoundError', (_cf_api.CodeforcesApiError,), {})
+
+class _TrueApiError(_cf_api.CodeforcesApiError):
+    def __init__(self, comment='', handle=None):
+        super().__init__(comment)
+        self.comment = comment
+_cf_api.TrueApiError = _TrueApiError
+_cf_api.HandleNotFoundError = type('HandleNotFoundError', (_TrueApiError,), {})
+_cf_api.HandleInvalidError = type('HandleInvalidError', (_TrueApiError,), {})
 
 class _Contest(_NamedTuple):
     id: int

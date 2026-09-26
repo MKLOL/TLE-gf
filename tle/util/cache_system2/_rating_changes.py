@@ -8,18 +8,25 @@ from tle.util import events
 from tle.util import tasks
 from tle.util import paginator
 from tle.util.cache_system2._common import (
-    _CONTESTS_PER_BATCH_IN_CACHE_UPDATES, _is_blacklisted)
+    _CONTESTS_PER_BATCH_IN_CACHE_UPDATES, _is_blacklisted, late_rating_changes)
 
 
 class RatingChangesCache:
     _RATED_DELAY = 36 * 60 * 60
     _RELOAD_DELAY = 10 * 60
 
+    # A contest is re-fetched this many monitor ticks after its changes were
+    # first saved. Codeforces can serve the list before it is complete, and
+    # a member missing from that first copy was missing from the rank update
+    # for good.
+    _VERIFY_AFTER_TICKS = 1
+
     def __init__(self, cache_master):
         self.cache_master = cache_master
         self.monitored_contests = []
         self.handle_rating_cache = {}
         self.logger = logging.getLogger(self.__class__.__name__)
+        self._to_verify = {}  # contest id -> (contest, ticks remaining)
 
     async def run(self):
         await self._refresh_handle_cache()
@@ -96,7 +103,8 @@ class RatingChangesCache:
                and not _is_blacklisted(contest)
         ]
 
-        if not self.monitored_contests:
+        await self._verify_saved()
+        if not self.monitored_contests and not self._to_verify:
             self.logger.info('Rated changes fetched for contests that were being monitored.')
             await self._monitor_task.stop()
             return
@@ -109,6 +117,35 @@ class RatingChangesCache:
         for contest, changes in contest_changes_pairs:
             cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
                                          rating_changes=changes)
+            self._to_verify[contest.id] = (contest, self._VERIFY_AFTER_TICKS)
+
+    async def _verify_saved(self):
+        """Re-fetch recently saved contests once; publish what the first copy missed.
+
+        Late changes go out as their own RatingChangesUpdate, so the members
+        left out of the original rank update get their own — and the mod log
+        hears about it at WARNING, because it means the first fetch was short.
+        """
+        due = []
+        for contest_id, (contest, ticks) in list(self._to_verify.items()):
+            if ticks > 0:
+                self._to_verify[contest_id] = (contest, ticks - 1)
+            else:
+                due.append(contest)
+                del self._to_verify[contest_id]
+        for contest, fetched in await self._fetch(due):
+            saved = self.cache_master.conn.get_rating_changes_for_contest(contest.id)
+            new, changed = late_rating_changes(saved, fetched)
+            if not new and not changed:
+                self.logger.info('Verified rating changes for contest %s: complete', contest.id)
+                continue
+            await self._save_changes([(contest, new + changed)])
+            self.logger.warning('Contest %s: first rating fetch was incomplete — %d missing, '
+                                '%d recalculated; publishing the late changes',
+                                contest.id, len(new), len(changed))
+            if new:
+                cf_common.event_sys.dispatch(events.RatingChangesUpdate, contest=contest,
+                                             rating_changes=new)
 
     async def _fetch(self, contests):
         all_changes = []

@@ -79,12 +79,22 @@ class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
     @tasks.task_spec(name='SetExUsersInactive',
                      waiter=tasks.Waiter.fixed_delay(_UPDATE_HANDLE_STATUS_INTERVAL))
     async def _set_ex_users_inactive_task(self, _):
-        # To set users inactive in case the bot was dead when they left.
+        # To set users inactive in case the bot was dead when they left —
+        # and active again in case it was dead when they came back, which
+        # otherwise left them out of every rank update and role sync.
         to_set_inactive = []
         for guild in self.bot.guilds:
             user_id_handle_pairs = cf_common.user_db.get_handles_for_guild(guild.id)
             to_set_inactive += [(guild.id, user_id) for user_id, _ in user_id_handle_pairs
                                 if guild.get_member(user_id) is None]
+            returned = [user_id for user_id
+                        in cf_common.user_db.get_inactive_user_ids_for_guild(guild.id)
+                        if guild.get_member(user_id) is not None]
+            for start in range(0, len(returned), 500):
+                cf_common.user_db.update_status(guild.id, returned[start:start + 500])
+            if returned:
+                self.logger.info('Reactivated %d returned members in guild %s',
+                                 len(returned), guild.id)
         cf_common.user_db.set_inactive(to_set_inactive)
 
     @commands.group(brief='Commands that have to do with handles', invoke_without_command=True)

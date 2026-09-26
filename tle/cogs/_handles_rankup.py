@@ -1,5 +1,5 @@
 import asyncio
-import contextlib
+import logging
 
 import discord
 from discord.ext import commands
@@ -19,6 +19,38 @@ from tle.cogs._handles_helpers import (
 )
 
 
+SKIP_NOT_IN_SERVER = 'not in server'
+SKIP_NOT_RATED = 'no rating change in this contest'
+SKIP_SHADOW_REALM = 'Shadow Realm role'
+
+
+def match_members_to_changes(member_handle_pairs, change_by_handle):
+    """Pair linked members with their rating change, and say who was dropped.
+
+    Handles are matched case-insensitively: Codeforces treats casing as
+    cosmetic and lets users change it, so a member linked as ``FlameStorm``
+    whose change comes back as ``flamestorm`` is the same person. Every
+    member without a pair is returned with the reason, so a missing name in
+    a rank update is answerable instead of a mystery.
+
+    Returns ``(pairs, skipped)`` where ``pairs`` is ``[(member, change)]`` and
+    ``skipped`` is ``[(handle, reason)]``.
+    """
+    by_lower = {handle.lower(): change for handle, change in change_by_handle.items()}
+    pairs, skipped = [], []
+    for member, handle in member_handle_pairs:
+        change = by_lower.get(handle.lower())
+        if member is None:
+            skipped.append((handle, SKIP_NOT_IN_SERVER))
+        elif change is None:
+            skipped.append((handle, SKIP_NOT_RATED))
+        elif any(role.name == 'Shadow Realm' for role in member.roles):
+            skipped.append((handle, SKIP_SHADOW_REALM))
+        else:
+            pairs.append((member, change))
+    return pairs, skipped
+
+
 class RankUpMixin:
     """Mixin holding rank-role updates, rankup-embed publishing, and the
     pingable-role subscription commands."""
@@ -31,19 +63,37 @@ class RankUpMixin:
         change_by_handle = {change.handle: change for change in changes}
 
         async def update_for_guild(guild):
+            # The role sync and the announcement are independent: a failure
+            # in one must neither cancel the other nor vanish. This used to
+            # run both in sequence under gather(return_exceptions=True), so
+            # any non-HandleCogError from the role sync — one renamed handle
+            # failing the whole user.info call, a Forbidden on one role edit —
+            # skipped the announcement and was never logged anywhere.
             if cf_common.user_db.has_auto_role_update_enabled(guild.id):
-                with contextlib.suppress(HandleCogError):
+                try:
                     await self._update_ranks_all(guild)
+                except HandleCogError as error:
+                    self.logger.warning('Role sync skipped for guild %s after contest %s: %s',
+                                        guild.id, contest.id, error)
+                except Exception:
+                    self.logger.exception('Role sync failed for guild %s after contest %s',
+                                          guild.id, contest.id)
             channel_id = cf_common.user_db.get_rankup_channel(guild.id)
             channel = guild.get_channel(channel_id)
-            if channel is not None:
-                with contextlib.suppress(HandleCogError):
-                    embeds = self._make_rankup_embeds(guild, contest, change_by_handle)
-                    for embed in embeds:
-                        await channel.send(embed=embed)
+            if channel is None:
+                return
+            try:
+                embeds = self._make_rankup_embeds(guild, contest, change_by_handle)
+                for embed in embeds:
+                    await channel.send(embed=embed)
+            except HandleCogError as error:
+                self.logger.info('No rank update for guild %s, contest %s: %s',
+                                 guild.id, contest.id, error)
+            except Exception:
+                self.logger.exception('Rank update post failed for guild %s, contest %s',
+                                      guild.id, contest.id)
 
-        await asyncio.gather(*(update_for_guild(guild) for guild in self.bot.guilds),
-                             return_exceptions=True)
+        await asyncio.gather(*(update_for_guild(guild) for guild in self.bot.guilds))
         self.logger.info(f'All guilds updated for contest {contest.id}.')
 
     @staticmethod
@@ -73,17 +123,43 @@ class RankUpMixin:
         res = cf_common.user_db.get_handles_for_guild(guild.id)
         await self._update_ranks(guild, res)
 
+    async def _fetch_users_tolerant(self, handles):
+        """user.info for many handles, dropping the ones Codeforces rejects.
+
+        One renamed or deleted handle fails the whole batched request, and
+        this is called with every linked handle in a server — so one dead
+        link used to block every member's rank update. Rejected handles are
+        skipped and named in a WARNING so the link can be fixed.
+        """
+        handles = list(handles)
+        skipped = []
+        while handles:
+            try:
+                return await cf.user.info(handles=handles), skipped
+            except (cf.HandleNotFoundError, cf.HandleInvalidError) as error:
+                # Comment format: "handles: User with handle ***** not found"
+                bad = error.comment.partition('not found')[0].split()[-1].lower()
+                remaining = [handle for handle in handles if handle.lower() != bad]
+                if len(remaining) == len(handles):
+                    raise  # could not tell which handle; do not loop forever
+                skipped.append(bad)
+                handles = remaining
+        return [], skipped
+
     async def _update_ranks(self, guild, res):
         member_handles = [(guild.get_member(user_id), handle) for user_id, handle in res]
         member_handles = [(member, handle) for member, handle in member_handles if member is not None]
         if not member_handles:
             raise HandleCogError('Handles not set for any user')
-        members, handles = zip(*member_handles)
-        users = await cf.user.info(handles=handles)
+        users, skipped = await self._fetch_users_tolerant(handle for _, handle in member_handles)
+        if skipped:
+            self.logger.warning('Rank update in guild %s skipped handles Codeforces no longer '
+                                'resolves: %s', guild.id, ', '.join(skipped))
+        member_by_handle = {handle.lower(): member for member, handle in member_handles}
         for user in users:
             rc = cf_common.user_db.cache_cf_user(user)
             if rc != 1:
-                raise HandleCogError('DB update for user {user.handle} failed.')
+                raise HandleCogError(f'DB update for user {user.handle} failed.')
 
         required_roles = {user.rank.title for user in users}
         rank2role = {role.name: role for role in guild.roles if role.name in required_roles}
@@ -93,10 +169,23 @@ class RankUpMixin:
             plural = 's' if len(missing_roles) > 1 else ''
             raise HandleCogError(f'Role{plural} for rank{plural} {roles_str} not present in the server')
 
-        for member, user in zip(members, users):
+        failures = 0
+        for user in users:
+            member = member_by_handle.get(user.handle.lower())
+            if member is None:
+                continue
             role_to_assign = rank2role[user.rank.title]
-            await self.update_member_rank_role(member, role_to_assign,
-                                               reason='Codeforces rank update')
+            try:
+                await self.update_member_rank_role(member, role_to_assign,
+                                                   reason='Codeforces rank update')
+            except discord.HTTPException as error:
+                # One member's role edit failing (hierarchy, permissions) must
+                # not stop the rest of the server from being updated.
+                failures += 1
+                self.logger.warning('Could not update rank role for %s (%s) in guild %s: %s',
+                                    member.id, user.handle, guild.id, error)
+        if failures:
+            self.logger.warning('%d rank role updates failed in guild %s', failures, guild.id)
 
     @staticmethod
     def _make_rankup_embeds(guild, contest, change_by_handle):
@@ -106,13 +195,17 @@ class RankUpMixin:
         user_id_handle_pairs = cf_common.user_db.get_handles_for_guild(guild.id)
         member_handle_pairs = [(guild.get_member(user_id), handle)
                                for user_id, handle in user_id_handle_pairs]
-        def ispurg(member):
-            # TODO: temporary code, todo properly later
-            return any(role.name == 'Shadow Realm' for role in member.roles)
-
-        member_change_pairs = [(member, change_by_handle[handle])
-                               for member, handle in member_handle_pairs
-                               if member is not None and handle in change_by_handle and not ispurg(member)]
+        member_change_pairs, skipped = match_members_to_changes(
+            member_handle_pairs, change_by_handle)
+        # Members who *were* rated but are left out are the ones people ask
+        # about; say so in the log rather than dropping them silently.
+        rated_lower = {handle.lower() for handle in change_by_handle}
+        dropped = [(handle, why) for handle, why in skipped
+                   if why != SKIP_NOT_RATED and handle.lower() in rated_lower]
+        if dropped:
+            logging.getLogger(__name__).info(
+                'Rank update for contest %s in guild %s left out: %s', contest.id, guild.id,
+                ', '.join(f'{handle} ({why})' for handle, why in dropped[:50]))
         if not member_change_pairs:
             raise HandleCogError(f'Contest `{contest.id} | {contest.name}` was not rated for any '
                                  'member of this server.')
@@ -231,6 +324,59 @@ class RankUpMixin:
             except ValueError:
                 raise ValueError(f"arg must be 'here', 'off' or a contest ID, got '{arg}' instead.")
             await self._publish_now(ctx, contest_id)
+
+    @roleupdate.command(brief='Explain why a member was or was not in a rank update',
+                        usage='@member [contest_id]')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def check(self, ctx, member: discord.Member, contest_id: int = None):
+        """Walks every condition a rank update applies to one member: the
+        stored handle and whether the link is active, the casing Codeforces
+        uses today, the Shadow Realm role, and — given a contest — whether
+        the bot's saved rating changes and Codeforces' live list contain them.
+        """
+        lines = await self._check_member(ctx.guild, member, contest_id)
+        embed = discord.Embed(title=f'Rank update check: {member.display_name}',
+                              description='\n'.join(lines))
+        await ctx.send(embed=embed)
+
+    async def _check_member(self, guild, member, contest_id):
+        status = cf_common.user_db.get_handle_status(member.id, guild.id)
+        if status is None:
+            return ['No Codeforces handle linked in this server — never listed.']
+        handle, active = status
+        lines = [f'Linked handle: `{handle}`' + ('' if active else
+                 ' — **inactive** (left the server while the bot was down?); '
+                 'rejoining or `;handle identify` reactivates it')]
+        try:
+            user, = await cf.user.info(handles=[handle])
+            if user.handle != handle:
+                lines.append(f'Codeforces now spells it `{user.handle}` — matched '
+                             f'case-insensitively, fine')
+            lines.append(f'Rating now: {user.rating}')
+        except cf.CodeforcesApiError as error:
+            lines.append(f'Codeforces does not resolve `{handle}` ({error}) — '
+                         f'a renamed or deleted account is never listed')
+        if any(role.name == 'Shadow Realm' for role in member.roles):
+            lines.append('Has the **Shadow Realm** role — deliberately excluded from rank updates')
+        if contest_id is None:
+            return lines
+        saved = cf_common.cache2.rating_changes_cache.get_rating_changes_for_contest(contest_id)
+        in_saved = any(change.handle.lower() == handle.lower() for change in saved)
+        lines.append(f'Contest {contest_id}: bot has {len(saved)} saved changes, '
+                     f'{"including" if in_saved else "**not including**"} `{handle}`')
+        try:
+            live = await cf.contest.ratingChanges(contest_id=contest_id)
+        except cf.CodeforcesApiError as error:
+            lines.append(f'Codeforces live list unavailable ({error})')
+            return lines
+        in_live = any(change.handle.lower() == handle.lower() for change in live)
+        lines.append(f'Codeforces has {len(live)} changes, '
+                     f'{"including" if in_live else "not including"} `{handle}`')
+        if len(live) > len(saved):
+            lines.append(f'**The bot saved an incomplete list** ({len(saved)} of {len(live)}); '
+                         f'`;cache ratingchanges {contest_id}` refetches it, then '
+                         f'`;roleupdate publish {contest_id}` republishes')
+        return lines
 
     async def _publish_now(self, ctx, contest_id):
         try:
