@@ -28,6 +28,25 @@ def repair_virtual_schema(conn):
     if 'base_rating' not in columns:
         conn.execute('ALTER TABLE virtual_session ADD COLUMN '
                      'base_rating INTEGER NOT NULL DEFAULT 0')
+    # Zero is the old migration's missing-rating sentinel, never a valid
+    # gitgud base (which is clamped to 1100..3000). Reconstruct it once from
+    # the bound handle's cache. Without that cache, use the conservative
+    # maximum base instead of awarding the maximum score for every solve.
+    has_cache = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'cf_user_cache'").fetchone()
+    for sid, handle in conn.execute(
+            'SELECT id, handle FROM virtual_session WHERE base_rating = 0').fetchall():
+        cached = (conn.execute(
+            'SELECT rating FROM cf_user_cache WHERE handle = ? COLLATE NOCASE',
+            (handle,)).fetchone() if has_cache else None)
+        rating = 3000 if cached is None else cached[0]
+        base = 1100 if rating is None else max(1100, min(3000, round(rating, -2)))
+        conn.execute('UPDATE virtual_session SET base_rating = ? WHERE id = ?',
+                     (base, sid))
+    indexes = {row[1] for row in conn.execute('PRAGMA index_list(virtual_session)')}
+    if 'idx_virtual_session_active' in indexes:
+        return
     # Same index name, different columns in the first cut.
     conn.execute('DROP INDEX IF EXISTS idx_virtual_session_user')
     # The unique index cannot be built while a user holds two active rows;
@@ -38,6 +57,10 @@ def repair_virtual_schema(conn):
 
 
 def create_virtual_schema(conn):
+    # UserDbConn creates base tables before running migrations. Repair an
+    # early table here too: otherwise duplicate active rows make the unique
+    # index fail before migration 1.63 can resolve them.
+    repair_virtual_schema(conn)
     conn.execute('''CREATE TABLE IF NOT EXISTS virtual_session (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id     TEXT NOT NULL,
