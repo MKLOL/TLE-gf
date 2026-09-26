@@ -50,11 +50,13 @@ def _member_cache_complete(guild):
     fallback for objects that do not carry it. Nothing that marks a member
     absent may run while this is False.
     """
+    if getattr(guild, 'unavailable', False):
+        return False
     chunked = getattr(guild, 'chunked', None)
     if chunked is not None:
         return bool(chunked)
     member_count = getattr(guild, 'member_count', None)
-    return member_count is None or len(guild.members) >= member_count
+    return member_count is not None and len(guild.members) >= member_count
 
 
 class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
@@ -77,6 +79,9 @@ class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
     @commands.command(brief='update status, mark guild members as active')
     @commands.has_role(constants.TLE_ADMIN)
     async def _updatestatus(self, ctx):
+        if not _member_cache_complete(ctx.guild):
+            raise HandleCogError('The server member list is unavailable or still loading. '
+                                 'Try again once it has finished loading.')
         gid = ctx.guild.id
         active_ids = [m.id for m in ctx.guild.members]
         cf_common.user_db.reset_status(gid)
@@ -109,7 +114,7 @@ class Handles(GudgittersMixin, RankUpMixin, commands.Cog):
             if not _member_cache_complete(guild):
                 self.logger.warning('Skipping inactive sweep for guild %s: member cache '
                                     'holds %d of %s members', guild.id,
-                                    len(guild.members), guild.member_count)
+                                    len(guild.members), getattr(guild, 'member_count', None))
                 continue
             user_id_handle_pairs = cf_common.user_db.get_handles_for_guild(guild.id)
             to_set_inactive += [(guild.id, user_id) for user_id, _ in user_id_handle_pairs

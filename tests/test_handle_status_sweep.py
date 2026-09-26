@@ -2,8 +2,12 @@
 import asyncio
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from tle.cogs import handles as handles_cog
+from tle.cogs._handles_helpers import HandleCogError
 from tle.util import codeforces_common as cf_common
 
 
@@ -75,3 +79,28 @@ def test_count_fallback_passes_a_full_cache(monkeypatch):
     db = _Db(active={10: 'a', 20: 'b'}, inactive=set())
     calls = _run(db, _guild([10], member_count=1), monkeypatch)
     assert ('deactivate', [20]) in calls
+
+
+def test_unknown_member_count_does_not_prove_completeness(monkeypatch):
+    db = _Db(active={10: 'a', 20: 'b'}, inactive=set())
+    guild = _guild([10])
+    del guild.member_count
+    assert _run(db, guild, monkeypatch) == [('deactivate', [])]
+
+
+def test_unavailable_guild_does_not_use_a_stale_member_cache(monkeypatch):
+    db = _Db(active={10: 'a', 20: 'b'}, inactive=set())
+    guild = _guild([10], chunked=True)
+    guild.unavailable = True
+    assert _run(db, guild, monkeypatch) == [('deactivate', [])]
+
+
+def test_manual_status_reset_cannot_mark_members_absent_from_partial_cache(monkeypatch):
+    db = SimpleNamespace(reset_status=Mock(), update_status=Mock())
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    cog = handles_cog.Handles.__new__(handles_cog.Handles)
+    ctx = SimpleNamespace(guild=_guild([10], member_count=2, chunked=False), send=AsyncMock())
+    with pytest.raises(HandleCogError, match='still loading'):
+        asyncio.run(cog._updatestatus(ctx))
+    db.reset_status.assert_not_called()
+    db.update_status.assert_not_called()
