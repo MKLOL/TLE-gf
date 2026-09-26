@@ -14,6 +14,29 @@ ACTIVE = 'active'
 CLAIMED = 'claimed'
 
 
+def repair_virtual_schema(conn):
+    """Bring a ``virtual_session`` created by the first cut up to shape.
+
+    That cut (never meant to be deployed, but ``run.sh`` pulls on every
+    restart) lacked ``base_rating``, indexed by guild, and allowed one active
+    session per guild rather than per user. ``CREATE ... IF NOT EXISTS``
+    would keep the old shape silently and every confirm would then fail.
+    """
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(virtual_session)')}
+    if not columns:
+        return
+    if 'base_rating' not in columns:
+        conn.execute('ALTER TABLE virtual_session ADD COLUMN '
+                     'base_rating INTEGER NOT NULL DEFAULT 0')
+    # Same index name, different columns in the first cut.
+    conn.execute('DROP INDEX IF EXISTS idx_virtual_session_user')
+    # The unique index cannot be built while a user holds two active rows;
+    # keep the newest, close the rest.
+    conn.execute('''UPDATE virtual_session SET status = ? WHERE status = ?
+        AND id NOT IN (SELECT MAX(id) FROM virtual_session WHERE status = ?
+                       GROUP BY user_id)''', (CLAIMED, ACTIVE, ACTIVE))
+
+
 def create_virtual_schema(conn):
     conn.execute('''CREATE TABLE IF NOT EXISTS virtual_session (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +97,9 @@ class VirtualDbMixin:
                     (str(guild_id), str(user_id), handle, contest_id,
                      contest_name, confirmed_at, expires_at, ACTIVE, base_rating))
                 return cur.lastrowid
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as error:
+            if 'virtual_session.user_id' not in str(error):
+                raise
             return None
 
     def credited_virtual_problems(self, session_id):

@@ -111,3 +111,13 @@ def upgrade_1_62_0(db):
     db.commit()
     logger.info('1.62.0: virtual_session table ready')
 
+
+@registry.register('1.63.0', 'Repair virtual_session from its first cut')
+def upgrade_1_63_0(db):
+    """Add base_rating and the per-user unique index to an early table."""
+    from tle.util.db.virtual_db import create_virtual_schema, repair_virtual_schema
+    repair_virtual_schema(db)
+    create_virtual_schema(db)
+    db.commit()
+    logger.info('1.63.0: virtual_session schema repaired')
+

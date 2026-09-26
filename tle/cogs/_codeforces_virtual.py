@@ -74,10 +74,10 @@ def virtual_solves(submissions, session, duration_seconds, credited=()):
     """Problems solved inside a virtual of the session's contest, by index.
 
     A solve counts only if it was made as a VIRTUAL participant, alone, in a
-    virtual that started inside the reveal-to-start window, within the
-    contest's running time, and before the session expired on the wall
-    clock. Problems already credited are skipped so a repeated claim cannot
-    double-pay.
+    virtual that started inside the reveal-to-start window, and within the
+    contest's running time — which together bound the wall clock to
+    ``expires_at`` plus slack. Problems already credited are skipped so a
+    repeated claim cannot double-pay.
     """
     solved = {}
     for sub in submissions:
@@ -94,13 +94,16 @@ def virtual_solves(submissions, session, duration_seconds, credited=()):
         elapsed = sub.relativeTimeSeconds
         if elapsed is None or elapsed > duration_seconds:
             continue
-        if started + elapsed > session.expires_at + _CLOCK_SLACK:
-            continue
         index = sub.problem.index
         if index in credited or index in solved:
             continue
         solved[index] = sub.problem
     return [solved[index] for index in sorted(solved)]
+
+
+def session_is_over(session, now):
+    """Past the last moment a legal solve could land, slack included."""
+    return now > session.expires_at + _CLOCK_SLACK
 
 
 def _hours(seconds):
@@ -231,13 +234,34 @@ class CodeforcesVirtualMixin:
             lines.append(f'Skipped unrated problem(s): {", ".join(unrated)}.')
         return lines
 
+    async def _finalize_expired(self, ctx, session):
+        """Credit late solves and close an expired session, whatever happens.
+
+        The session's handle may no longer resolve on Codeforces (renamed or
+        removed). That must not leave the session active forever — nothing
+        else can close it and the one-active rule would lock the user out of
+        ``;virtual`` for good — so a failed fetch closes it with no credit
+        and says so.
+        """
+        try:
+            points, names, unrated = await self._credit_virtual(ctx, session)
+        except cf.CodeforcesApiError as error:
+            cf_common.user_db.finish_virtual_session(session.id)
+            return (f'Your previous virtual ({session.contest_name}) is over, '
+                    f'but Codeforces would not return submissions for '
+                    f'`{session.handle}` ({error}); it was closed without credit.')
+        cf_common.user_db.finish_virtual_session(session.id)
+        lines = self._summary_lines(names, unrated)
+        return (f'Your previous virtual ({session.contest_name}) is over: '
+                f'{len(names)} problem(s) credited for {points} points.'
+                + ('\n' + '\n'.join(lines) if lines else ''))
+
     async def _virtual_impl(self, ctx):
-        handle = await self._virtual_handle(ctx)
         session = cf_common.user_db.get_active_virtual_session(
             ctx.guild.id, ctx.author.id)
         now = time.time()
         if session is not None:
-            if now <= session.expires_at:
+            if not session_is_over(session, now):
                 contest = cf_common.cache2.contest_cache.get_contest(session.contest_id)
                 await ctx.send(
                     f'You already have a virtual running for `{session.handle}`.',
@@ -246,13 +270,7 @@ class CodeforcesVirtualMixin:
                 return
             # Expired: credit any late solves before offering a new one, so
             # forgetting to claim never loses a finished virtual.
-            points, names, unrated = await self._credit_virtual(ctx, session)
-            cf_common.user_db.finish_virtual_session(session.id)
-            lines = self._summary_lines(names, unrated)
-            await ctx.send(
-                f'Your previous virtual ({session.contest_name}) is over: '
-                f'{len(names)} problem(s) credited for {points} points.'
-                + ('\n' + '\n'.join(lines) if lines else ''))
+            await ctx.send(await self._finalize_expired(ctx, session))
 
         # One offer at a time: rerolling reveals nothing, but it is not free
         # for the API either, and a pile of live offers is a foot-gun.
@@ -262,6 +280,7 @@ class CodeforcesVirtualMixin:
             raise CodeforcesCogError(
                 'You already have an offer waiting — confirm or cancel it first.')
 
+        handle = await self._virtual_handle(ctx)
         user = cf_common.user_db.fetch_cf_user(handle)
         markers = division_markers(user.effective_rating)
         excluded = await cf_common.get_visited_contests([handle])
@@ -277,9 +296,11 @@ class CodeforcesVirtualMixin:
         view = VirtualOfferView(self, ctx, handle, contest, markers)
         view.offered_at = now
         view.base_rating = gitgud_base_rating(user.effective_rating)
-        self._pending_offers()[ctx.author.id] = view
+        # Registered only once it is actually on screen: a failed send must
+        # not leave a phantom offer blocking the user for ten minutes.
         view.message = await ctx.send(embed=self._offer_embed(markers, contest),
                                       view=view)
+        self._pending_offers()[ctx.author.id] = view
 
     async def _confirm_virtual(self, interaction, offer):
         now = time.time()
@@ -339,18 +360,17 @@ class CodeforcesVirtualMixin:
         if session is None:
             raise CodeforcesCogError(
                 'No virtual to claim. Run `;virtual` to get one.')
-        points, names, unrated = await self._credit_virtual(ctx, session)
-        finished = time.time() > session.expires_at
+        finished = session_is_over(session, time.time())
         if finished:
-            cf_common.user_db.finish_virtual_session(session.id)
+            await ctx.send(await self._finalize_expired(ctx, session))
+            return
+        points, names, unrated = await self._credit_virtual(ctx, session)
 
         lines = self._summary_lines(
             names or ['Nothing new since the last claim.'], unrated)
         handle = session.handle
         total = session.points + points
-        title = (f'{session.contest_name} — finished, {total} points total'
-                 if finished else
-                 f'{session.contest_name} — {total} points so far')
+        title = f'{session.contest_name} — {total} points so far'
         await ctx.send(f'`{handle}` claimed {points} point(s).',
                        embed=discord.Embed(title=title,
                                            description='\n'.join(lines),

@@ -134,8 +134,15 @@ class TestVirtualSolves:
         the whole exploit; the start deadline is the guard."""
         deadline = virtual.start_deadline(NOW)
         assert self._solved([_sub('A', started=deadline)]) == ['A']
+        # Clock slack is tolerated, and a tightening must not eat it.
+        assert self._solved([_sub('A', started=deadline + 30)]) == ['A']
         assert self._solved([_sub('A', started=deadline + 61)]) == []
         assert self._solved([_sub('A', started=NOW + 3600)]) == []
+
+    def test_session_is_over_allows_the_slack(self):
+        session = _session()
+        assert not virtual.session_is_over(session, session.expires_at + 60)
+        assert virtual.session_is_over(session, session.expires_at + 61)
 
     def test_solves_after_the_contest_clock_do_not_count(self):
         assert self._solved([_sub('A', elapsed=DURATION + 1)]) == []
@@ -335,6 +342,14 @@ class TestOffer:
         with pytest.raises(CodeforcesCogError, match='offer waiting'):
             asyncio.run(env.cog._virtual_impl(_ctx(env.db)))
 
+    def test_a_failed_send_leaves_no_phantom_offer(self, env):
+        ctx = _ctx(env.db)
+        ctx.send = AsyncMock(side_effect=RuntimeError('no permission'))
+        with pytest.raises(RuntimeError):
+            asyncio.run(env.cog._virtual_impl(ctx))
+        ctx, _, view = _offer(env)  # must not say "offer waiting"
+        assert view.contest.id == 1
+
     def test_a_cancelled_offer_frees_the_slot(self, env):
         ctx, _, view = _offer(env)
         asyncio.run(view.decide(_interaction(), False))
@@ -383,17 +398,43 @@ class TestStatusAndClaim:
     def test_claim_after_expiry_finishes_the_session(self, env):
         self._start(env)
         env.subs.append(_sub('B'))
-        env.clock.now = virtual.expiry(NOW, DURATION) + 1
+        env.clock.now = virtual.expiry(NOW, DURATION) + 61
         ctx = _ctx(env.db)
         asyncio.run(env.cog._virtual_claim_impl(ctx))
         assert env.db.get_active_virtual_session(GUILD, USER) is None
-        assert 'finished' in ctx.send.call_args.kwargs['embed'].title
+        assert 'is over' in ctx.send.call_args.args[0]
         assert env.db.get_gudgitter_score(USER) > 0
+
+    def test_a_renamed_handle_cannot_lock_the_user_out(self, env, monkeypatch):
+        """Codeforces stops resolving the session's handle after the reveal:
+        the expired session must still close, or ;virtual is gone for good."""
+        self._start(env)
+
+        async def gone(*, handle):
+            raise cf.HandleNotFoundError('not found')
+        monkeypatch.setattr(cf, 'user', SimpleNamespace(status=gone), raising=False)
+        env.clock.now = virtual.expiry(NOW, DURATION) + 61
+        ctx = _ctx(env.db)
+        asyncio.run(env.cog._virtual_claim_impl(ctx))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+        assert 'closed without credit' in ctx.send.call_args.args[0]
+        # and a fresh offer is possible again
+        asyncio.run(env.cog._virtual_impl(_ctx(env.db)))
+
+    def test_a_running_session_survives_a_transient_api_error(self, env, monkeypatch):
+        self._start(env)
+
+        async def flaky(*, handle):
+            raise cf.CodeforcesApiError('busy')
+        monkeypatch.setattr(cf, 'user', SimpleNamespace(status=flaky), raising=False)
+        with pytest.raises(cf.CodeforcesApiError):
+            asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_active_virtual_session(GUILD, USER) is not None
 
     def test_a_forgotten_virtual_is_credited_before_the_next_offer(self, env):
         self._start(env)
         env.subs.append(_sub('B', rating=1900))
-        env.clock.now = virtual.expiry(NOW, DURATION) + 1
+        env.clock.now = virtual.expiry(NOW, DURATION) + 61  # past the slack
         ctx = _ctx(env.db)
         asyncio.run(env.cog._virtual_impl(ctx))
         assert env.db.get_gudgitter_score(USER) == 8
@@ -443,3 +484,51 @@ class TestStatusAndClaim:
     def test_claim_without_a_session_is_an_error(self, env):
         with pytest.raises(CodeforcesCogError, match='No virtual'):
             asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+
+
+class TestSchemaRepair:
+    """A database that ran the first cut of ;virtual has the old table."""
+
+    def _old_shape_db(self):
+        from tle.util.db.virtual_db import ACTIVE
+        conn = sqlite3.connect(':memory:')
+        conn.execute("""CREATE TABLE virtual_session (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL,
+            user_id TEXT NOT NULL, handle TEXT NOT NULL, contest_id INTEGER NOT NULL,
+            contest_name TEXT NOT NULL, confirmed_at REAL NOT NULL,
+            expires_at REAL NOT NULL, status TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0, credited TEXT NOT NULL DEFAULT '[]')""")
+        conn.execute("""CREATE INDEX idx_virtual_session_user
+            ON virtual_session (guild_id, user_id, status)""")
+        for guild, contest in ((1, 1), (2, 3)):  # legal under the per-guild rule
+            conn.execute(
+                'INSERT INTO virtual_session (guild_id, user_id, handle, contest_id, '
+                'contest_name, confirmed_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (str(guild), str(USER), HANDLE, contest, 'R', NOW, NOW + 1, ACTIVE))
+        conn.commit()
+        return conn
+
+    def test_repair_then_create_yields_the_current_shape(self):
+        from tle.util.db.virtual_db import (
+            ACTIVE, create_virtual_schema, repair_virtual_schema)
+        conn = self._old_shape_db()
+        repair_virtual_schema(conn)
+        create_virtual_schema(conn)  # would raise without the repair
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(virtual_session)')}
+        assert 'base_rating' in columns
+        active = conn.execute('SELECT contest_id FROM virtual_session WHERE status = ?',
+                              (ACTIVE,)).fetchall()
+        assert active == [(3,)]  # newest kept
+        indexes = {row[1] for row in conn.execute('PRAGMA index_list(virtual_session)')}
+        assert 'idx_virtual_session_active' in indexes
+
+    def test_repair_is_harmless_on_a_current_or_missing_table(self):
+        from tle.util.db.virtual_db import create_virtual_schema, repair_virtual_schema
+        conn = sqlite3.connect(':memory:')
+        repair_virtual_schema(conn)          # no table yet
+        create_virtual_schema(conn)
+        repair_virtual_schema(conn)          # already current
+        create_virtual_schema(conn)
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(virtual_session)')]
+        assert columns.count('base_rating') == 1
+
