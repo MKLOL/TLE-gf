@@ -30,3 +30,20 @@ Inspected public assets (2026-09-26):
 
 Full bundled code is not copied into this repository. Tests recreate the small
 badge structure and use synthetic times with the sanitized captured rows.
+
+## Own-result completion view
+
+`tango-result.html` uses synthetic scores in the markup reconstructed from the
+same public renderer and English labels above; it is not a live completed Tango
+capture. `results-page/top` renders the game and puzzle number in
+`.pr-top__header > .pr-top__subtext`, and an `END_SOLVED` branch selects the win
+headline. The golden-chiclet score getter sets `.pr-golden-chiclet__text` from
+`formatTime(game.gameScore.timeElapsed)`; averages are separate `__subtext`.
+Other carousel cards have rankings/streak labels, not that timed score. The
+beginner view uses `.pr-beginner-player__better-than-chiclet-game-score` with
+“solved in” and a nested time; the older normal view uses a top-level subtext.
+The automatic reader requires matching game labels, a puzzle number, a win
+headline, and exactly one unique visible solve time. It reads no gameplay timer.
+Runtime tests load the actual extension in isolated Chromium and simulate the
+outer feed's SPA navigation plus the same-origin preload frame. All LinkedIn
+requests are intercepted; tests never use a logged-in personal profile.

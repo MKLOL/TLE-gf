@@ -53,7 +53,7 @@ def run():
                 options.goto('chrome-extension://' + worker.url.split('/')[2] + '/options.html')
                 options.evaluate('(cfg) => chrome.storage.local.set(cfg)', {
                     'server': f'http://127.0.0.1:{api.server_port}',
-                    'token': 'tlegames_' + 'a' * 43, 'autoAkari': True,
+                    'token': 'tlegames_' + 'a' * 43,  # Missing automatic setting defaults on.
                 })
                 assert options.evaluate('chrome.runtime.sendMessage({type:"configure-akari"})')['ok']
                 registered = options.evaluate('chrome.scripting.getRegisteredContentScripts()')

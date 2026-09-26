@@ -1,7 +1,7 @@
 # Game scores and leaderboard imports
 
-The Chrome extension reads a displayed connections leaderboard, sends it to the
-bot for a preview, and shows the matched people, date, times, and badges. Results
+For moderator imports, the Chrome extension reads a displayed connections
+leaderboard, sends it to the bot for a preview, and shows the matched people, date, times, and badges. Results
 are saved only when the user presses **Confirm import** inside the extension.
 Queens and Tango use the same import/rating code as Discord. Regular members can
 post their own LinkedIn scores, and automatic Daily Akari posting includes every
@@ -19,14 +19,24 @@ field used by the existing rankings.
    The default server URL matches the existing complaint API configuration:
    `http://51.81.82.26:8080`. Use an HTTPS endpoint if configured. HTTP sends the
    token and results without transport encryption.
-5. For your own Queens/Tango result, open its connections leaderboard and click
-   **Read my LinkedIn score**, then **Post my score**. Moderators can also use
-   **Read leaderboard** → **Confirm import** to import everyone's loaded results.
-6. For Daily Akari, enable **Automatically post completed Daily Akari scores**
-   in Settings and allow access to `dailyakari.com`. Enable **Pro Mode** in the
-   game's settings, then reload the game once. Completing a daily puzzle posts
-   and registers it automatically; archive puzzles are skipped. The extension's
-   badge and popup show whether posting succeeded.
+5. **Automatically import and post my LinkedIn scores** and **Automatically
+   import and post my Daily Akari scores** are enabled by default. Save Settings
+   and grant the requested site access, then reload any open game tabs once.
+   Either option can be turned off immediately without a working server/token;
+   existing explicit opt-outs
+   remain off after updates. New site permission is requested when you save,
+   never silently granted on update.
+6. Complete Queens or Tango and leave its completed result visible. The extension
+   registers and posts your own result without opening the leaderboard, copying,
+   or clicking Import. LinkedIn labels currently need to be in English. Only
+   today's puzzle (LinkedIn's Pacific calendar) is submitted automatically.
+7. Enable **Pro Mode** in Daily Akari to include accuracy. Completing a daily
+   puzzle posts and registers it automatically; archive puzzles are skipped.
+   The extension's badge and popup show whether posting succeeded.
+8. Manual personal posting is still available: open the Queens/Tango connections
+   leaderboard and click **Read my LinkedIn score**, then **Post my score**.
+   Moderators use **Read leaderboard** → **Confirm import** for other players.
+   Those bulk imports always require confirmation.
 
 The game must be enabled (`;meta config enable queens` / `tango` / `akari`) and
 have a configured channel (`;queens here` / `;tango here` / `;akari here`). Register your own LinkedIn
@@ -60,7 +70,8 @@ identity, with mentions disabled. Channel visibility/posting permissions, game
 feature flags, membership, and game bans are enforced. Existing LinkedIn identity
 and anonymous display settings still apply. Personal LinkedIn scores are clean,
 including when the You row has no badges. No other person's score is sent by the
-personal button.
+personal button or automatic posting. Automatic readers do not navigate, click,
+change game state, or invoke LinkedIn's sharing/copy features.
 
 Akari sends the puzzle number and date, integer solve time in seconds, rounded
 accuracy percentage, and a separate `is_perfect` boolean. Daily Akari reports raw
@@ -196,3 +207,12 @@ source spoofing, and non-Pro Mode. A disposable Chromium profile also exercises 
 service worker, and a loopback HTTP server, including frame reloads. This test
 grants host permissions in a temporary extension copy; the native permission
 dialog is not automated. No personal LinkedIn tab was changed.
+
+Automatic LinkedIn capture is additionally tested against renderer-derived
+completed-result fixtures: normal, golden-chiclet and beginner variants; failed
+and playing screens; averages and other players; ambiguous/missing scores;
+hidden views; and game mismatch. A real MV3 test exercises default-on behavior,
+SPA navigation from the feed, preload frames, unchanged-DOM deduplication, and
+explicit opt-out while a previously injected reader remains active. Native site
+permission prompts are not automated. The reader waits for a complete supported
+results view instead of guessing a solve from a ticking timer or unsupported UI.
