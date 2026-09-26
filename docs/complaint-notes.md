@@ -100,22 +100,27 @@ over-matches distinct problems that share a name.
 
 ## Shipped
 
-| # | Complaint | Commit |
-|---|---|---|
-| 213 | comma + "and" in Great Day messages | `1014b3cf0c1bc4f79b829929a6e8c18bee9ab23e` |
-| 278 | paginate the complaint list | `8689901c2be65516ce382fdb2ef81b05b8dc079b` |
-| 279 | problems solved by one account but not another (`;diff`) | `d997b6fc1dd51a213a75dec6913cc271eeb2bf62` |
+| # | Complaint | Commit | Resolved |
+|---|---|---|---|
+| 213 | comma + "and" in Great Day messages | `1014b3cf0c1bc4f79b829929a6e8c18bee9ab23e` | yes, notified |
+| 278 | paginate the complaint list | `8689901c2be65516ce382fdb2ef81b05b8dc079b` | yes, notified |
+| 279 | problems solved by one account but not another (`;diff`) | `d997b6fc1dd51a213a75dec6913cc271eeb2bf62` | yes, notified |
+| 281 | capitalization in `;vs` — `;versus tfg Tfg tFg tfG TFG` compared one person with themselves | handle casings collapse in `resolve_handles` | **not yet** — hold notifications |
+| 277 (in spirit) | `;virtual`: blind random contest, solves earn gitgud points | `_codeforces_virtual.py`, migration 1.62.0 | **not yet** |
 
 Also built alongside, not from a complaint: `;complain manage` (remove buttons
-next to each complaint) and complaint context capture — the five messages
-before a report are stored and served on the API's detail route, so automation
-can act on reports like "fix graphs" that say nothing on their own.
+next to each complaint), complaint context capture (the five messages before a
+report, served on the API detail route), complaint tags (`;complain tag`), and
+deferred API notifications — an API resolve now queues its notification until
+a restarted bot verifies the commit is running.
+
+**Do not resolve further complaints through the API until the deferral commit
+is deployed:** the bot currently running still notifies immediately.
 
 ## Close list (already implemented before the complaint was reviewed)
 
-All four verified in source; all four commits are on `origin/master`. Closing
-needs an admin token — `;complain resolve <id> <commit_url> <summary>` in
-Discord, or `POST /v1/complaints/<id>/resolve`.
+All four resolved through the API on 2026-09-25 with the commits below;
+authors were notified.
 
 | # | Complaint | Implemented by |
 |---|---|---|
@@ -159,7 +164,7 @@ should change.
 | 265 | One word: "formatting". |
 | 281 | The stored text ends "for context:" with the example missing. |
 | 294 | Denominator: boarded messages (small, totals already stored) or all messages sent (needs new counting). |
-| 299 | `;vc` already excludes any contest with a non-CE submission, *including a single upsolve* (`codeforces_common.py:141`). Suspect that is the actual gripe — confirm. |
+| 299 | Reporter's example: `;vc nifeshe temporary1 catgirl` "gave a contest that wasn't fixed". Reproduced against the live CF API: average rating 2409 → Div. 1 markers; top pick is Round 1116 (Div. 1), 2026-08-09, which none of the three has a submission in. Unclear what "fixed" means — need the reporter to say which contest came back and what was wrong with it. |
 
 ## Not this repo
 
