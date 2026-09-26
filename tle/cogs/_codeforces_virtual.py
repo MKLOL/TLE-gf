@@ -23,8 +23,9 @@ from tle.cogs._codeforces_helpers import (
 )
 
 _OFFER_TIMEOUT = 10 * 60   # confirm within ten minutes or the offer lapses
-_START_GRACE = 30 * 60     # start the virtual within thirty minutes of confirming
+_START_GRACE = 10 * 60     # start the virtual within ten minutes of the reveal
 _CLOCK_SLACK = 60          # tolerance between our clock and Codeforces'
+_DURATION_BUCKET = 30 * 60  # the offer rounds the length so it identifies less
 _DIV1_MARKERS = ('div1', 'global', 'avito', 'goodbye', 'hello')
 _DIVISION_LABEL = {'div3': 'Div. 3', 'div2': 'Div. 2', 'div1': 'Div. 1'}
 
@@ -59,13 +60,24 @@ def expiry(confirmed_at, duration_seconds):
     return confirmed_at + _START_GRACE + duration_seconds
 
 
+def start_deadline(confirmed_at):
+    """Latest moment the virtual may start.
+
+    The reveal is the moment the problems become readable, so the window
+    between reveal and start is exactly the head start a user can give
+    themselves. It is kept short for that reason.
+    """
+    return confirmed_at + _START_GRACE
+
+
 def virtual_solves(submissions, session, duration_seconds, credited=()):
     """Problems solved inside a virtual of the session's contest, by index.
 
     A solve counts only if it was made as a VIRTUAL participant, alone, in a
-    virtual that started after the session was confirmed and before it
-    expired, and within the contest's running time. Problems already
-    credited are skipped so a repeated claim cannot double-pay.
+    virtual that started inside the reveal-to-start window, within the
+    contest's running time, and before the session expired on the wall
+    clock. Problems already credited are skipped so a repeated claim cannot
+    double-pay.
     """
     solved = {}
     for sub in submissions:
@@ -77,10 +89,12 @@ def virtual_solves(submissions, session, duration_seconds, credited=()):
         started = party.startTimeSeconds
         if started is None or started < session.confirmed_at - _CLOCK_SLACK:
             continue
-        if started > session.expires_at:
+        if started > start_deadline(session.confirmed_at) + _CLOCK_SLACK:
             continue
         elapsed = sub.relativeTimeSeconds
         if elapsed is None or elapsed > duration_seconds:
+            continue
+        if started + elapsed > session.expires_at + _CLOCK_SLACK:
             continue
         index = sub.problem.index
         if index in credited or index in solved:
@@ -92,6 +106,13 @@ def virtual_solves(submissions, session, duration_seconds, credited=()):
 def _hours(seconds):
     hours, minutes = divmod(int(seconds) // 60, 60)
     return f'{hours}h{minutes:02d}' if hours else f'{minutes} min'
+
+
+def _rough_hours(seconds):
+    """Length rounded to the bucket, so the offer narrows the pool less."""
+    rounded = max(_DURATION_BUCKET,
+                  round(seconds / _DURATION_BUCKET) * _DURATION_BUCKET)
+    return 'about ' + _hours(rounded)
 
 
 # --- confirmation view ----------------------------------------------------
@@ -173,7 +194,7 @@ class CodeforcesVirtualMixin:
             title='Virtual contest — confirm blind',
             description=(
                 f'A random **{division}** round you have never touched, '
-                f'about **{_hours(contest.durationSeconds)}** long. The '
+                f'**{_rough_hours(contest.durationSeconds)}** long. The '
                 f'contest stays hidden until you confirm.\n\n'
                 f'After confirming you have **{_START_GRACE // 60} minutes** to '
                 f'start the virtual on Codeforces; every problem you solve while '
@@ -183,12 +204,13 @@ class CodeforcesVirtualMixin:
         embed.set_footer(text=f'Offer expires in {_OFFER_TIMEOUT // 60} minutes.')
         return embed
 
-    def _reveal_embed(self, session_contest, expires_at, points=0):
+    def _reveal_embed(self, session_contest, confirmed_at, expires_at, points=0):
+        start_by = int(start_deadline(confirmed_at))
         embed = discord.Embed(
             title=session_contest.name, url=session_contest.url,
             description=(
                 f'[Start the virtual]({cf.CONTEST_BASE_URL}{session_contest.id}/virtual) '
-                f'within {_START_GRACE // 60} minutes. Solves count until '
+                f'by <t:{start_by}:t> (<t:{start_by}:R>). Solves count until '
                 f'<t:{int(expires_at)}:t> (<t:{int(expires_at)}:R>).\n'
                 f'Run `;virtual claim` to credit what you have solved — any '
                 f'time, and again when you finish.'),
@@ -196,6 +218,18 @@ class CodeforcesVirtualMixin:
         embed.add_field(name='Length', value=_hours(session_contest.durationSeconds))
         embed.add_field(name='Points so far', value=str(points))
         return embed
+
+    def _pending_offers(self):
+        offers = getattr(self, '_virtual_offers', None)
+        if offers is None:
+            offers = self._virtual_offers = {}
+        return offers
+
+    def _summary_lines(self, names, unrated):
+        lines = list(names)
+        if unrated:
+            lines.append(f'Skipped unrated problem(s): {", ".join(unrated)}.')
+        return lines
 
     async def _virtual_impl(self, ctx):
         handle = await self._virtual_handle(ctx)
@@ -206,17 +240,27 @@ class CodeforcesVirtualMixin:
             if now <= session.expires_at:
                 contest = cf_common.cache2.contest_cache.get_contest(session.contest_id)
                 await ctx.send(
-                    f'You already have a virtual running for `{handle}`.',
-                    embed=self._reveal_embed(contest, session.expires_at,
-                                             session.points))
+                    f'You already have a virtual running for `{session.handle}`.',
+                    embed=self._reveal_embed(contest, session.confirmed_at,
+                                             session.expires_at, session.points))
                 return
             # Expired: credit any late solves before offering a new one, so
             # forgetting to claim never loses a finished virtual.
-            points, names, _ = await self._credit_virtual(ctx, handle, session)
+            points, names, unrated = await self._credit_virtual(ctx, session)
             cf_common.user_db.finish_virtual_session(session.id)
+            lines = self._summary_lines(names, unrated)
             await ctx.send(
                 f'Your previous virtual ({session.contest_name}) is over: '
-                f'{len(names)} problem(s) credited for {points} points.')
+                f'{len(names)} problem(s) credited for {points} points.'
+                + ('\n' + '\n'.join(lines) if lines else ''))
+
+        # One offer at a time: rerolling reveals nothing, but it is not free
+        # for the API either, and a pile of live offers is a foot-gun.
+        pending = self._pending_offers().get(ctx.author.id)
+        if pending is not None and not pending.decided \
+                and now < pending.offered_at + _OFFER_TIMEOUT:
+            raise CodeforcesCogError(
+                'You already have an offer waiting — confirm or cancel it first.')
 
         user = cf_common.user_db.fetch_cf_user(handle)
         markers = division_markers(user.effective_rating)
@@ -231,6 +275,9 @@ class CodeforcesVirtualMixin:
         contest = random.choice(candidates)
 
         view = VirtualOfferView(self, ctx, handle, contest, markers)
+        view.offered_at = now
+        view.base_rating = gitgud_base_rating(user.effective_rating)
+        self._pending_offers()[ctx.author.id] = view
         view.message = await ctx.send(embed=self._offer_embed(markers, contest),
                                       view=view)
 
@@ -240,7 +287,7 @@ class CodeforcesVirtualMixin:
         expires_at = expiry(now, contest.durationSeconds)
         session_id = cf_common.user_db.start_virtual_session(
             offer.ctx.guild.id, offer.ctx.author.id, offer.handle, contest.id,
-            contest.name, now, expires_at)
+            contest.name, now, expires_at, offer.base_rating)
         if session_id is None:
             await interaction.response.edit_message(
                 embed=discord.Embed(title='Already running',
@@ -250,15 +297,20 @@ class CodeforcesVirtualMixin:
             return
         await interaction.response.edit_message(
             content=f'Virtual confirmed for `{offer.handle}`.',
-            embed=self._reveal_embed(contest, expires_at), view=offer)
+            embed=self._reveal_embed(contest, now, expires_at), view=offer)
 
-    async def _credit_virtual(self, ctx, handle, session):
-        """Credit new solves for a session. Returns (points, names, unrated)."""
-        submissions = await cf.user.status(handle=handle)
+    async def _credit_virtual(self, ctx, session):
+        """Credit new solves for a session. Returns (points, names, unrated).
+
+        Everything is read from the session — the handle it was confirmed
+        for and the rating it was confirmed at — so re-identifying to a
+        stronger account after the reveal, or a rating change mid-session,
+        changes nothing.
+        """
+        submissions = await cf.user.status(handle=session.handle)
         contest = cf_common.cache2.contest_cache.get_contest(session.contest_id)
         credited = cf_common.user_db.credited_virtual_problems(session.id)
-        base = gitgud_base_rating(
-            cf_common.user_db.fetch_cf_user(handle).effective_rating)
+        base = session.base_rating
         active = cf_common.user_db.check_challenge(ctx.author.id)
         active_name = active[2] if active else None
         now = int(time.time())
@@ -266,7 +318,8 @@ class CodeforcesVirtualMixin:
         points, names, unrated = 0, [], []
         for problem in virtual_solves(submissions, session,
                                       contest.durationSeconds, credited):
-            if problem.rating is None:
+            if problem.rating is None or cf_common.is_nonstandard_problem(problem):
+                # Unrated and *special problems are never gitgud material.
                 unrated.append(problem.index)
                 continue
             if problem.name == active_name:
@@ -281,20 +334,19 @@ class CodeforcesVirtualMixin:
         return points, names, unrated
 
     async def _virtual_claim_impl(self, ctx):
-        handle = await self._virtual_handle(ctx)
         session = cf_common.user_db.get_active_virtual_session(
             ctx.guild.id, ctx.author.id)
         if session is None:
             raise CodeforcesCogError(
                 'No virtual to claim. Run `;virtual` to get one.')
-        points, names, unrated = await self._credit_virtual(ctx, handle, session)
+        points, names, unrated = await self._credit_virtual(ctx, session)
         finished = time.time() > session.expires_at
         if finished:
             cf_common.user_db.finish_virtual_session(session.id)
 
-        lines = names or ['Nothing new since the last claim.']
-        if unrated:
-            lines.append(f'Skipped unrated problem(s): {", ".join(unrated)}.')
+        lines = self._summary_lines(
+            names or ['Nothing new since the last claim.'], unrated)
+        handle = session.handle
         total = session.points + points
         title = (f'{session.contest_name} — finished, {total} points total'
                  if finished else

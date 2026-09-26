@@ -225,8 +225,11 @@ class CodeforcesGitgudMixin:
     async def _gitlog_impl(self, ctx, member):
         def make_line(entry):
             issue, finish, name, contest, index, delta, status = entry
-            problem = cf_common.cache2.problem_cache.problem_by_name[name]
-            line = f'[{name}]({problem.url})\N{EN SPACE}[{problem.rating}]'
+            # Virtual credits can name a problem the cache has not reloaded
+            # yet; one missing link must not take the whole log down.
+            problem = cf_common.cache2.problem_cache.problem_by_name.get(name)
+            line = (f'[{name}]({problem.url})\N{EN SPACE}[{problem.rating}]'
+                    if problem is not None else f'{name}')
             if finish:
                 time_str = cf_common.days_ago(finish)
                 points = f'{_calculateGitgudScoreForDelta(delta):+}'
@@ -256,8 +259,11 @@ class CodeforcesGitgudMixin:
     async def _nogudlog_impl(self, ctx, member):
         def make_line(entry):
             issue, finish, name, contest, index, delta, status = entry
-            problem = cf_common.cache2.problem_cache.problem_by_name[name]
-            line = f'[{name}]({problem.url})\N{EN SPACE}[{problem.rating}]'
+            # Virtual credits can name a problem the cache has not reloaded
+            # yet; one missing link must not take the whole log down.
+            problem = cf_common.cache2.problem_cache.problem_by_name.get(name)
+            line = (f'[{name}]({problem.url})\N{EN SPACE}[{problem.rating}]'
+                    if problem is not None else f'{name}')
             if finish:
                 time_str = cf_common.days_ago(finish)
                 points = f'{_calculateGitgudScoreForDelta(delta):+}'

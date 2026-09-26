@@ -48,13 +48,14 @@ class _Db(ChallengeDbMixin, VirtualDbMixin):
         return SimpleNamespace(handle=handle, effective_rating=self.rating)
 
 
-def _session(contest_id=1, confirmed_at=NOW, expires_at=None, points=0, sid=1):
+def _session(contest_id=1, confirmed_at=NOW, expires_at=None, points=0, sid=1,
+             handle=HANDLE, base_rating=1900):
     return SimpleNamespace(
         id=sid, contest_id=contest_id, contest_name=BY_ID[contest_id].name,
         confirmed_at=confirmed_at,
         expires_at=expires_at if expires_at is not None
         else virtual.expiry(confirmed_at, DURATION),
-        points=points)
+        points=points, handle=handle, base_rating=base_rating)
 
 
 def _sub(index='A', *, contest_id=1, ptype='VIRTUAL', started=NOW + 60,
@@ -85,7 +86,13 @@ class TestHelpers:
         assert virtual.gitgud_base_rating(3400) == 3000
 
     def test_expiry_is_start_grace_plus_contest(self):
-        assert virtual.expiry(NOW, DURATION) == NOW + 30 * 60 + DURATION
+        assert virtual.expiry(NOW, DURATION) == NOW + virtual._START_GRACE + DURATION
+        assert virtual.start_deadline(NOW) == NOW + virtual._START_GRACE
+
+    def test_the_offer_rounds_the_length(self):
+        assert virtual._rough_hours(2 * 3600) == 'about 2h00'
+        assert virtual._rough_hours(2 * 3600 + 10 * 60) == 'about 2h00'
+        assert virtual._rough_hours(2 * 3600 + 20 * 60) == 'about 2h30'
 
     def test_eligible_contests(self, monkeypatch):
         monkeypatch.setattr(cf_common, 'is_contest_writer',
@@ -122,13 +129,23 @@ class TestVirtualSolves:
         # within clock slack is fine
         assert self._solved([_sub('A', started=NOW - 30)]) == ['A']
 
-    def test_a_virtual_started_after_expiry_does_not_count(self):
-        late = virtual.expiry(NOW, DURATION) + 1
-        assert self._solved([_sub('A', started=late)]) == []
+    def test_a_virtual_must_start_inside_the_reveal_window(self):
+        """Reading the problems for an hour and starting the clock later is
+        the whole exploit; the start deadline is the guard."""
+        deadline = virtual.start_deadline(NOW)
+        assert self._solved([_sub('A', started=deadline)]) == ['A']
+        assert self._solved([_sub('A', started=deadline + 61)]) == []
+        assert self._solved([_sub('A', started=NOW + 3600)]) == []
 
     def test_solves_after_the_contest_clock_do_not_count(self):
         assert self._solved([_sub('A', elapsed=DURATION + 1)]) == []
         assert self._solved([_sub('A', elapsed=DURATION)]) == ['A']
+
+    def test_a_full_length_run_from_the_last_legal_start_still_counts(self):
+        # The start bound plus the contest clock already imply the wall-clock
+        # bound; this pins the legitimate maximum so a tighter check would fail.
+        started = virtual.start_deadline(NOW)
+        assert self._solved([_sub('A', started=started, elapsed=DURATION)]) == ['A']
 
     def test_only_accepted(self):
         assert self._solved([_sub('A', verdict='WRONG_ANSWER')]) == []
@@ -145,15 +162,29 @@ class TestVirtualSolves:
 class TestDb:
     def test_one_active_session_per_user(self):
         db = _Db()
-        first = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1)
+        first = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1, 1900)
         assert first is not None
-        assert db.start_virtual_session(GUILD, USER, HANDLE, 3, 'R902', NOW, NOW + 1) is None
+        assert db.start_virtual_session(GUILD, USER, HANDLE, 3, 'R902', NOW, NOW + 1, 1900) is None
         assert db.get_active_virtual_session(GUILD, USER).contest_id == 1
         assert db.virtual_session_contest_ids(GUILD, USER) == {1}
 
+    def test_the_rule_is_global_across_guilds(self):
+        """Points are per user, so a second guild sees the first's session."""
+        db = _Db()
+        db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1, 1900)
+        assert db.start_virtual_session(99, USER, HANDLE, 3, 'R902', NOW, NOW + 1, 1900) is None
+        assert db.get_active_virtual_session(99, USER).contest_id == 1
+        assert db.virtual_session_contest_ids(99, USER) == {1}
+
+    def test_the_session_remembers_handle_and_base_rating(self):
+        db = _Db()
+        db.start_virtual_session(GUILD, USER, 'Alice', 1, 'R900', NOW, NOW + 1, 2100)
+        row = db.get_active_virtual_session(GUILD, USER)
+        assert (row.handle, row.base_rating) == ('Alice', 2100)
+
     def test_credit_writes_a_completed_challenge_once(self):
         db = _Db()
-        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1)
+        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1, 1900)
         problem = _problem(1, index='C', name='Nice', rating=1900)
         assert db.credit_virtual_solve(sid, USER, problem, 100, 12, NOW + 50) is True
         assert db.credit_virtual_solve(sid, USER, problem, 100, 12, NOW + 50) is False
@@ -166,7 +197,7 @@ class TestDb:
 
     def test_credit_refuses_a_finished_session(self):
         db = _Db()
-        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1)
+        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1, 1900)
         assert db.finish_virtual_session(sid) is True
         assert db.finish_virtual_session(sid) is False
         assert db.credit_virtual_solve(sid, USER, _problem(1), 0, 8, NOW) is False
@@ -176,7 +207,7 @@ class TestDb:
         """A virtual credit must not clear or replace an active challenge."""
         db = _Db()
         db.new_challenge(str(USER), NOW, _problem(9, name='Live'), 0)
-        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1)
+        sid = db.start_virtual_session(GUILD, USER, HANDLE, 1, 'R900', NOW, NOW + 1, 1900)
         db.credit_virtual_solve(sid, USER, _problem(1, index='A'), 0, 8, NOW)
         assert db.check_challenge(str(USER))[2] == 'Live'
         assert db.get_gudgitter_score(USER) == 8
@@ -211,6 +242,8 @@ def env(monkeypatch):
             get_contests_in_phase=lambda phase: list(CONTESTS),
             get_contest=lambda cid: BY_ID[cid])))
     monkeypatch.setattr(cf_common, 'is_contest_writer', lambda cid, h: False)
+    monkeypatch.setattr(cf_common, 'is_nonstandard_problem',
+                        lambda problem: problem.name.startswith('special'))
 
     async def visited(handles):
         return set()
@@ -220,13 +253,16 @@ def env(monkeypatch):
         return [HANDLE]
     monkeypatch.setattr(cf_common, 'resolve_handles', resolve)
 
+    fetched = []
+
     async def status(*, handle):
+        fetched.append(handle)
         return list(subs)
     monkeypatch.setattr(cf, 'user', SimpleNamespace(status=status), raising=False)
     monkeypatch.setattr(virtual.random, 'choice', lambda seq: seq[0])
     clock = SimpleNamespace(now=NOW)
     monkeypatch.setattr(virtual.time, 'time', lambda: clock.now)
-    return SimpleNamespace(db=db, subs=subs, clock=clock, cog=_Cog())
+    return SimpleNamespace(db=db, subs=subs, clock=clock, cog=_Cog(), fetched=fetched)
 
 
 def _offer(env):
@@ -275,11 +311,14 @@ class TestOffer:
         assert len(env.db.virtual_session_contest_ids(GUILD, USER)) == 1
 
     def test_a_stale_offer_cannot_open_a_second_session(self, env):
-        ctx, _, first = _offer(env)
-        ctx, _, second = _offer(env)
-        asyncio.run(first.decide(_interaction(), True))
+        """An offer that lapsed, a fresh one confirmed, then the old button
+        pressed in the race before Discord disables it: the DB rule holds."""
+        ctx, _, stale = _offer(env)
+        env.clock.now = NOW + virtual._OFFER_TIMEOUT + 1
+        ctx, _, fresh = _offer(env)
+        asyncio.run(fresh.decide(_interaction(), True))
         interaction = _interaction()
-        asyncio.run(second.decide(interaction, True))
+        asyncio.run(stale.decide(interaction, True))
         embed = interaction.response.edit_message.call_args.kwargs['embed']
         assert embed.title == 'Already running'
         assert len(env.db.virtual_session_contest_ids(GUILD, USER)) == 1
@@ -290,6 +329,23 @@ class TestOffer:
         env.clock.now = NOW + 10 * 3600  # first session long expired
         ctx, embed, view = _offer(env)
         assert view.contest.id == 3
+
+    def test_one_offer_at_a_time(self, env):
+        _offer(env)
+        with pytest.raises(CodeforcesCogError, match='offer waiting'):
+            asyncio.run(env.cog._virtual_impl(_ctx(env.db)))
+
+    def test_a_cancelled_offer_frees_the_slot(self, env):
+        ctx, _, view = _offer(env)
+        asyncio.run(view.decide(_interaction(), False))
+        ctx, _, view = _offer(env)
+        assert view.contest.id == 1
+
+    def test_a_lapsed_offer_frees_the_slot(self, env):
+        _offer(env)
+        env.clock.now = NOW + virtual._OFFER_TIMEOUT + 1
+        ctx, _, view = _offer(env)
+        assert view.contest.id == 1
 
     def test_nothing_left_is_an_error(self, env, monkeypatch):
         monkeypatch.setattr(cf_common, 'is_contest_writer', lambda cid, h: True)
@@ -359,6 +415,30 @@ class TestStatusAndClaim:
         asyncio.run(env.cog._virtual_claim_impl(ctx))
         assert env.db.get_gudgitter_score(USER) == 0
         assert 'unrated' in ctx.send.call_args.kwargs['embed'].description
+
+    def test_claims_use_the_confirmed_handle_and_rating(self, env, monkeypatch):
+        """Re-identifying to a stronger account after the reveal, or a rating
+        change mid-session, changes nothing: the session is the authority."""
+        session = self._start(env)
+        assert session.handle == HANDLE and session.base_rating == 1900
+
+        async def resolve_other(ctx, converter, handles, **kw):
+            return ['strongfriend']
+        monkeypatch.setattr(cf_common, 'resolve_handles', resolve_other)
+        env.db.rating = 3000
+        env.subs.append(_sub('A', rating=1900))
+        env.fetched.clear()
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.fetched == [HANDLE]
+        assert env.db.get_gudgitter_score(USER) == 8  # delta 0 against 1900
+
+    def test_special_problems_are_reported_not_paid(self, env):
+        self._start(env)
+        env.subs.append(_sub('G', name='special G', rating=1900))
+        ctx = _ctx(env.db)
+        asyncio.run(env.cog._virtual_claim_impl(ctx))
+        assert env.db.get_gudgitter_score(USER) == 0
+        assert 'G' in ctx.send.call_args.kwargs['embed'].description
 
     def test_claim_without_a_session_is_an_error(self, env):
         with pytest.raises(CodeforcesCogError, match='No virtual'):
