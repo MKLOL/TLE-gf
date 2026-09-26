@@ -101,3 +101,13 @@ def upgrade_1_61_0(db):
     db.commit()
     logger.info('1.61.0: Complaint tag table ready')
 
+
+
+@registry.register('1.62.0', ';virtual sessions')
+def upgrade_1_62_0(db):
+    """Add ``virtual_session`` for blind random virtual contests."""
+    from tle.util.db.virtual_db import create_virtual_schema
+    create_virtual_schema(db)
+    db.commit()
+    logger.info('1.62.0: virtual_session table ready')
+

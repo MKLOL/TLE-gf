@@ -19,6 +19,7 @@ from tle.util.db.challenge_db import ChallengeDbMixin
 from tle.util.db.duel_db import DuelDbMixin
 from tle.util.db.training_db import TrainingDbMixin
 from tle.util.db.vc_db import VcDbMixin
+from tle.util.db.virtual_db import VirtualDbMixin
 from tle.util.db.lockout_db import LockoutDbMixin
 from tle.util.db.rpoll_db import RpollDbMixin
 from tle.util.db.complaint_db import ComplaintDbMixin
@@ -168,7 +169,7 @@ def namedtuple_factory(cursor, row):
 
 
 class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
-                 VcDbMixin, LockoutDbMixin, RpollDbMixin, ComplaintDbMixin, ApiTokenDbMixin,
+                 VcDbMixin, VirtualDbMixin, LockoutDbMixin, RpollDbMixin, ComplaintDbMixin, ApiTokenDbMixin,
                  GreatdayDbMixin, KvsDbMixin, MiscDbMixin,
                  BettingWalletDbMixin, BettingMarketDbMixin, BettingWagerDbMixin,
                  CommandGateDbMixin, LlmDbMixin, CountingDbMixin,
@@ -231,6 +232,7 @@ class UserDbConn(HandleDbMixin, ChallengeDbMixin, DuelDbMixin, TrainingDbMixin,
         self._create_greatday_tables()
         self._create_betting_tables()
         self._create_vc_tables()
+        self._create_virtual_tables()
         self._create_training_tables()
         self._create_lockout_tables()
         self._create_kvs_tables()

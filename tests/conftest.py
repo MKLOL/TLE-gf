@@ -127,6 +127,7 @@ _cf_api.RatingChange = _nt('RatingChange',
                             'contestId contestName handle rank '
                             'ratingUpdateTimeSeconds oldRating newRating')
 _cf_api.GYM_ID_THRESHOLD = 100000
+_cf_api.CONTEST_BASE_URL = 'https://codeforces.com/contest/'
 _cf_api.HandleNotFoundError = type('HandleNotFoundError', (Exception,), {})
 
 class _Contest(_NamedTuple):
@@ -140,6 +141,10 @@ class _Contest(_NamedTuple):
     def matches(self, markers):
         def f(s): return ''.join(x for x in s.lower() if x.isalnum())
         return any(f(m) in f(self.name) for m in markers)
+    @property
+    def url(self):
+        # Mirrors _cf_api_types.Contest.url.
+        return f'https://codeforces.com/contest/{self.id}'
 
 class _Member(_NamedTuple):
     handle: str

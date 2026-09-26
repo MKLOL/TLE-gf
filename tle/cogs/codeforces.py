@@ -22,9 +22,11 @@ from tle.cogs._codeforces_helpers import (
 )
 from tle.cogs._codeforces_gitgud import CodeforcesGitgudMixin
 from tle.cogs._codeforces_problems import CodeforcesProblemsMixin
+from tle.cogs._codeforces_virtual import CodeforcesVirtualMixin
 
 
-class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin, commands.Cog):
+class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin,
+                 CodeforcesVirtualMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.converter = commands.MemberConverter()
@@ -48,6 +50,28 @@ class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin, commands.Cog):
         points |   1  |   2  |   3  |   5  |  8  |  12  |  17  |  23
         """
         await self._upsolve_impl(ctx, choice)
+
+    @commands.group(brief='Blind random virtual contest for gitgud points',
+                    usage='[claim]', invoke_without_command=True)
+    @cf_common.user_guard(group='gitgud')
+    async def virtual(self, ctx):
+        """Get a random contest you have never touched — revealed only after you confirm.
+
+        - ;virtual picks a contest for your division and asks you to confirm blind.
+        - Confirming reveals it and starts the clock: start the virtual on
+          Codeforces within 30 minutes, and every problem you solve while your
+          virtual runs earns gitgud points by the usual rating-delta table.
+        - ;virtual claim credits what you have solved so far (run it any time,
+          and again after you finish). Points show in ;gitlog and ;gitgudders.
+        - There is no cancelling after you confirm; an untouched virtual simply
+          expires with no points. ;virtual while one is active shows its status.
+        """
+        await self._virtual_impl(ctx)
+
+    @virtual.command(name='claim', brief='Credit the problems solved in your virtual')
+    @cf_common.user_guard(group='gitgud')
+    async def virtual_claim(self, ctx):
+        await self._virtual_claim_impl(ctx)
 
     @commands.command(brief='Recommend a problem',
                       usage='[+tag..] [~tag..] [+divX] [~divX] [rating|rating1-rating2] [d>=[[dd]mm]yyyy] [d<[[dd]mm]yyyy]')
