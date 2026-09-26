@@ -336,9 +336,18 @@ def members_to_handles(members: [discord.Member], guild_id):
     return handles
 
 def fix_urls(user: cf.User):
-    if user.titlePhoto.startswith('//'):
-        user = user._replace(titlePhoto = 'https:' + user.titlePhoto)
-    return user
+    photo = user.titlePhoto
+    if photo.startswith('//'):
+        photo = 'https:' + photo
+    # The API still returns the direct userpic host, which can serve 503s.
+    # Use the website's same-origin image proxy. This also repairs old cached
+    # users on read, without waiting for a user.info refresh or a DB migration.
+    for scheme in ('https://', 'http://'):
+        prefix = scheme + 'userpic.codeforces.org/'
+        if photo.startswith(prefix):
+            photo = 'https://codeforces.com/userpic.codeforces.org/' + photo[len(prefix):]
+            break
+    return user._replace(titlePhoto=photo) if photo != user.titlePhoto else user
 
 
 class SubFilter:
