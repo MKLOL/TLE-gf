@@ -330,7 +330,6 @@ class CodeforcesProblemsMixin:
             def normalize(x):
                 return [i.lower() for i in x]
             handle_counts = {}
-            parsed_handles = []
             for i in handles:
                 parse_str = normalize(i.split('*'))
                 if len(parse_str) > 1:
@@ -340,14 +339,13 @@ class CodeforcesProblemsMixin:
                         raise CodeforcesCogError("Can't multiply by non-integer")
                 else:
                     count = 1
+                if count <= 0:
+                    raise CodeforcesCogError('How can you have nonpositive members in team?')
                 # A handle named twice is that many members, not the last count.
                 handle_counts[parse_str[0]] = handle_counts.get(parse_str[0], 0) + count
-                parsed_handles.append(parse_str[0])
 
             if len(handle_counts) > 1000:
                 raise CodeforcesCogError('Too many handles.')
-            if any(count <= 0 for count in handle_counts.values()):
-                raise CodeforcesCogError('How can you have nonpositive members in team?')
             # Resolved one token at a time and merged by account: two tokens
             # naming one account in different casings (or a handle and the
             # Discord user registered to it) add up instead of mispairing.
@@ -358,11 +356,19 @@ class CodeforcesProblemsMixin:
                 key = resolved.lower()
                 counts_by_cf[key] = counts_by_cf.get(key, 0) + count
                 display.setdefault(key, resolved)
-            users = await cf.user.info(handles=list(counts_by_cf))
-            user_str = ', '.join(f'{display[key]}*{count}' if count > 1 else display[key]
-                                 for key, count in counts_by_cf.items())
-            ratings = [(rating(user), counts_by_cf[user.handle.lower()])
-                       for user in users if user.rating]
+            users = await cf.user.info(handles=list(display.values()))
+            # user.info preserves request order but can return renamed handles.
+            # Pair against that request, then merge old/new names of one account.
+            counts, profiles = {}, {}
+            for user, count in zip(users, counts_by_cf.values()):
+                key = user.handle.lower()
+                counts[key] = counts.get(key, 0) + count
+                profiles[key] = user
+            user_str = ', '.join(
+                f'{profiles[key].handle}*{count}' if count > 1 else profiles[key].handle
+                for key, count in counts.items())
+            ratings = [(rating(profiles[key]), count) for key, count in counts.items()
+                       if profiles[key].rating is not None]
 
         if len(ratings) == 0:
             raise CodeforcesCogError("No CF usernames with ratings passed in.")

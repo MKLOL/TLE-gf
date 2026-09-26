@@ -2,7 +2,10 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from tle.cogs._codeforces_problems import CodeforcesProblemsMixin
+from tle.cogs._codeforces_helpers import CodeforcesCogError
 from tle.util import codeforces_api as cf
 from tle.util import codeforces_common as cf_common
 from tle.cogs import _codeforces_problems as problems
@@ -13,7 +16,7 @@ class _Cog(CodeforcesProblemsMixin):
     bot = None
 
 
-def _run(args, monkeypatch, canonical):
+def _run(args, monkeypatch, canonical, renames=None):
     async def resolve(ctx, converter, handles, **kw):
         # Reversed on purpose: any code that pairs results with its input
         # positionally must fail here.
@@ -23,7 +26,8 @@ def _run(args, monkeypatch, canonical):
                         lambda a, params: ([False, False], list(a)))
 
     async def info(*, handles):
-        return [SimpleNamespace(handle=h, rating=2000 if h.lower() == 'tourist' else 1000,
+        return [SimpleNamespace(handle=(renames or {}).get(h.lower(), h),
+                                rating=2000 if h.lower() == 'tourist' else 1000,
                                 maxRating=0) for h in handles]
     monkeypatch.setattr(cf, 'user', SimpleNamespace(info=info), raising=False)
     monkeypatch.setattr(cf, 'rating2rank',
@@ -56,3 +60,24 @@ def test_a_discord_user_and_their_typed_handle_merge_instead_of_crashing(monkeyp
     assert got['ratings'] == [(2000, 3)]
     assert got['embed'].title == 'tourist*3'
 
+
+def test_cf_rename_preserves_multiplier_and_uses_new_display_name(monkeypatch):
+    got = _run(('old_name*3', 'tourist*2'), monkeypatch, {},
+               renames={'old_name': 'NewName'})
+    assert got['ratings'] == [(1000, 3), (2000, 2)]
+    assert got['embed'].title == 'NewName*3, tourist*2'
+
+
+def test_cf_rename_merges_old_and_new_account_names(monkeypatch):
+    got = _run(('old_name*3', 'NewName*2'), monkeypatch, {},
+               renames={'old_name': 'NewName', 'newname': 'NewName'})
+    assert got['ratings'] == [(1000, 5)]
+    assert got['embed'].title == 'NewName*5'
+
+
+@pytest.mark.parametrize('args', [
+    ('tourist*3', 'tourist*-1'), ('tourist*3', 'tourist*0'),
+])
+def test_each_multiplier_must_be_positive_before_aggregation(monkeypatch, args):
+    with pytest.raises(CodeforcesCogError, match='nonpositive'):
+        _run(args, monkeypatch, {})
