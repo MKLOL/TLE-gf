@@ -24,7 +24,8 @@ def normalize_tag(tag):
     tag = (tag or '').strip().lower()
     if not _TAG_RE.match(tag):
         raise ValueError(
-            'Tags are 1-32 characters: letters, digits, `_` or `-`.')
+            'Tags are 1-32 characters: a letter or digit first, then letters, '
+            'digits, `_` or `-`.')
     if tag in _RESERVED_TAGS:
         raise ValueError(f'`{tag}` is reserved.')
     return tag
@@ -134,14 +135,16 @@ class ComplaintDbMixin(ComplaintWorkflowDbMixin):
     def get_tags_for_complaints(self, complaint_ids):
         """Map complaint id -> sorted tags, one query for a whole listing."""
         ids = list(complaint_ids)
-        if not ids:
-            return {}
-        placeholders = ','.join('?' * len(ids))
         tags = {}
-        for complaint_id, tag in self.conn.execute(
-                f'SELECT complaint_id, tag FROM complaint_tag '
-                f'WHERE complaint_id IN ({placeholders}) ORDER BY tag', ids):
-            tags.setdefault(complaint_id, []).append(tag)
+        # Chunked: older SQLite caps bound variables at 999, and `list all`
+        # passes every complaint in the guild.
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ','.join('?' * len(chunk))
+            for complaint_id, tag in self.conn.execute(
+                    f'SELECT complaint_id, tag FROM complaint_tag '
+                    f'WHERE complaint_id IN ({placeholders}) ORDER BY tag', chunk):
+                tags.setdefault(complaint_id, []).append(tag)
         return tags
 
     def get_complaint_tag_counts(self, guild_id):

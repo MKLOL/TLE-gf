@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from discord.ext import commands
+
 from tle.cogs import complain as complain_cog
 from tle.cogs.complain import _parse_list_args
 from tle.util import codeforces_common as cf_common
@@ -60,6 +62,11 @@ class TestDb:
         db.add_complaint_tag(a, GUILD, 'games')
         assert db.get_tags_for_complaints([a, b]) == {a: ['games', 'ui']}
         assert db.get_tags_for_complaints([]) == {}
+
+    def test_tag_lookup_is_chunked_for_large_listings(self, db):
+        ids = [db.add_complaint(GUILD, USER, str(i)) for i in range(1200)]
+        db.add_complaint_tag(ids[-1], GUILD, 'games')
+        assert db.get_tags_for_complaints(ids) == {ids[-1]: ['games']}
 
     def test_counts_ignore_removed_complaints(self, db):
         a = db.add_complaint(GUILD, USER, 'a')
@@ -125,11 +132,11 @@ class TestListArgs:
         assert _parse_list_args(('games', 'resolved')) == ('resolved', 'games', False)
 
     def test_two_tags_are_an_error(self):
-        with pytest.raises(Exception):
+        with pytest.raises(commands.BadArgument, match='Usage'):
             _parse_list_args(('games', 'ui'))
 
     def test_bad_tag_is_an_error(self):
-        with pytest.raises(Exception):
+        with pytest.raises(commands.BadArgument, match='Tags are'):
             _parse_list_args(('no way',))
 
 

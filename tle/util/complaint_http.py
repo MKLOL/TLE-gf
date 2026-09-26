@@ -102,12 +102,16 @@ class ComplaintHttpServer:
         before = request.query.get('before')
         if before is not None:
             before = positive_int(before, 'before')
-        # Same visibility rule as ;complain list: tagged complaints are out
-        # of the default view, `tag=all` lifts that, a name selects one tag.
-        tag, include_tagged = request.query.get('tag'), False
-        if tag == 'all':
-            tag, include_tagged = None, True
-        elif tag is not None:
+        # Unlike ;complain list, the API returns tagged complaints by default:
+        # automation that has always fetched status=all must keep seeing
+        # everything, and `tags` on each row says what a moderator parked.
+        # `tag=untagged` is the Discord default view; a name selects one tag.
+        tag, include_tagged = request.query.get('tag'), True
+        if tag in (None, 'all'):
+            tag = None
+        elif tag == 'untagged':
+            tag, include_tagged = None, False
+        else:
             try:
                 tag = normalize_tag(tag)
             except ValueError as exc:

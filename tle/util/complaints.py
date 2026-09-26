@@ -65,13 +65,42 @@ def complaint_json(row, *, include_context=False, tags=()):
 
 
 class ComplaintService:
-    def __init__(self, bot, db_getter, *, is_deployed=git_state.commit_is_deployed):
+    def __init__(self, bot, db_getter, *,
+                 is_deployed=git_state.commit_is_deployed, head=None):
         self.bot = bot
         self._db_getter = db_getter
         self._lock = asyncio.Lock()
         self._worker = None
         self._is_deployed = is_deployed
+        self._head = head
+        self._head_captured = head is not None
         self._released_this_run = False
+
+    def running_head(self):
+        """The commit this process runs, captured once and never refreshed.
+
+        A ``git pull`` while the bot is up moves HEAD but not the loaded
+        code, so deploy checks compare against the SHA the process started
+        on. None means it cannot be known here (no git, no repository — the
+        Dockerfile copies the tree without ``.git``); every API resolution
+        then stays queued, and that is said once per process at WARNING so
+        it does not go unnoticed.
+        """
+        if not self._head_captured:
+            self._head_captured = True
+            self._head = git_state.current_head()
+            if self._head is None:
+                logger.warning('Cannot determine the running commit; API '
+                               'complaint resolutions will stay queued until '
+                               'the bot runs from a git checkout')
+        return self._head
+
+    async def _deployed(self, commit_url):
+        sha = git_state.commit_sha(commit_url)
+        head = self.running_head()
+        if not sha or not head:
+            return False
+        return await asyncio.to_thread(self._is_deployed, sha, head)
 
     @property
     def db(self):
@@ -105,6 +134,10 @@ class ComplaintService:
                 self.db.resolve_complaint(complaint_id, guild_id, actor_id,
                                           resolution, commit_url, token_id,
                                           defer_notification=defer_notification)
+                # If this process already runs the fix there is nothing to
+                # wait for; the check is the same one a restart would make.
+                if defer_notification and await self._deployed(commit_url):
+                    self.db.release_complaint_notification(complaint_id, commit_url)
             await self._notify(complaint_id)
             return self.get(guild_id, complaint_id)
 
@@ -179,25 +212,31 @@ class ComplaintService:
         """
         released = 0
         for row in self.db.queued_complaint_notifications():
-            sha = git_state.commit_sha(row.commit_url)
-            if not await asyncio.to_thread(self._is_deployed, sha):
+            if not await self._deployed(row.commit_url):
+                logger.info('Complaint %s: fix %s is not in the running commit; '
+                            'notification stays queued', row.id, row.commit_url)
                 continue
-            if self.db.release_complaint_notification(row.id):
+            if self.db.release_complaint_notification(row.id, row.commit_url):
                 released += 1
                 logger.info('Complaint %s: fix %s is deployed, notification released',
-                            row.id, sha)
+                            row.id, row.commit_url)
         return released
 
     async def _run_notifications(self):
         while True:
-            try:
-                if self.bot.is_ready():
-                    if not self._released_this_run:
+            if self.bot.is_ready():
+                # Two guards: a release that keeps failing must not starve
+                # the ordinary retries of failed deliveries.
+                if not self._released_this_run:
+                    try:
                         await self.release_deployed()
                         self._released_this_run = True
+                    except Exception:
+                        logger.exception('Releasing queued complaint notifications failed')
+                try:
                     await self.retry_notifications()
-            except Exception:
-                logger.exception('Complaint notification worker failed')
+                except Exception:
+                    logger.exception('Complaint notification worker failed')
             await asyncio.sleep(30)
 
     def start(self):

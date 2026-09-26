@@ -17,6 +17,7 @@ from tle.util import git_state
 from tle.util.complaints import ComplaintService
 
 SHA = COMMIT.rsplit('/', 1)[1]
+HEAD = 'f' * 40  # the commit the fake process "runs"
 
 
 @pytest.fixture
@@ -34,9 +35,10 @@ def env(monkeypatch):
     return db, bot, cid
 
 
-def _service(db, bot, deployed):
-    return ComplaintService(bot, lambda: db,
-                            is_deployed=lambda sha: sha in deployed)
+def _service(db, bot, deployed, head=HEAD):
+    return ComplaintService(
+        bot, lambda: db, head=head,
+        is_deployed=lambda sha, running: running == HEAD and sha in deployed)
 
 
 def _resolve_via_api(service, cid):
@@ -48,7 +50,6 @@ class TestApiResolveIsQueued:
     def test_nothing_is_sent_and_status_says_queued(self, env):
         db, bot, cid = env
         row = _resolve_via_api(_service(db, bot, set()), cid)
-        assert row.status if hasattr(row, 'status') else True
         assert row.notification_status == 'queued'
         assert row.resolved_at is not None
         bot.channel.send.assert_not_awaited()
@@ -56,7 +57,7 @@ class TestApiResolveIsQueued:
 
     def test_repeating_the_api_resolve_still_sends_nothing(self, env):
         db, bot, cid = env
-        service = _service(db, bot, {SHA})  # deployed, but not yet released
+        service = _service(db, bot, set())
         _resolve_via_api(service, cid)
         _resolve_via_api(service, cid)
         bot.channel.send.assert_not_awaited()
@@ -66,15 +67,30 @@ class TestApiResolveIsQueued:
         """The Discord path notifies immediately, but a queued row is a
         queued row whoever repeats the resolution."""
         db, bot, cid = env
-        service = _service(db, bot, {SHA})
+        service = _service(db, bot, set())
         _resolve_via_api(service, cid)
         row = asyncio.run(service.resolve(1, cid, 10, 'fixed', COMMIT))
         assert row.notification_status == 'queued'
         bot.channel.send.assert_not_awaited()
 
+    def test_a_fix_the_process_already_runs_is_not_made_to_wait(self, env):
+        """Deploy first, resolve second: nothing to wait for."""
+        db, bot, cid = env
+        row = _resolve_via_api(_service(db, bot, {SHA}), cid)
+        assert row.notification_status == 'sent'
+        bot.channel.send.assert_awaited_once()
+
+    def test_without_a_known_running_commit_everything_stays_queued(self, env):
+        db, bot, cid = env
+        service = _service(db, bot, {SHA}, head=None)
+        service._head_captured = True  # simulate: git could not answer
+        _resolve_via_api(service, cid)
+        assert asyncio.run(service.release_deployed()) == 0
+        assert db.get_complaint(cid).notification_status == 'queued'
+
     def test_the_retry_worker_ignores_queued_rows(self, env):
         db, bot, cid = env
-        service = _service(db, bot, {SHA})
+        service = _service(db, bot, set())
         _resolve_via_api(service, cid)
         asyncio.run(service.retry_notifications())
         bot.channel.send.assert_not_awaited()
@@ -83,9 +99,10 @@ class TestApiResolveIsQueued:
 
 class TestReleaseOnDeploy:
     def test_released_once_the_commit_is_running(self, env):
+        """Resolve first (fix not running), restart with the fix, release."""
         db, bot, cid = env
+        _resolve_via_api(_service(db, bot, set()), cid)
         service = _service(db, bot, {SHA})
-        _resolve_via_api(service, cid)
 
         assert asyncio.run(service.release_deployed()) == 1
         assert db.get_complaint(cid).notification_status == 'pending'
@@ -104,8 +121,8 @@ class TestReleaseOnDeploy:
 
     def test_delivered_exactly_once_across_repeated_releases(self, env):
         db, bot, cid = env
+        _resolve_via_api(_service(db, bot, set()), cid)
         service = _service(db, bot, {SHA})
-        _resolve_via_api(service, cid)
         for _ in range(3):
             asyncio.run(service.release_deployed())
             asyncio.run(service.retry_notifications())
@@ -123,8 +140,8 @@ class TestReleaseOnDeploy:
 
     def test_an_unparseable_commit_url_never_releases(self, env):
         db, bot, cid = env
+        _resolve_via_api(_service(db, bot, set()), cid)
         service = _service(db, bot, {SHA})
-        _resolve_via_api(service, cid)
         db.conn.execute('UPDATE complaint SET commit_url = ? WHERE id = ?',
                         ('https://github.com/MKLOL/TLE-gf/commits/master', cid))
         db.conn.commit()
@@ -132,7 +149,7 @@ class TestReleaseOnDeploy:
 
     def test_reopening_clears_the_queue(self, env):
         db, bot, cid = env
-        service = _service(db, bot, {SHA})
+        service = _service(db, bot, set())
         _resolve_via_api(service, cid)
         asyncio.run(service.reopen(1, cid, 10))
         assert db.get_complaint(cid).notification_status is None
@@ -140,8 +157,8 @@ class TestReleaseOnDeploy:
 
     def test_the_worker_releases_once_per_process(self, env, monkeypatch):
         db, bot, cid = env
+        _resolve_via_api(_service(db, bot, set()), cid)
         service = _service(db, bot, {SHA})
-        _resolve_via_api(service, cid)
         calls = []
         original = service.release_deployed
 
@@ -167,6 +184,32 @@ class TestReleaseOnDeploy:
         bot.channel.send.assert_awaited_once()
 
 
+class TestReleaseRace:
+    def test_a_re_resolve_to_another_commit_during_the_check_is_not_released(self, env, monkeypatch):
+        """Release verifies commit X; meanwhile the row is reopened and
+        resolved with an undeployed Y. Y must stay queued."""
+        db, bot, cid = env
+        _resolve_via_api(_service(db, bot, set()), cid)
+        other = 'https://github.com/MKLOL/TLE-gf/commit/' + 'b' * 40
+
+        # Run the "git" check inline: an in-memory SQLite connection cannot
+        # be touched from the worker thread to_thread would use.
+        async def inline(func, *args):
+            return func(*args)
+        monkeypatch.setattr(asyncio, 'to_thread', inline)
+
+        def slow_check(sha, running):
+            # The reopen + re-resolve lands while git is "thinking".
+            db.reopen_complaint(cid, 1, 10)
+            db.resolve_complaint(cid, 1, 10, 'fixed', other, 5, defer_notification=True)
+            return sha == SHA
+        service = ComplaintService(bot, lambda: db, head=HEAD, is_deployed=slow_check)
+        assert asyncio.run(service.release_deployed()) == 0
+        assert db.get_complaint(cid).notification_status == 'queued'
+        asyncio.run(service.retry_notifications())
+        bot.channel.send.assert_not_awaited()
+
+
 class TestDiscordResolveIsImmediate:
     def test_manual_resolution_still_notifies_now(self, env):
         db, bot, cid = env
@@ -187,16 +230,28 @@ class TestGitState:
         assert git_state.commit_sha(None) is None
         assert git_state.commit_sha('') is None
 
-    def test_head_of_this_checkout_counts_as_deployed(self):
+    def _head(self):
         try:
-            head = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True,
+            return subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True,
                                   text=True, timeout=10, check=True).stdout.strip()
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pytest.skip('not running inside a git checkout')
-        assert git_state.commit_is_deployed(head)
-        assert git_state.commit_is_deployed(head[:8])
+
+    def test_current_head_matches_git(self):
+        assert git_state.current_head() == self._head()
+
+    def test_head_of_this_checkout_counts_as_deployed(self):
+        head = self._head()
+        assert git_state.commit_is_deployed(head, head)
+        assert git_state.commit_is_deployed(head[:8], head)
 
     def test_unknown_and_empty_shas_are_not_deployed(self):
-        assert not git_state.commit_is_deployed('0' * 40)
-        assert not git_state.commit_is_deployed(None)
-        assert not git_state.commit_is_deployed('')
+        head = self._head()
+        assert not git_state.commit_is_deployed('0' * 40, head)
+        assert not git_state.commit_is_deployed(None, head)
+        assert not git_state.commit_is_deployed('', head)
+        assert not git_state.commit_is_deployed(head, None)
+
+    def test_outside_a_repository_nothing_is_known(self, tmp_path):
+        assert git_state.current_head(cwd=tmp_path) is None
+        assert not git_state.commit_is_deployed('0' * 40, 'HEAD', cwd=tmp_path)

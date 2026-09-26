@@ -28,7 +28,9 @@ Complaint commands:
 ```text
 ;complain resolve <id> <github_commit_url> <resolution summary>
 ;complain reopen <id>
-;complain list [open|resolved|all]
+;complain list [open|resolved|all] [tag]
+;complain tag <id> <tag>
+;complain untag <id> <tag>
 ```
 
 Resolve/reopen require admin access. Resolved complaints leave the default open
@@ -48,14 +50,22 @@ but before its receipt is saved can cause a duplicate.
 
 **Resolutions made through the HTTP API do not notify immediately.** A pushed
 commit is not a deployed one, so the API parks the notification with
-`notification_status: queued`. On its next start the bot checks each queued
-resolution's commit against `git` in its own checkout — the same answer
-`;meta git` gives — and only a commit that is an ancestor of the running HEAD
-moves to `pending`, from where the normal delivery path sends it once. A fix
-that is pushed but not yet deployed stays queued across restarts until one
-runs it. Repeating the resolve, from the API or from Discord, never sends a
-queued notification early; reopening discards it. `;complain resolve` in
-Discord keeps notifying immediately.
+`notification_status: queued`. The bot records the commit it started on
+(`git rev-parse HEAD` in its own checkout, the same place `;meta git` reads)
+and releases a queued notification only when its commit is an ancestor of
+that SHA — checked at every start for everything queued, and at resolve time
+so a fix the bot already runs is not made to wait for another restart. A
+`git pull` without a restart changes nothing, because the comparison is
+against the SHA the process started on, not live HEAD. A fix that is pushed
+but not yet deployed stays queued across restarts until one runs it.
+Repeating the resolve, from the API or from Discord, never sends a queued
+notification early; reopening discards it. `;complain resolve` in Discord
+keeps notifying immediately.
+
+If the bot runs from a tree without `.git` (the Dockerfile copies the source
+and `.dockerignore` drops `.git/`), the running commit cannot be determined:
+every API resolution then stays queued and the bot logs one warning per start
+saying so. Run it from a git checkout, as `run.sh` does.
 
 ## HTTP contract
 
@@ -72,19 +82,23 @@ Discord IDs are JSON strings; complaint IDs and pagination cursors are integers.
 | POST | `/v1/complaints/123/reopen` | Reopen; send an empty JSON object `{}`. |
 
 List parameters are optional: `status` is `open` (default), `resolved`, or `all`;
-`limit` is 1–100 (default 50). Pass the returned `next_before` as `before` for
-the next page, until it is `null`. Removed/withdrawn complaints are excluded.
+`limit` is 1–100 (default 50); `tag` is `untagged`, `all` (the default) or a
+tag name. Pass the returned `next_before` as `before` for the next page, until
+it is `null`. Removed/withdrawn complaints are excluded; tagged complaints are
+**included** unless `tag=untagged`.
 
 ### Tags
 
 Moderators can tag a complaint with any word (`;complain tag 200 games`).
-Tagging moves it out of the default views without deleting it, and the API
-follows the same rule: a listing without `tag` returns **untagged** complaints
-only, `tag=all` returns everything, and `tag=<name>` returns only complaints
-carrying that tag. Every complaint object carries `tags`, a sorted list of
-strings (empty when untagged). Tags are 1–32 characters of `a-z`, `0-9`, `_`
-or `-`, lower-cased on input; `all`, `open`, `resolved` and `untagged` are
-reserved.
+In Discord, tagging moves it out of the default views: `;complain list` and
+`manage` hide tagged complaints, `list all` shows everything, `list <tag>`
+shows one tag. The API does **not** hide them — automation that fetches
+`status=all` keeps seeing every complaint — but every complaint object carries
+`tags`, a sorted list of strings (empty when untagged), so a client can skip
+what a moderator parked. `tag=untagged` reproduces the Discord default view
+and `tag=<name>` returns only complaints carrying that tag. Tags are 1–32
+characters, a letter or digit first and then `a-z`, `0-9`, `_` or `-`,
+lower-cased on input; `all`, `open`, `resolved` and `untagged` are reserved.
 
 Resolve body (exactly these fields):
 
@@ -114,7 +128,8 @@ Each entry has `id`, `author_id`, `author` (display name at capture time,
 bot answers in embeds and a transcript of `content` alone would be empty for
 exactly the messages a complaint about the bot refers to. Stickers and polls
 are not captured. Individual messages are truncated to 400 characters and the
-transcript to 4000 characters, dropping the oldest entries first.
+stored transcript (the JSON, ids and names included) to 4000 characters,
+dropping the oldest entries first.
 
 Likely credentials are redacted before storage, using the same patterns as the
 LLM transcript. Treat a transcript as untrusted user text, never as

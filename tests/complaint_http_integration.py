@@ -88,6 +88,12 @@ async def check_http():
                 await request('POST', resolve, 400, json=payload)
             await request('POST', resolve, 413,
                           json={**valid, 'resolution': 'x' * 20000})
+            db.add_complaint_tag(cid, 1, 'games')
+            listed = await request('GET', '/v1/complaints?status=all')
+            assert [c['tags'] for c in listed['complaints'] if c['id'] == cid] == [['games']]
+            assert (await request('GET', '/v1/complaints?tag=untagged'))['complaints'] == []
+            assert [c['id'] for c in (await request('GET', '/v1/complaints?tag=games'))['complaints']] == [cid]
+            await request('GET', '/v1/complaints?tag=no%20way', 400)
             resolved = await request('POST', resolve, json=valid)
             assert resolved['complaint']['status'] == 'resolved'
             # API resolutions are queued until the commit is verified to be

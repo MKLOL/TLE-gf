@@ -108,19 +108,20 @@ class ComplaintWorkflowDbMixin:
             WHERE active = 1 AND resolved_at IS NOT NULL
             AND notification_status = 'queued' ORDER BY id''').fetchall()
 
-    def release_complaint_notification(self, complaint_id):
+    def release_complaint_notification(self, complaint_id, commit_url):
         """Move a queued notification to pending. Returns whether it moved.
 
-        The ``notification_status = 'queued'`` predicate makes this a one-way
-        transition: a second release, or a release racing the worker, changes
-        nothing, so a notification can never be delivered twice from here.
+        One-way and specific: the row must still be queued *and* still carry
+        the commit that was verified, so a release racing a reopen-and-
+        re-resolve to a different commit changes nothing, and a second release
+        cannot deliver twice.
         """
         with self.conn:
             changed = self.conn.execute('''UPDATE complaint SET
                 notification_status = 'pending', notification_attempt_at = NULL
                 WHERE id = ? AND active = 1 AND resolved_at IS NOT NULL
-                AND notification_status = 'queued'
-                ''', (complaint_id,)).rowcount
+                AND notification_status = 'queued' AND commit_url = ?
+                ''', (complaint_id, commit_url)).rowcount
         return bool(changed)
 
     def record_complaint_notification(self, complaint_id, status, link=None):
