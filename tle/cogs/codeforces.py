@@ -59,7 +59,7 @@ class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin,
 
         - ;virtual picks a contest for your division and asks you to confirm blind.
         - Confirming reveals it and starts the clock: start the virtual on
-          Codeforces within 30 minutes, and every problem you solve while your
+          Codeforces within 10 minutes, and every problem you solve while your
           virtual runs earns gitgud points by the usual rating-delta table.
         - ;virtual claim credits what you have solved so far (run it any time,
           and again after you finish). Points show in ;gitlog and ;gitgudders.

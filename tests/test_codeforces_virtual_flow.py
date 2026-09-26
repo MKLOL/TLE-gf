@@ -12,7 +12,7 @@ from tle.util import codeforces_common as cf_common
 
 from tests.subfilter_common import _problem
 from tests.virtual_common import (  # noqa: F401
-    DURATION, GUILD, HANDLE, NOW, USER, _ctx, _interaction, _offer, _sub, env)
+    CONTESTS, DURATION, GUILD, HANDLE, NOW, USER, _ctx, _interaction, _offer, _sub, env)
 
 class TestOffer:
     def test_the_offer_does_not_name_the_contest(self, env):
@@ -62,8 +62,44 @@ class TestOffer:
         interaction = _interaction()
         asyncio.run(stale.decide(interaction, True))
         embed = interaction.response.edit_message.call_args.kwargs['embed']
-        assert embed.title == 'Already running'
+        assert embed.title == 'Offer expired'
         assert len(env.db.virtual_session_contest_ids(GUILD, USER)) == 1
+
+    def test_an_expired_offer_cannot_be_confirmed_without_a_replacement(self, env):
+        _, _, view = _offer(env)
+        env.clock.now = NOW + virtual._OFFER_TIMEOUT + 1
+        interaction = _interaction()
+        asyncio.run(view.decide(interaction, True))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+        assert interaction.response.edit_message.call_args.kwargs['embed'].title == 'Offer expired'
+
+    def test_a_replaced_offer_cannot_be_confirmed_early(self, env):
+        _, _, view = _offer(env)
+        env.cog._pending_offers()[USER] = object()
+        asyncio.run(view.decide(_interaction(), True))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+        assert USER in env.cog._pending_offers()
+
+    def test_timeout_closes_the_offer_and_frees_its_slot(self, env):
+        _, _, view = _offer(env)
+        asyncio.run(view.on_timeout())
+        assert view.decided
+        assert USER not in env.cog._pending_offers()
+        asyncio.run(view.decide(_interaction(), True))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+
+    def test_the_offer_clock_starts_after_slow_api_work(self, env, monkeypatch):
+        async def slow_visited(handles):
+            env.clock.now += 15 * 60
+            return set()
+
+        monkeypatch.setattr(cf_common, 'get_visited_contests', slow_visited)
+        _, _, view = _offer(env)
+        assert view.offered_at == env.clock.now
+        with pytest.raises(CodeforcesCogError, match='offer waiting'):
+            asyncio.run(env.cog._virtual_impl(_ctx(env.db)))
+        asyncio.run(view.decide(_interaction(), True))
+        assert env.db.get_active_virtual_session(GUILD, USER) is not None
 
     def test_an_offered_contest_is_not_offered_again(self, env):
         ctx, _, view = _offer(env)
@@ -187,6 +223,27 @@ class TestStatusAndClaim:
         assert env.db.get_active_virtual_session(GUILD, USER) is None
         assert env.db.get_gudgitter_score(USER) == 8
 
+    @pytest.mark.parametrize('verdict', [None, 'TESTING'])
+    def test_expiry_waits_for_pending_judgements(self, env, verdict):
+        session = self._start(env)
+        env.subs.append(_sub('B', rating=1900, verdict=verdict))
+        env.clock.now = session.expires_at + 61
+        with pytest.raises(CodeforcesCogError, match='still judging'):
+            asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_active_virtual_session(GUILD, USER).id == session.id
+        env.subs[:] = [_sub('B', rating=1900)]
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_gudgitter_score(USER) == 8
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+
+    def test_unrelated_pending_submissions_do_not_hold_a_session_open(self, env):
+        session = self._start(env)
+        env.subs.extend([_sub('B', contest_id=3, verdict='TESTING'),
+                         _sub('C', ptype='PRACTICE', verdict='TESTING')])
+        env.clock.now = session.expires_at + 61
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_active_virtual_session(GUILD, USER) is None
+
     def test_a_forgotten_virtual_is_credited_before_the_next_offer(self, env):
         self._start(env)
         env.subs.append(_sub('B', rating=1900))
@@ -217,6 +274,33 @@ class TestStatusAndClaim:
         assert env.db.get_gudgitter_score(USER) == 8
         assert len(env.db.gitlog(str(USER))) == 1
         assert env.db.credited_virtual_problems(session.id) == set()
+
+    @pytest.mark.parametrize('completed', [False, True])
+    def test_mirrored_gitgud_problem_stays_reserved(self, env, completed):
+        session = self._start(env)
+        env.db.new_challenge(str(USER), NOW, _problem(2, index='C', name='PA'), 0)
+        if completed:
+            challenge = env.db.check_challenge(str(USER))
+            env.db.complete_challenge(USER, challenge[0], NOW + 600, 8)
+        env.subs.append(_sub('A', name='PA', rating=1900))
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_gudgitter_score(USER) == (8 if completed else 0)
+        assert env.db.credited_virtual_problems(session.id) == set()
+
+    def test_unrelated_rounds_can_have_the_same_problem_title(self, env, monkeypatch):
+        session = self._start(env)
+        other_round = CONTESTS[1]._replace(
+            startTimeSeconds=CONTESTS[0].startTimeSeconds - 86400)
+        monkeypatch.setattr(cf_common.cache2.contest_cache, 'get_contests_in_phase',
+                            lambda phase: [CONTESTS[0], other_round])
+        env.db.new_challenge(str(USER), NOW - 86400,
+                            _problem(2, index='A', name='PA'), 0)
+        challenge = env.db.check_challenge(str(USER))
+        env.db.complete_challenge(USER, challenge[0], NOW - 86000, 8)
+        env.subs.append(_sub('A', name='PA', rating=1900))
+        asyncio.run(env.cog._virtual_claim_impl(_ctx(env.db)))
+        assert env.db.get_gudgitter_score(USER) == 16
+        assert env.db.credited_virtual_problems(session.id) == {'A'}
 
     def test_unrated_problems_are_reported_not_paid(self, env):
         self._start(env)

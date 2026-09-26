@@ -81,24 +81,27 @@ def virtual_solves(submissions, session, duration_seconds, credited=()):
     """
     solved = {}
     for sub in submissions:
-        if sub.contestId != session.contest_id or sub.verdict != 'OK':
-            continue
-        party = sub.author
-        if party.participantType != 'VIRTUAL' or len(party.members) != 1:
-            continue
-        started = party.startTimeSeconds
-        if started is None or started < session.confirmed_at - _CLOCK_SLACK:
-            continue
-        if started > start_deadline(session.confirmed_at) + _CLOCK_SLACK:
-            continue
-        elapsed = sub.relativeTimeSeconds
-        if elapsed is None or elapsed > duration_seconds:
+        if sub.verdict != 'OK' or not _matches_virtual_run(sub, session, duration_seconds):
             continue
         index = sub.problem.index
         if index in credited or index in solved:
             continue
         solved[index] = sub.problem
     return [solved[index] for index in sorted(solved)]
+
+
+def _matches_virtual_run(sub, session, duration_seconds):
+    if sub.contestId != session.contest_id:
+        return False
+    party = sub.author
+    if party.participantType != 'VIRTUAL' or len(party.members) != 1:
+        return False
+    started = party.startTimeSeconds
+    if started is None or not (session.confirmed_at - _CLOCK_SLACK <= started
+                              <= start_deadline(session.confirmed_at) + _CLOCK_SLACK):
+        return False
+    elapsed = sub.relativeTimeSeconds
+    return elapsed is not None and 0 <= elapsed <= duration_seconds
 
 
 def session_is_over(session, now):
@@ -132,6 +135,7 @@ class VirtualOfferView(discord.ui.View):
         self.markers = markers
         self.message = None
         self.decided = False
+        self.offered_at = time.time()
         self.add_item(_OfferButton(self, 'Confirm', discord.ButtonStyle.success,
                                    confirm=True))
         self.add_item(_OfferButton(self, 'Cancel', discord.ButtonStyle.secondary,
@@ -150,19 +154,32 @@ class VirtualOfferView(discord.ui.View):
         self.decided = True
         for item in self.children:
             item.disabled = True
-        if confirm:
-            await self.cog._confirm_virtual(interaction, self)
-        else:
-            await interaction.response.edit_message(
-                embed=discord.Embed(title='Virtual cancelled',
-                                    description='Nothing was revealed. Run '
-                                                '`;virtual` for a fresh pick.'),
-                view=self)
-        self.stop()
+        pending = self.cog._pending_offers()
+        expired = (time.time() >= self.offered_at + self.timeout
+                   or pending.get(self.ctx.author.id) is not self)
+        try:
+            if confirm and not expired:
+                await self.cog._confirm_virtual(interaction, self)
+            else:
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title='Offer expired' if expired else 'Virtual cancelled',
+                        description='Nothing was revealed. Run '
+                                    '`;virtual` for a fresh pick.'), view=self)
+        finally:
+            self._forget()
+            self.stop()
+
+    def _forget(self):
+        pending = self.cog._pending_offers()
+        if pending.get(self.ctx.author.id) is self:
+            del pending[self.ctx.author.id]
 
     async def on_timeout(self):
         if self.decided:
             return
+        self.decided = True
+        self._forget()
         for item in self.children:
             item.disabled = True
         if self.message:
@@ -244,7 +261,7 @@ class CodeforcesVirtualMixin:
         and says so. Transient API failures leave the session claimable.
         """
         try:
-            points, names, unrated = await self._credit_virtual(ctx, session)
+            points, names, unrated = await self._credit_virtual(ctx, session, finalizing=True)
         except cf.HandleNotFoundError as error:
             cf_common.user_db.finish_virtual_session(session.id)
             return (f'Your previous virtual ({session.contest_name}) is over, '
@@ -276,7 +293,7 @@ class CodeforcesVirtualMixin:
         # for the API either, and a pile of live offers is a foot-gun.
         pending = self._pending_offers().get(ctx.author.id)
         if pending is not None and not pending.decided \
-                and now < pending.offered_at + _OFFER_TIMEOUT:
+                and time.time() < pending.offered_at + pending.timeout:
             raise CodeforcesCogError(
                 'You already have an offer waiting — confirm or cancel it first.')
 
@@ -294,12 +311,12 @@ class CodeforcesVirtualMixin:
         contest = random.choice(candidates)
 
         view = VirtualOfferView(self, ctx, handle, contest, markers)
-        view.offered_at = now
         view.base_rating = gitgud_base_rating(user.effective_rating)
         # Registered only once it is actually on screen: a failed send must
         # not leave a phantom offer blocking the user for ten minutes.
         view.message = await ctx.send(embed=self._offer_embed(markers, contest),
                                       view=view)
+        view.offered_at = time.time()
         self._pending_offers()[ctx.author.id] = view
 
     async def _confirm_virtual(self, interaction, offer):
@@ -320,7 +337,7 @@ class CodeforcesVirtualMixin:
             content=f'Virtual confirmed for `{offer.handle}`.',
             embed=self._reveal_embed(contest, now, expires_at), view=offer)
 
-    async def _credit_virtual(self, ctx, session):
+    async def _credit_virtual(self, ctx, session, *, finalizing=False):
         """Credit new solves for a session. Returns (points, names, unrated).
 
         Everything is read from the session — the handle it was confirmed
@@ -330,9 +347,19 @@ class CodeforcesVirtualMixin:
         """
         submissions = await cf.user.status(handle=session.handle)
         contest = cf_common.cache2.contest_cache.get_contest(session.contest_id)
+        if finalizing and any(sub.verdict in (None, 'TESTING')
+                              and _matches_virtual_run(sub, session, contest.durationSeconds)
+                              for sub in submissions):
+            raise CodeforcesCogError(
+                'Codeforces is still judging this virtual. Your session is saved; '
+                'run `;virtual claim` again after judging finishes.')
         credited = cf_common.user_db.credited_virtual_problems(session.id)
         base = session.base_rating
         now = int(time.time())
+        siblings = [other.id for other in
+                    cf_common.cache2.contest_cache.get_contests_in_phase('FINISHED')
+                    if contest.startTimeSeconds is not None
+                    and other.startTimeSeconds == contest.startTimeSeconds]
 
         points, names, unrated = 0, [], []
         for problem in virtual_solves(submissions, session,
@@ -344,7 +371,8 @@ class CodeforcesVirtualMixin:
             delta = problem.rating - base
             score = _calculateGitgudScoreForDelta(delta)
             if cf_common.user_db.credit_virtual_solve(
-                    session.id, ctx.author.id, problem, delta, score, now):
+                    session.id, ctx.author.id, problem, delta, score, now,
+                    sibling_contest_ids=siblings):
                 points += score
                 names.append(f'{problem.index}. {problem.name} (+{score})')
         return points, names, unrated

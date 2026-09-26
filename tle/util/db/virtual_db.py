@@ -132,12 +132,14 @@ class VirtualDbMixin:
         return set(json.loads(row[0])) if row else set()
 
     def credit_virtual_solve(self, session_id, user_id, problem, delta,
-                             points, finish_time):
+                             points, finish_time, *, sibling_contest_ids=()):
         """Record one solved problem as a completed gitgud challenge.
 
         Returns False if that problem was already credited, or is reserved
         for a live gitgud challenge. Completed challenges remain excluded:
         claiming gitgud first must not make its solve payable a second time.
+        Same-name copies count only in the caller's verified sibling rounds;
+        unrelated rounds can reuse a problem title.
         The challenge row, the score bump and the session bookkeeping are one
         transaction, so a crash cannot leave points without a log line or a
         credited index without points.
@@ -154,11 +156,14 @@ class VirtualDbMixin:
             confirmed_at, credited = row[0], json.loads(row[1])
             if problem.index in credited:
                 return False
+            contest_ids = sorted({problem.contestId, *sibling_contest_ids})
+            placeholders = ', '.join('?' for _ in contest_ids)
             existing = self.conn.execute(
                 'SELECT 1 FROM challenge WHERE user_id = ? '
-                'AND (problem_name = ? OR (contest_id = ? AND p_index = ?)) '
+                'AND ((contest_id = ? AND p_index = ?) OR '
+                f'(problem_name = ? AND contest_id IN ({placeholders}))) '
                 'AND status IN (?, ?) LIMIT 1',
-                (user_id, problem.name, problem.contestId, problem.index,
+                (user_id, problem.contestId, problem.index, problem.name, *contest_ids,
                  int(Gitgud.GITGUD), int(Gitgud.GOTGUD))).fetchone()
             if existing is not None:
                 return False

@@ -81,6 +81,7 @@ class TestVirtualSolves:
         assert virtual.session_is_over(session, session.expires_at + 61)
 
     def test_solves_after_the_contest_clock_do_not_count(self):
+        assert self._solved([_sub('A', elapsed=-1)]) == []
         assert self._solved([_sub('A', elapsed=DURATION + 1)]) == []
         assert self._solved([_sub('A', elapsed=DURATION)]) == ['A']
 
