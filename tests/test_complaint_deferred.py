@@ -7,6 +7,7 @@ once.
 """
 import asyncio
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import discord
@@ -79,6 +80,22 @@ class TestApiResolveIsQueued:
         row = _resolve_via_api(_service(db, bot, {SHA}), cid)
         assert row.notification_status == 'sent'
         bot.channel.send.assert_awaited_once()
+
+    def test_deploy_checks_work_without_python39_to_thread(self, env, monkeypatch):
+        db, bot, cid = env
+        monkeypatch.delattr(asyncio, 'to_thread', raising=False)
+        caller = threading.get_ident()
+        workers = []
+
+        def deployed(sha, running):
+            workers.append(threading.get_ident())
+            return sha == SHA and running == HEAD
+
+        service = ComplaintService(bot, lambda: db, head=HEAD,
+                                   is_deployed=deployed)
+        row = _resolve_via_api(service, cid)
+        assert row.notification_status == 'sent'
+        assert workers and all(worker != caller for worker in workers)
 
     def test_without_a_known_running_commit_everything_stays_queued(self, env, monkeypatch):
         db, bot, cid = env
@@ -256,10 +273,12 @@ class TestReleaseRace:
         other = 'https://github.com/MKLOL/TLE-gf/commit/' + 'b' * 40
 
         # Run the "git" check inline: an in-memory SQLite connection cannot
-        # be touched from the worker thread to_thread would use.
-        async def inline(func, *args):
-            return func(*args)
-        monkeypatch.setattr(asyncio, 'to_thread', inline)
+        # be touched from the executor's worker thread.
+        def inline(loop, executor, func, *args):
+            result = loop.create_future()
+            result.set_result(func(*args))
+            return result
+        monkeypatch.setattr(asyncio.BaseEventLoop, 'run_in_executor', inline)
 
         def slow_check(sha, running):
             # The reopen + re-resolve lands while git is "thinking".

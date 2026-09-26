@@ -94,7 +94,9 @@ class ComplaintService:
         head = self.running_head()
         if not sha or not head:
             return False
-        return await asyncio.to_thread(self._is_deployed, sha, head)
+        # Python 3.8 remains supported; asyncio.to_thread arrived in 3.9.
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._is_deployed, sha, head)
 
     @property
     def db(self):
