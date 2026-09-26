@@ -49,6 +49,20 @@ def _solved_problem_keys(submissions):
             for sub in submissions if sub.verdict == 'OK'}
 
 
+async def _load_rated_contests(filt, handle):
+    """Index a user's rated rounds under requested and returned handle names."""
+    try:
+        changes = await cf.user.rating(handle=handle)
+    except cf.HandleNotFoundError:
+        changes = []
+    contests = {change.contestId for change in changes}
+    aliases = {handle.lower()}
+    aliases.update(change.handle.lower() for change in changes
+                   if getattr(change, 'handle', None))
+    for alias in aliases:
+        filt.rated_contest_ids_by_handle[alias] = contests
+
+
 class CodeforcesProblemsMixin:
     async def _stalk_impl(self, ctx, args):
         (hardest,), args = cf_common.filter_flags(args, ['+hardest'])
@@ -59,13 +73,7 @@ class CodeforcesProblemsMixin:
         # +rated: fetch rating change history to know which contests were rated
         if filt.only_rated:
             for handle in handles:
-                try:
-                    changes = await cf.user.rating(handle=handle)
-                    filt.rated_contest_ids_by_handle[handle.lower()] = {
-                        rc.contestId for rc in changes
-                    }
-                except cf.HandleNotFoundError:
-                    filt.rated_contest_ids_by_handle[handle.lower()] = set()
+                await _load_rated_contests(filt, handle)
         submissions = [await cf.user.status(handle=handle) for handle in handles]
         submissions = [sub for subs in submissions for sub in subs]
         submissions = filt.filter_subs(submissions)
@@ -118,13 +126,7 @@ class CodeforcesProblemsMixin:
         if filt.only_rated:
             # filter_subs looks rated contests up per handle; left empty, the
             # advertised +rated silently degrades into a plain +contest.
-            try:
-                changes = await cf.user.rating(handle=left)
-                filt.rated_contest_ids_by_handle[left.lower()] = {
-                    rc.contestId for rc in changes
-                }
-            except cf.HandleNotFoundError:
-                filt.rated_contest_ids_by_handle[left.lower()] = set()
+            await _load_rated_contests(filt, left)
 
         left_subs = await cf.user.status(handle=left)
         right_subs = await cf.user.status(handle=right)
@@ -376,5 +378,23 @@ class CodeforcesProblemsMixin:
         left = -100.0
         right = 10000.0
         teamRating = composeRatings(left, right, ratings)
-        embed = discord.Embed(title=user_str, description=teamRating, color=cf.rating2rank(teamRating).color_embed)
-        await ctx.send(embed = embed)
+        color = cf.rating2rank(teamRating).color_embed
+        if len(user_str) <= 256:
+            await ctx.send(embed=discord.Embed(
+                title=user_str, description=teamRating, color=color))
+            return
+        # Expanded Discord aliases can exceed the title limit even for a
+        # short command. Keep every member visible in bounded page bodies.
+        chunks, current = [], ''
+        for member in user_str.split(', '):
+            if current and len(current) + len(member) + 2 > 3800:
+                chunks.append(current)
+                current = ''
+            current += (', ' if current else '') + member
+        if current:
+            chunks.append(current)
+        pages = [(None, discord.Embed(
+            title=f'Team rating: {teamRating}', description=chunk, color=color))
+            for chunk in chunks]
+        paginator.paginate(self.bot, ctx.channel, pages, wait_time=5 * 60,
+                           set_pagenum_footers=True, author_id=ctx.author.id)

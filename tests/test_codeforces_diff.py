@@ -298,3 +298,25 @@ class TestRatedFlag:
         with pytest.raises(CodeforcesCogError):
             _run(('alice', 'bob', '+rated'), by_handle, monkeypatch,
                  rating_error=cf.HandleNotFoundError())
+
+    @pytest.mark.parametrize('command', ['_diff_impl', '_stalk_impl'])
+    def test_renamed_rating_history_matches_submission_author(self, pages,
+                                                             monkeypatch, command):
+        _status({
+            'oldname': [_sub(contest_id=1, name='Rated Gap', handle='NewName'),
+                        _sub(contest_id=3, name='Unrated Gap', handle='NewName')],
+            'bob': [],
+        }, monkeypatch)
+
+        async def rating(*, handle):
+            assert handle == 'oldname'
+            return [SimpleNamespace(contestId=1, handle='NewName')]
+
+        monkeypatch.setattr(cf.user, 'rating', rating)
+        args = ('oldname', '+rated')
+        if command == '_diff_impl':
+            args = ('oldname', 'bob', '+rated')
+        ctx = SimpleNamespace(author=SimpleNamespace(id=1),
+                              channel=SimpleNamespace(id=2))
+        asyncio.run(getattr(_Cog(), command)(ctx, args))
+        assert _names(pages) == ['Rated Gap']

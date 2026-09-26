@@ -33,9 +33,13 @@ def _run(args, monkeypatch, canonical, renames=None):
     monkeypatch.setattr(cf, 'rating2rank',
                         lambda r: SimpleNamespace(color_embed=0), raising=False)
     captured = {}
+    monkeypatch.setattr(problems.paginator, 'paginate',
+                        lambda bot, channel, pages, **kw:
+                        captured.setdefault('pages', pages))
     monkeypatch.setattr(problems, 'composeRatings',
                         lambda left, right, ratings: captured.setdefault('ratings', ratings) and 0)
     ctx = SimpleNamespace(author=SimpleNamespace(id=1), guild=SimpleNamespace(id=1),
+                          channel=SimpleNamespace(id=2),
                           send=lambda **kw: asyncio.sleep(0, result=captured.setdefault('embed', kw['embed'])))
     asyncio.run(_Cog()._teamrate_impl(ctx, args))
     return captured
@@ -81,3 +85,20 @@ def test_cf_rename_merges_old_and_new_account_names(monkeypatch):
 def test_each_multiplier_must_be_positive_before_aggregation(monkeypatch, args):
     with pytest.raises(CodeforcesCogError, match='nonpositive'):
         _run(args, monkeypatch, {})
+
+
+@pytest.mark.parametrize('count', [12, 160])
+def test_long_expanded_team_lists_use_bounded_pages(monkeypatch, count):
+    handles = {f'u{i}': f'player_{i:03}_abcdefghijklm' for i in range(count)}
+    got = _run(tuple(handles), monkeypatch, handles)
+    pages = got['pages']
+    assert len(pages) == (1 if count == 12 else 2)
+    displayed = []
+    for content, embed in pages:
+        assert content is None
+        assert embed.title == 'Team rating: 0'
+        assert len(embed.title) <= 256
+        assert len(embed.description) <= 4096
+        assert len(embed.title) + len(embed.description) < 6000
+        displayed.extend(embed.description.split(', '))
+    assert displayed == list(handles.values())
