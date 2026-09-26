@@ -46,6 +46,17 @@ An already delivered resolution is not sent again on normal retries. Delivery
 is at least once across process crashes: a crash after Discord accepts a reply
 but before its receipt is saved can cause a duplicate.
 
+**Resolutions made through the HTTP API do not notify immediately.** A pushed
+commit is not a deployed one, so the API parks the notification with
+`notification_status: queued`. On its next start the bot checks each queued
+resolution's commit against `git` in its own checkout — the same answer
+`;meta git` gives — and only a commit that is an ancestor of the running HEAD
+moves to `pending`, from where the normal delivery path sends it once. A fix
+that is pushed but not yet deployed stays queued across restarts until one
+runs it. Repeating the resolve, from the API or from Discord, never sends a
+queued notification early; reopening discards it. `;complain resolve` in
+Discord keeps notifying immediately.
+
 ## HTTP contract
 
 All routes require `Authorization: Bearer <token>`. Tokens are never accepted
@@ -63,6 +74,17 @@ Discord IDs are JSON strings; complaint IDs and pagination cursors are integers.
 List parameters are optional: `status` is `open` (default), `resolved`, or `all`;
 `limit` is 1–100 (default 50). Pass the returned `next_before` as `before` for
 the next page, until it is `null`. Removed/withdrawn complaints are excluded.
+
+### Tags
+
+Moderators can tag a complaint with any word (`;complain tag 200 games`).
+Tagging moves it out of the default views without deleting it, and the API
+follows the same rule: a listing without `tag` returns **untagged** complaints
+only, `tag=all` returns everything, and `tag=<name>` returns only complaints
+carrying that tag. Every complaint object carries `tags`, a sorted list of
+strings (empty when untagged). Tags are 1–32 characters of `a-z`, `0-9`, `_`
+or `-`, lower-cased on input; `all`, `open`, `resolved` and `untagged` are
+reserved.
 
 Resolve body (exactly these fields):
 

@@ -7,6 +7,7 @@ import os
 import discord
 from aiohttp import web
 
+from tle.util.db.complaint_db import normalize_tag
 from tle.util.complaints import ComplaintError, complaint_json, is_complaint_admin
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ class ComplaintHttpServer:
         return app
 
     async def _list(self, request):
-        if set(request.query) - {'status', 'limit', 'before'}:
+        if set(request.query) - {'status', 'limit', 'before', 'tag'}:
             raise ComplaintError(400, 'Unknown query parameter.')
         status = request.query.get('status', 'open')
         if status not in ('open', 'resolved', 'all'):
@@ -101,10 +102,24 @@ class ComplaintHttpServer:
         before = request.query.get('before')
         if before is not None:
             before = positive_int(before, 'before')
-        rows = self.service.db.get_complaints(
-            request['token'].guild_id, status, limit + 1, before)
+        # Same visibility rule as ;complain list: tagged complaints are out
+        # of the default view, `tag=all` lifts that, a name selects one tag.
+        tag, include_tagged = request.query.get('tag'), False
+        if tag == 'all':
+            tag, include_tagged = None, True
+        elif tag is not None:
+            try:
+                tag = normalize_tag(tag)
+            except ValueError as exc:
+                raise ComplaintError(400, str(exc)) from None
+        db = self.service.db
+        rows = db.get_complaints(request['token'].guild_id, status, limit + 1,
+                                 before, tag=tag, include_tagged=include_tagged)
+        page = rows[:limit]
+        tags = db.get_tags_for_complaints([row.id for row in page])
         return web.json_response({
-            'complaints': [complaint_json(row) for row in rows[:limit]],
+            'complaints': [complaint_json(row, tags=tags.get(row.id, ()))
+                           for row in page],
             'next_before': rows[limit - 1].id if len(rows) > limit else None,
         })
 
@@ -115,7 +130,9 @@ class ComplaintHttpServer:
         token, complaint_id = self._target(request)
         row = self.service.get(token.guild_id, complaint_id)
         return web.json_response({
-            'complaint': complaint_json(row, include_context=True),
+            'complaint': complaint_json(
+                row, include_context=True,
+                tags=self.service.db.get_complaint_tags(complaint_id)),
             'events': [event._asdict() for event in self.service.db.get_complaint_events(
                 complaint_id, token.guild_id)],
         })
@@ -139,8 +156,9 @@ class ComplaintHttpServer:
         row = await self.service.resolve(
             token.guild_id, complaint_id, token.user_id,
             body['resolution'], body['commit_url'], token.id,
-            authorize=lambda: self._authenticate(request))
-        return web.json_response({'complaint': complaint_json(row)})
+            authorize=lambda: self._authenticate(request),
+            defer_notification=True)
+        return web.json_response({'complaint': self._json(row)})
 
     async def _reopen(self, request):
         token, complaint_id = self._target(request)
@@ -148,7 +166,10 @@ class ComplaintHttpServer:
         row = await self.service.reopen(
             token.guild_id, complaint_id, token.user_id, token.id,
             authorize=lambda: self._authenticate(request))
-        return web.json_response({'complaint': complaint_json(row)})
+        return web.json_response({'complaint': self._json(row)})
+
+    def _json(self, row):
+        return complaint_json(row, tags=self.service.db.get_complaint_tags(row.id))
 
     async def start(self):
         if self.runner is not None or os.environ.get('COMPLAINT_API_ENABLED', '1') == '0':

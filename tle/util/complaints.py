@@ -7,6 +7,8 @@ import re
 
 import discord
 
+from tle.util import git_state
+
 from tle import constants
 
 logger = logging.getLogger(__name__)
@@ -48,12 +50,13 @@ def load_context(raw):
     return data if isinstance(data, list) else []
 
 
-def complaint_json(row, *, include_context=False):
+def complaint_json(row, *, include_context=False, tags=()):
     fields = ('id', 'guild_id', 'user_id', 'text', 'created_at', 'message_link',
               'resolved_at', 'resolved_by', 'resolution', 'commit_url',
               'notification_status', 'notification_link', 'notification_attempts')
     result = {field: getattr(row, field) for field in fields}
     result['status'] = 'resolved' if row.resolved_at is not None else 'open'
+    result['tags'] = list(tags)
     if include_context:
         # Detail only: a 100-complaint listing would otherwise carry a
         # hundred transcripts.
@@ -62,11 +65,13 @@ def complaint_json(row, *, include_context=False):
 
 
 class ComplaintService:
-    def __init__(self, bot, db_getter):
+    def __init__(self, bot, db_getter, *, is_deployed=git_state.commit_is_deployed):
         self.bot = bot
         self._db_getter = db_getter
         self._lock = asyncio.Lock()
         self._worker = None
+        self._is_deployed = is_deployed
+        self._released_this_run = False
 
     @property
     def db(self):
@@ -79,7 +84,15 @@ class ComplaintService:
         return row
 
     async def resolve(self, guild_id, complaint_id, actor_id, resolution,
-                      commit_url, token_id=None, *, authorize=None):
+                      commit_url, token_id=None, *, authorize=None,
+                      defer_notification=False):
+        """Resolve a complaint; notify now, or queue until the fix is deployed.
+
+        The API resolves from a checkout that has merely been pushed, so its
+        notifications are deferred: telling someone their problem is fixed
+        while the bot still runs the old code is worse than telling them
+        late. A Discord admin resolving by hand keeps the immediate path.
+        """
         resolution, commit_url = validate_resolution(resolution, commit_url)
         async with self._lock:
             if authorize is not None:
@@ -90,7 +103,8 @@ class ComplaintService:
                     raise ComplaintError(409, 'Already resolved differently; reopen it first.')
             else:
                 self.db.resolve_complaint(complaint_id, guild_id, actor_id,
-                                          resolution, commit_url, token_id)
+                                          resolution, commit_url, token_id,
+                                          defer_notification=defer_notification)
             await self._notify(complaint_id)
             return self.get(guild_id, complaint_id)
 
@@ -133,7 +147,13 @@ class ComplaintService:
 
     async def _notify(self, complaint_id):
         row = self.db.get_complaint(complaint_id)
-        if row is None or row.resolved_at is None or row.notification_status == 'sent':
+        if row is None or row.resolved_at is None:
+            return
+        # 'queued' is the one status this must never send from: only
+        # release_deployed may move it on, and only after verifying the
+        # commit is running. A repeated resolve — from the API or a Discord
+        # admin — therefore cannot leak the notification out early.
+        if row.notification_status in ('sent', 'queued'):
             return
         try:
             message = await asyncio.wait_for(self._deliver(row), timeout=20)
@@ -148,10 +168,33 @@ class ComplaintService:
             async with self._lock:
                 await self._notify(row.id)
 
+    async def release_deployed(self):
+        """Hand queued notifications to the worker once their commit runs.
+
+        Checked against ``git`` in the bot's own checkout, the same way
+        ``;meta git`` reports it. HEAD cannot change without a restart, so
+        this runs once per process; a fix pushed but not yet deployed simply
+        stays queued until the next restart that has it. Returns how many
+        were released.
+        """
+        released = 0
+        for row in self.db.queued_complaint_notifications():
+            sha = git_state.commit_sha(row.commit_url)
+            if not await asyncio.to_thread(self._is_deployed, sha):
+                continue
+            if self.db.release_complaint_notification(row.id):
+                released += 1
+                logger.info('Complaint %s: fix %s is deployed, notification released',
+                            row.id, sha)
+        return released
+
     async def _run_notifications(self):
         while True:
             try:
                 if self.bot.is_ready():
+                    if not self._released_this_run:
+                        await self.release_deployed()
+                        self._released_this_run = True
                     await self.retry_notifications()
             except Exception:
                 logger.exception('Complaint notification worker failed')

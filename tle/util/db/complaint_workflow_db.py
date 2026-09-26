@@ -32,6 +32,13 @@ def upgrade_complaint_schema(conn):
     conn.execute('''CREATE INDEX IF NOT EXISTS idx_complaint_notifications
         ON complaint (notification_status, notification_attempt_at)
         WHERE active = 1 AND resolved_at IS NOT NULL''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS complaint_tag (
+        complaint_id INTEGER NOT NULL, guild_id TEXT NOT NULL,
+        tag TEXT NOT NULL, created_at REAL NOT NULL,
+        PRIMARY KEY (complaint_id, tag)
+    )''')
+    conn.execute('''CREATE INDEX IF NOT EXISTS idx_complaint_tag_guild
+        ON complaint_tag (guild_id, tag)''')
 
 
 class ComplaintWorkflowDbMixin:
@@ -44,16 +51,23 @@ class ComplaintWorkflowDbMixin:
              resolution, commit_url, time.time()))
 
     def resolve_complaint(self, complaint_id, guild_id, actor_id, resolution,
-                          commit_url, token_id=None):
-        """Atomically resolve an open complaint and enqueue its notification."""
+                          commit_url, token_id=None, *, defer_notification=False):
+        """Atomically resolve an open complaint and enqueue its notification.
+
+        ``defer_notification`` parks the notification as ``queued`` instead of
+        ``pending``: the retry worker never touches queued rows, so nothing is
+        sent until ``release_complaint_notification`` moves it to pending once
+        the commit is verified to be running.
+        """
+        status = 'queued' if defer_notification else 'pending'
         with self.conn:
             changed = self.conn.execute('''UPDATE complaint SET
                 resolved_at = ?, resolved_by = ?, resolution = ?, commit_url = ?,
-                notification_status = 'pending', notification_link = NULL,
+                notification_status = ?, notification_link = NULL,
                 notification_attempt_at = NULL, notification_attempts = 0
                 WHERE id = ? AND guild_id = ? AND active = 1
                 AND resolved_at IS NULL''',
-                (time.time(), str(actor_id), resolution, commit_url,
+                (time.time(), str(actor_id), resolution, commit_url, status,
                  complaint_id, str(guild_id))).rowcount
             if changed:
                 self._complaint_event(complaint_id, guild_id, actor_id, token_id,
@@ -87,6 +101,27 @@ class ComplaintWorkflowDbMixin:
             AND notification_attempts < 5
             AND (notification_attempt_at IS NULL OR notification_attempt_at < ?)
             ORDER BY id LIMIT 20''', (time.time() - 300,)).fetchall()
+
+    def queued_complaint_notifications(self):
+        """Resolutions waiting for their commit to be deployed."""
+        return self.conn.execute('''SELECT id, guild_id, commit_url FROM complaint
+            WHERE active = 1 AND resolved_at IS NOT NULL
+            AND notification_status = 'queued' ORDER BY id''').fetchall()
+
+    def release_complaint_notification(self, complaint_id):
+        """Move a queued notification to pending. Returns whether it moved.
+
+        The ``notification_status = 'queued'`` predicate makes this a one-way
+        transition: a second release, or a release racing the worker, changes
+        nothing, so a notification can never be delivered twice from here.
+        """
+        with self.conn:
+            changed = self.conn.execute('''UPDATE complaint SET
+                notification_status = 'pending', notification_attempt_at = NULL
+                WHERE id = ? AND active = 1 AND resolved_at IS NOT NULL
+                AND notification_status = 'queued'
+                ''', (complaint_id,)).rowcount
+        return bool(changed)
 
     def record_complaint_notification(self, complaint_id, status, link=None):
         with self.conn:

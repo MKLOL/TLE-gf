@@ -10,6 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
 from tle.util.complaints import ComplaintError, ComplaintService
+from tle.util.db.complaint_db import normalize_tag
 from tle.cogs._complaint_context import capture as capture_complaint_context
 from tle.cogs._complaint_tokens import ComplaintTokenMixin, require_complaint_admin
 from tle.cogs._complaint_manage import ComplaintManageView
@@ -23,18 +24,46 @@ _EMBED_DESCRIPTION_LIMIT = 3900  # headroom under Discord's 4096
 _PAGINATE_WAIT = 300
 
 
+_STATUSES = ('open', 'resolved', 'all')
+
+
+def _parse_list_args(args):
+    """``[open|resolved|all] [tag]`` in either order.
+
+    Returns ``(status, tag, include_tagged)``. Tagged complaints are hidden
+    from the default views — that is what tagging is for — so only ``all``
+    lifts the filter, and naming a tag shows just that tag.
+    """
+    status, tag = 'open', None
+    for arg in args:
+        word = arg.strip().lower()
+        if word in _STATUSES:
+            status = word
+        elif tag is None:
+            try:
+                tag = normalize_tag(word)
+            except ValueError as exc:
+                raise commands.BadArgument(str(exc)) from None
+        else:
+            raise commands.BadArgument(
+                'Usage: `;complain list [open|resolved|all] [tag]`.')
+    return status, tag, status == 'all'
+
+
 def _has_manage_role(member):
     """Whether a member may remove complaints, checked at button-press time."""
     return any(role.name in (constants.TLE_ADMIN, constants.TLE_MODERATOR)
                for role in getattr(member, 'roles', ()) or ())
 
 
-def _complaint_entry(complaint):
+def _complaint_entry(complaint, tags=()):
     """Render one complaint as a block of embed description text."""
     ts = datetime.datetime.fromtimestamp(
         complaint.created_at).strftime('%Y-%m-%d %H:%M')
     link = getattr(complaint, 'message_link', None)
     header = f'**#{complaint.id}** by <@{complaint.user_id}> ({ts})'
+    if tags:
+        header += ' — ' + ' '.join(f'`{tag}`' for tag in tags)
     if link:
         header += f' — [context]({link})'
     detail = f'{header}\n{complaint.text}'
@@ -44,14 +73,16 @@ def _complaint_entry(complaint):
     return detail
 
 
-def _complaint_pages(complaints):
+def _complaint_pages(complaints, tags_by_id=None):
     """Group rendered complaints into embed-sized page descriptions.
 
     An entry never straddles two pages, so a page may fall well short of the
     limit rather than split a complaint mid-way.
     """
+    tags_by_id = tags_by_id or {}
     pages, current, length = [], [], 0
-    for entry in (_complaint_entry(c) for c in complaints):
+    for entry in (_complaint_entry(c, tags_by_id.get(c.id, ()))
+                  for c in complaints):
         if current and length + len(entry) + 2 > _EMBED_DESCRIPTION_LIMIT:
             pages.append('\n\n'.join(current))
             current, length = [], 0
@@ -76,9 +107,12 @@ class Complain(ComplaintTokenMixin, commands.Cog):
 
         Usage:
           ;complain <text>             — file a complaint
-          ;complain list               — view all complaints
+          ;complain list [status] [tag] — view complaints
           ;complain withdraw <id>      — withdraw your own complaint
           ;complain manage             — remove complaints with buttons
+          ;complain tag <id> <tag>     — tag a complaint; hides it from the default list
+          ;complain untag <id> <tag>   — remove a tag
+          ;complain tags               — tags in use
           ;complain remove <id or ids> — remove complaints (admin only)
           ;complain resolve <id> <commit_url> <summary> — resolve (admin only)
           ;complain reopen <id>        — reopen (admin only)
@@ -127,12 +161,23 @@ class Complain(ComplaintTokenMixin, commands.Cog):
             f'You can withdraw it with `;complain withdraw {complaint_id}`.'
         ))
 
-    @complain.command(brief='List complaints')
-    async def list(self, ctx, status: str = 'open'):
-        """View complaints: open (default), resolved, or all."""
-        if status not in ('open', 'resolved', 'all'):
-            raise commands.BadArgument('Status must be open, resolved, or all.')
-        complaints = cf_common.user_db.get_complaints(ctx.guild.id, status)
+    def _visible_complaints(self, ctx, args):
+        """Complaints for a list-style command plus their tags, or None."""
+        status, tag, include_tagged = _parse_list_args(args)
+        complaints = cf_common.user_db.get_complaints(
+            ctx.guild.id, status, tag=tag, include_tagged=include_tagged)
+        tags = cf_common.user_db.get_tags_for_complaints(
+            [c.id for c in complaints])
+        return complaints, tags
+
+    @complain.command(brief='List complaints', usage='[open|resolved|all] [tag]')
+    async def list(self, ctx, *args):
+        """View complaints: open (default), resolved, or all.
+
+        Tagged complaints stay out of the default views. `all` shows
+        everything; a tag name shows only complaints carrying that tag.
+        """
+        complaints, tags = self._visible_complaints(ctx, args)
         if not complaints:
             await ctx.send(embed=discord_common.embed_neutral('No complaints filed.'))
             return
@@ -140,27 +185,26 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         pages = [
             (None, discord.Embed(title='Complaints', description=description,
                                  color=0xffaa10))
-            for description in _complaint_pages(complaints)
+            for description in _complaint_pages(complaints, tags)
         ]
         paginator.paginate(self.bot, ctx.channel, pages,
                            wait_time=_PAGINATE_WAIT, set_pagenum_footers=True,
                            author_id=ctx.author.id)
 
-    @complain.command(brief='Remove complaints with buttons')
+    @complain.command(brief='Remove complaints with buttons',
+                      usage='[open|resolved|all] [tag]')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
-    async def manage(self, ctx, status: str = 'open'):
+    async def manage(self, ctx, *args):
         """Browse complaints with a remove button next to each one.
 
         Usage:
-          ;complain manage [open|resolved|all]
+          ;complain manage [open|resolved|all] [tag]
 
-        Red buttons remove the complaint whose ID they carry. Only the
-        moderator who ran the command can press them, and the buttons stop
-        working after five minutes.
+        Red buttons remove the complaint whose ID they carry. Any Admin or
+        Moderator can press them, and the buttons stop working after five
+        minutes. Tagged complaints are hidden unless `all` or a tag is given.
         """
-        if status not in ('open', 'resolved', 'all'):
-            raise commands.BadArgument('Status must be open, resolved, or all.')
-        complaints = cf_common.user_db.get_complaints(ctx.guild.id, status)
+        complaints, tags = self._visible_complaints(ctx, args)
         if not complaints:
             await ctx.send(embed=discord_common.embed_neutral('No complaints filed.'))
             return
@@ -169,8 +213,68 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         view = ComplaintManageView(
             complaints, guild_id=guild_id, author_id=ctx.author.id,
             delete=lambda ids: cf_common.user_db.delete_complaints(ids, guild_id),
-            can_manage=_has_manage_role)
+            can_manage=_has_manage_role, tags_by_id=tags)
         view.message = await ctx.send(embed=view.embed(), view=view)
+
+    def _guild_complaint(self, ctx, complaint_id):
+        complaint = cf_common.user_db.get_complaint(complaint_id)
+        if complaint is None or str(complaint.guild_id) != str(ctx.guild.id):
+            return None
+        return complaint
+
+    @complain.command(brief='Tag a complaint; tagged ones leave the default list',
+                      usage='<id> <tag>')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def tag(self, ctx, complaint_id: int, tag: str):
+        """Add any tag to a complaint, e.g. `;complain tag 200 games`.
+
+        A tagged complaint disappears from `;complain list` and `manage`
+        until you ask for it: `;complain list games` or `;complain list all`.
+        """
+        if self._guild_complaint(ctx, complaint_id) is None:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Complaint #{complaint_id} not found.'))
+            return
+        try:
+            tag = normalize_tag(tag)
+        except ValueError as exc:
+            await ctx.send(embed=discord_common.embed_alert(str(exc)))
+            return
+        added = cf_common.user_db.add_complaint_tag(complaint_id, ctx.guild.id, tag)
+        logger.info(f'Complaint #{complaint_id} tagged {tag!r} by {ctx.author.id} '
+                    f'in guild {ctx.guild.id}')
+        await ctx.send(embed=discord_common.embed_success(
+            f'Complaint #{complaint_id} tagged `{tag}`.' if added else
+            f'Complaint #{complaint_id} already has `{tag}`.'))
+
+    @complain.command(brief='Remove a tag from a complaint', usage='<id> <tag>')
+    @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
+    async def untag(self, ctx, complaint_id: int, tag: str):
+        if self._guild_complaint(ctx, complaint_id) is None:
+            await ctx.send(embed=discord_common.embed_alert(
+                f'Complaint #{complaint_id} not found.'))
+            return
+        try:
+            tag = normalize_tag(tag)
+        except ValueError as exc:
+            await ctx.send(embed=discord_common.embed_alert(str(exc)))
+            return
+        removed = cf_common.user_db.remove_complaint_tag(
+            complaint_id, ctx.guild.id, tag)
+        await ctx.send(embed=discord_common.embed_success(
+            f'Removed `{tag}` from complaint #{complaint_id}.') if removed else
+            discord_common.embed_alert(
+                f'Complaint #{complaint_id} does not have `{tag}`.'))
+
+    @complain.command(name='tags', brief='List tags in use')
+    async def list_tags(self, ctx):
+        counts = cf_common.user_db.get_complaint_tag_counts(ctx.guild.id)
+        if not counts:
+            await ctx.send(embed=discord_common.embed_neutral('No tags in use.'))
+            return
+        lines = [f'`{row.tag}` — {row.count}' for row in counts]
+        await ctx.send(embed=discord.Embed(
+            title='Complaint tags', description='\n'.join(lines), color=0xffaa10))
 
     @complain.command(brief='Resolve a complaint and notify its author')
     @commands.check(require_complaint_admin)
@@ -183,9 +287,14 @@ class Complain(ComplaintTokenMixin, commands.Cog):
         except ComplaintError as exc:
             await ctx.send(embed=discord_common.embed_alert(str(exc)))
             return
-        notice = ('Author notified.' if row.notification_status == 'sent' else
-                  'Author notification failed; delivery will be retried. '
-                  'Repeat this command to retry manually.')
+        if row.notification_status == 'sent':
+            notice = 'Author notified.'
+        elif row.notification_status == 'queued':
+            notice = ('Author will be notified after the next restart that '
+                      'runs this commit (it was resolved through the API).')
+        else:
+            notice = ('Author notification failed; delivery will be retried. '
+                      'Repeat this command to retry manually.')
         await ctx.send(embed=discord_common.embed_success(
             f'Complaint #{row.id} resolved. {notice}'))
 

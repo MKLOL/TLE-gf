@@ -90,13 +90,12 @@ async def check_http():
                           json={**valid, 'resolution': 'x' * 20000})
             resolved = await request('POST', resolve, json=valid)
             assert resolved['complaint']['status'] == 'resolved'
-            assert resolved['complaint']['notification_status'] == 'sent'
-            sent = bot.channel.send.call_args.kwargs
-            assert sent['reference'].message_id == 3
-            assert sent['allowed_mentions'].to_dict() == {'users': [20], 'parse': []}
-            assert COMMIT in sent['embed'].fields[0].value
+            # API resolutions are queued until the commit is verified to be
+            # running; nothing reaches the complainant yet.
+            assert resolved['complaint']['notification_status'] == 'queued'
+            assert bot.channel.send.await_count == 0
             await request('POST', resolve, json=valid)
-            assert bot.channel.send.await_count == 1
+            assert bot.channel.send.await_count == 0
             await request('POST', resolve, 409, json={**valid, 'resolution': 'different'})
             detail = await request('GET', f'/v1/complaints/{cid}')
             assert detail['events'][0]['token_id'] == token_id

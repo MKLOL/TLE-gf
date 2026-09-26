@@ -29,7 +29,7 @@ def chunk_complaints(complaints, per_page=PER_PAGE):
             for i in range(0, len(complaints), per_page)] or [[]]
 
 
-def manage_entry(complaint):
+def manage_entry(complaint, tags=()):
     """One complaint as a compact line — enough to decide whether to remove it.
 
     Long reports are truncated: a page holds several complaints and each
@@ -41,6 +41,8 @@ def manage_entry(complaint):
     header = f'**#{complaint.id}** by <@{complaint.user_id}> ({ts})'
     if complaint.resolved_at is not None:
         header += ' — *resolved*'
+    if tags:
+        header += ' — ' + ' '.join(f'`{tag}`' for tag in tags)
     link = getattr(complaint, 'message_link', None)
     if link:
         header += f' — [context]({link})'
@@ -50,12 +52,14 @@ def manage_entry(complaint):
     return f'{header}\n{text}'
 
 
-def render_page(chunk, notice=None):
+def render_page(chunk, notice=None, tags_by_id=None):
     """Render one manage page's embed description."""
+    tags_by_id = tags_by_id or {}
     if not chunk:
         body = '*No complaints left.*'
     else:
-        body = '\n\n'.join(manage_entry(c) for c in chunk)
+        body = '\n\n'.join(manage_entry(c, tags_by_id.get(c.id, ()))
+                             for c in chunk)
     if notice:
         body = f'{notice}\n\n{body}'
     if len(body) > _EMBED_DESCRIPTION_LIMIT:
@@ -89,9 +93,11 @@ class ComplaintManageView(discord.ui.View):
     """Paginated complaint list whose entries can be removed in place."""
 
     def __init__(self, complaints, *, guild_id, author_id, delete,
-                 can_manage=None, per_page=PER_PAGE, timeout=_TIMEOUT):
+                 can_manage=None, tags_by_id=None, per_page=PER_PAGE,
+                 timeout=_TIMEOUT):
         super().__init__(timeout=timeout)
         self.complaints = list(complaints)
+        self.tags_by_id = tags_by_id or {}
         self.guild_id = guild_id
         self.author_id = author_id
         self.delete = delete
@@ -123,7 +129,7 @@ class ComplaintManageView(discord.ui.View):
                  else f'Manage complaints ({self.page + 1}/{len(pages)})')
         return discord.Embed(
             title=title,
-            description=render_page(chunk, self.notice),
+            description=render_page(chunk, self.notice, self.tags_by_id),
             color=0xffaa10)
 
     def refresh(self):

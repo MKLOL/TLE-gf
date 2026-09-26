@@ -92,3 +92,12 @@ def upgrade_1_60_0(db):
     db.commit()
     logger.info('1.60.0: Complaint context column ready')
 
+
+@registry.register('1.61.0', 'Complaint tags')
+def upgrade_1_61_0(db):
+    """Add ``complaint_tag``; ``upgrade_complaint_schema`` creates it."""
+    from tle.util.db.complaint_workflow_db import upgrade_complaint_schema
+    upgrade_complaint_schema(db)
+    db.commit()
+    logger.info('1.61.0: Complaint tag table ready')
+

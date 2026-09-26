@@ -84,8 +84,11 @@ class _Db:
     def __init__(self, rows):
         self.rows = rows
 
-    def get_complaints(self, guild_id, status):
+    def get_complaints(self, guild_id, status, **kwargs):
         return self.rows
+
+    def get_tags_for_complaints(self, ids):
+        return {}
 
 
 def _ctx():
