@@ -5,6 +5,13 @@
   <header><div><span class="eyebrow">TLE · GAMES</span><h1>Post your game results.</h1></div><button id="settings" class="secondary small">Settings</button></header>
   <p id="connection" class="muted">Connect your Discord server to get started.</p>
   <p id="status" role="status" aria-live="polite"></p>
+  <p id="wait-note" class="muted" role="status" hidden></p>
+  <section id="preview" hidden>
+    <h2 id="title"></h2>
+    <p id="summary" class="muted"></p>
+    <p class="muted">Review every player and Discord match in a larger window. Nothing is imported until you confirm there.</p>
+    <div class="actions"><button id="open-review">Review matches…</button><button id="cancel" class="secondary">Discard preview</button></div>
+  </section>
   <section id="read-tools">
   <label for="date">Puzzle date</label><input id="date" type="date" readonly>
   <p class="muted">The leaderboard’s puzzle number sets the date automatically, following LinkedIn’s Pacific calendar.</p>
@@ -12,14 +19,6 @@
   <p id="linkedin-status" class="muted"></p>
   <p id="akari-status" class="muted"></p>
   <section id="own-preview" hidden><p id="own-summary"></p><div class="actions"><button id="post-own">Post my score</button><button id="cancel-own" class="secondary">Cancel</button></div></section>
-  </section>
-  <section id="preview" hidden>
-    <h2 id="preview-question" tabindex="-1">Would you like to import these results?</h2>
-    <div class="preview-heading"><strong id="title"></strong><span id="count" class="pill"></span></div>
-    <p id="summary" class="muted"></p>
-    <div class="table-scroll" tabindex="0" aria-label="Player matches"><table><thead><tr><th>LinkedIn → Discord</th><th>Time</th><th>Result</th></tr></thead><tbody id="players"></tbody></table></div>
-    <p class="muted">Unassigned results will be kept for later registration. Identical results are skipped; changed scores update only that player.</p>
-    <div class="actions"><button id="confirm">Yes, import results</button><button id="cancel" class="secondary">Not now</button></div>
   </section>
   <script type="module" src="personal.js"></script>
   <script type="module" src="popup.js"></script>

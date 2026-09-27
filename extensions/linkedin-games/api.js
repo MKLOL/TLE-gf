@@ -33,7 +33,16 @@ export async function request(config, route, body) {
       ...(body === undefined ? {} : {body: JSON.stringify(body)}),
       credentials: "omit", redirect: "error", cache: "no-store", signal: controller.signal,
     });
-    const data = await response.json();
+    let data;
+    try { data = await response.json(); }
+    catch (cause) {
+      if (!(cause instanceof SyntaxError)) throw cause;
+      const error = new Error(response.ok ?
+        "The server returned an unreadable response. Please try again." :
+        `The server returned ${response.status}. Please try again.`);
+      error.status = response.status;
+      throw error;
+    }
     if (!response.ok) {
       const error = new Error(data.error || `Server returned ${response.status}.`);
       error.status = response.status;
@@ -41,7 +50,7 @@ export async function request(config, route, body) {
     }
     return data;
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("Server timed out. You can retry Confirm safely.");
+    if (error.name === "AbortError") throw new Error("The server took too long to respond. Please try again.");
     if (error instanceof TypeError) throw new Error("Cannot reach the server. Check its URL and connection.");
     throw error;
   } finally {

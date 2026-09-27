@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXTENSION = ROOT / 'extensions' / 'linkedin-games'
 FILES = '''manifest.json akari.js api.js auto-config.js auto-submit.js
 background.js extract.js leaderboard.js linkedin-auto.js linkedin-result.js
-options.html options.css options.js personal.js popup.html popup.js style.css'''.split()
+options.html options.css options.js personal.js popup.html popup.js style.css
+review.html review.js review.css review-window.js'''.split()
 
 
 def main():

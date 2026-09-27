@@ -1,8 +1,9 @@
 # Game scores and leaderboard imports
 
 For moderator imports, the Chrome extension reads a displayed connections
-leaderboard, sends it to the bot for a preview, and shows the matched people, date, times, and badges. Results
-are saved only when the user presses **Confirm import** inside the extension.
+leaderboard, sends it to the bot for a preview, and opens a resizable review
+window with the matched people, date, times, and badges. Results are saved only
+when the user confirms the import inside that window.
 Queens and Tango use the same import/rating code as Discord. Regular members can
 post their own LinkedIn scores, and automatic Daily Akari posting includes every
 field used by the existing rankings.
@@ -39,10 +40,14 @@ field used by the existing rankings.
 8. Manual personal posting is still available: open the Queens/Tango completed
    results page or connections leaderboard and click **Read my LinkedIn score**,
    then **Post my score**.
-   Moderators use **Read leaderboard** → **Yes, import results** for other players.
-   The preview asks whether to import and shows each LinkedIn-to-Discord match,
-   unassigned names, your pending result, the puzzle date, times, and badges.
-   **Not now** cancels without importing. Bulk imports always require confirmation.
+   Moderators use **Read leaderboard** to open a larger review window for everyone
+   on the leaderboard. Connection, reading, and matching stages show immediate
+   progress, with elapsed time when the server is slow. The review places LinkedIn
+   names and Discord accounts in separate columns and includes search and
+   matched/unassigned filters, your pending result, the puzzle date, times, and
+   badges. Filters only change the display: confirmation always includes all
+   previewed results. Cancelling imports nothing. Bulk imports always require
+   confirmation.
 
 The game must be enabled (`;meta config enable queens` / `tango` / `akari`) and
 have a configured channel (`;queens here` / `;tango here` / `;akari here`). Personal
@@ -123,8 +128,10 @@ claiming successful registration or reposting it.
   labels must be in English. Direct HTTP clients may supply a date without a
   puzzle number.
 - Previews expire after ten minutes or a bot restart. A new preview replaces an
-  unconfirmed preview for the same token. Closing/reopening the popup retains
-  the current preview for that Chrome session. Cancel imports nothing.
+  unconfirmed preview for the same token. Closing the review window retains
+  the current preview for that Chrome session; **Review matches…** in the toolbar
+  popup reopens it. A reused review window displays the new preview. Cancel
+  imports nothing and cannot discard a newer preview opened elsewhere.
 - Changing registrations, bans, privacy decisions, or the configured channel
   between preview and confirmation requires a fresh preview.
 - Repeating Confirm returns the original receipt for ten minutes. After a
@@ -208,7 +215,7 @@ The shared leaderboard structure was captured from a live Pinpoint connections
 page, including LinkedIn’s same-origin preload frame. Timer/badge element placement
 was checked against LinkedIn’s current public renderer. Isolated Chromium tests
 exercise that captured structure with timed results and renderer-matching badge
-markup, hidden badges, reactions, unplayed rows, popup confirmation, and actual
+markup, hidden badges, reactions, unplayed rows, review-window confirmation, and actual
 Manifest V3 loading. The Python suite covers the real importer and HTTP server.
 A completed Queens leaderboard was subsequently captured from Brave on
 2026-09-26. Its sanitized regression fixture covers the Today/Yesterday tabs,

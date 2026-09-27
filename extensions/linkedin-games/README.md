@@ -12,7 +12,9 @@ Run `python3 extra/package_games_extension.py` to create a minimal upload ZIP.
 - `manifest.json`: Manifest V3; active-tab reads and optional server access.
 - `options.*`, `api.js`: local token setup and authenticated server requests.
 - `leaderboard.js`, `extract.js`: isolated, credential-free page extraction.
-- `popup.*`, `personal.js`: moderator preview/confirmation and member own-score posting.
+- `popup.*`, `personal.js`: leaderboard reading and member own-score posting.
+- `review.*`, `review-window.js`: resizable moderator review window, searchable
+  LinkedIn-to-Discord matches, and explicit import confirmation.
 - `akari.js`, `linkedin-result.js`, `linkedin-auto.js`: read-only personal completion capture.
 - `auto-config.js`, `auto-submit.js`, `background.js`: default-on automatic posting and site permissions.
   Explicit opt-outs remain disabled; moderator bulk imports still need confirmation.
@@ -23,5 +25,12 @@ with `python3 -m pytest tests/ -q`. Browser extraction and popup checks are in
 `tests/games_akari_runtime_browser.py`, `tests/games_linkedin_auto_browser.py`, and
 `tests/games_linkedin_runtime_browser.py`, and `tests/games_auto_options_browser.py`
 (requires Playwright and its Chromium build).
-`tests/games_import_preview_browser.py` checks the compact confirmation prompt,
-explicit Discord matches, unassigned rows, cancellation, and stale previews.
+`python3 -m tests.games_import_preview_browser` checks the review window and its
+popup handoff, including search/filters, explicit Discord matches, unassigned
+rows, cancellation, stale previews, and slow-server feedback. Browser tests use
+synthetic identities and mocked submission endpoints; they do not import live results.
+
+**Read leaderboard** shows connection, reading, and matching progress before
+opening the full review window. Closing that window keeps the preview available
+through **Review matches…** in the toolbar popup until it expires. Searching or
+filtering only changes the display; confirmation explicitly imports all rows.
