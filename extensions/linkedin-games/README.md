@@ -29,6 +29,10 @@ with `python3 -m pytest tests/ -q`. Browser extraction and popup checks are in
 popup handoff, including search/filters, explicit Discord matches, unassigned
 rows, cancellation, stale previews, and slow-server feedback. Browser tests use
 synthetic identities and mocked submission endpoints; they do not import live results.
+`python3 -m tests.games_review_runtime_browser` verifies the same handoff in an
+actual Manifest V3 extension with disposable Chromium, a loopback API, and a
+synthetic LinkedIn page. It checks window reuse/resizing and confirms that no
+result submissions or extra LinkedIn requests occur.
 
 **Read leaderboard** shows connection, reading, and matching progress before
 opening the full review window. Closing that window keeps the preview available
