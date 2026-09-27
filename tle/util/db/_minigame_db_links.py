@@ -161,6 +161,46 @@ class MinigameLinksDbMixin:
             (str(guild_id), game, str(normalized_name))
         ).fetchall()
 
+    def claim_minigame_unassigned_results(
+            self, guild_id, game, source_name, normalized_name, external_name):
+        """Atomically claim an owner's pending rows under a LinkedIn name.
+
+        Existing target results keep their score and provenance. Either row's
+        unrated decision survives a collision; other target metadata wins.
+        Return the number of pending rows consumed, including collisions.
+        """
+        source_name, normalized_name = str(source_name), str(normalized_name)
+        if source_name == normalized_name:
+            return 0
+        scope = (str(guild_id), game, source_name)
+        with self.conn:
+            cursor = self.conn.execute(
+                '''
+                INSERT INTO minigame_unresolved_result (
+                    guild_id, game, normalized_name, external_name, channel_id,
+                    puzzle_number, puzzle_date, accuracy, time_seconds,
+                    is_perfect, raw_content, is_rated, stored_at,
+                    source_message_id, rating_override
+                )
+                SELECT guild_id, game, ?, ?, channel_id, puzzle_number,
+                       puzzle_date, accuracy, time_seconds, is_perfect,
+                       raw_content, is_rated, stored_at,
+                       source_message_id, rating_override
+                FROM minigame_unresolved_result
+                WHERE guild_id = ? AND game = ? AND normalized_name = ?
+                ON CONFLICT(guild_id, game, normalized_name, puzzle_number)
+                DO UPDATE SET is_rated = MIN(
+                    minigame_unresolved_result.is_rated, excluded.is_rated)
+                ''',
+                (normalized_name, str(external_name), *scope),
+            )
+            self.conn.execute(
+                '''DELETE FROM minigame_unresolved_result
+                WHERE guild_id = ? AND game = ? AND normalized_name = ?''',
+                scope,
+            )
+        return cursor.rowcount
+
     def get_minigame_unresolved_results_for_puzzle(
             self, guild_id, game, puzzle_number):
         return self.conn.execute(
