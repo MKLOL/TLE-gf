@@ -175,3 +175,50 @@ def test_unregistered_preview_revalidates_identity_bans_and_optouts(games, chang
     assert exc.value.status == 409
     assert sources(games, 'tango') == {}
     assert games.db.get_minigame_results_for_guild(1, 'tango') == []
+
+
+def test_client_cannot_write_or_claim_another_owners_pending_identity(games):
+    from tle.cogs._minigame_helpers import MinigameCogError
+    unlink_importer(games)
+    confirm(games, preview(games, leaderboard='You\n0:12'))
+    before = sources(games, 'tango')
+    with pytest.raises(ComplaintError, match='NUL'):
+        preview(games, leaderboard=f'{pending_key()}\n0:01')
+    ctx = SimpleNamespace(guild=games.guild, author=games.member)
+    with pytest.raises(MinigameCogError, match='NUL'):
+        games.cog._cmd_queens_register_link(
+            ctx, games.cog.GAMES['queens'], games.member, pending_key())
+    with pytest.raises(ValueError):
+        games.cog._parse_queens_backfill_entry(games.cog.GAMES['tango'], {
+            'linkedin_name': pending_key(), 'puzzle_number': 697,
+            'time_seconds': 1,
+        })
+    raw_result = SimpleNamespace(
+        raw_content=f'Tango #697 | 0:01\n{pending_key()}\n0:01',
+        accuracy=0, is_perfect=0, time_seconds=1)
+    assert games.cog._legacy_queens_raw_source_identity(raw_result) is None
+    assert sources(games, 'tango') == before
+    assert games.db.get_minigame_player_link(1, 'linkedin', 10) is None
+
+
+def test_registration_keeps_existing_discord_score_when_claiming_pending_you(games):
+    unlink_importer(games)
+    games.db.save_minigame_result(
+        55, 1, 'tango', 20, 10, 697, '2026-09-04', 100, 25, True,
+        'Tango #697 | 0:25')
+    confirm(games, preview(games, leaderboard='You\n0:12'))
+    register_owner(games)
+    source = sources(games, 'tango')['viewer linkedin']
+    assert source.time_seconds == 25 and source.source_message_id == '55'
+    assert pending_key() not in sources(games, 'tango')
+    row = games.db.get_minigame_result_for_user_puzzle(1, 'tango', 10, 697)
+    assert row.time_seconds == 25 and row.message_id == '55'
+
+
+def test_unlinked_named_you_honors_existing_name_optout(games):
+    unlink_importer(games)
+    games.db.optout_minigame_user(1, 'tango', 12, 1, 'viewer linkedin')
+    data = preview(games, leaderboard='Viewer LinkedIn\nYou\n0:12')
+    assert not data['rows'][0]['rated']
+    confirm(games, data)
+    assert not sources(games, 'tango')['viewer linkedin'].is_rated

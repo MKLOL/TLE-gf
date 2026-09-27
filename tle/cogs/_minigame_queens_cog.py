@@ -34,9 +34,9 @@ from tle.cogs._minigame_helpers import MinigameCogError
 
 
 _QUEENS_RESOLVED_ENTRY_FIELDS = (
-    'user_id linkedin_name time_seconds no_hints no_mistakes')
+    'user_id linkedin_name time_seconds no_hints no_mistakes source_user_id')
 _QueensResolvedEntry = namedtuple('_QueensResolvedEntry',
-                                  _QUEENS_RESOLVED_ENTRY_FIELDS)
+                                  _QUEENS_RESOLVED_ENTRY_FIELDS, defaults=[None])
 _QueensImportPreview = namedtuple(
     '_QueensImportPreview',
     'puzzle_date puzzle_number resolved unresolved raw_content',
@@ -69,6 +69,20 @@ _QUEENS_BACKFILL_MAX_BYTES = 10 * 1024 * 1024
 _AKARI_DIFF_MAX_BYTES = 25 * 1024 * 1024
 _IMPORT_BATCH_SIZE = 500
 _IMPORT_RATE_DELAY = 0.5
+
+
+def _queens_unassigned_source_name(user_id):
+    # NUL cannot occur in accepted LinkedIn names; this namespace belongs only
+    # to server-authenticated importers, never to client-supplied identities.
+    return f'\x00tle:linkedin:you:{int(user_id)}'
+
+
+def _queens_entry_source_name(entry):
+    from tle.cogs._minigame_queens import normalize_queens_name
+    source_user_id = getattr(entry, 'source_user_id', None)
+    if source_user_id is not None and entry.linkedin_name == 'You':
+        return _queens_unassigned_source_name(source_user_id)
+    return normalize_queens_name(entry.linkedin_name)
 
 
 def _parse_queens_date(date_text):
@@ -172,6 +186,8 @@ def _clean_queens_linkedin_name(text):
         raise MinigameCogError(
             'Profile URLs are not needed. Use only the LinkedIn display name.')
     name = (text or '').strip()
+    if '\x00' in name:
+        raise MinigameCogError('A LinkedIn display name cannot contain NUL characters.')
     name = ' '.join(name.split())
     if not name:
         raise MinigameCogError('A LinkedIn display name is required.')

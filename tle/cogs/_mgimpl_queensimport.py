@@ -24,6 +24,7 @@ from tle.cogs._minigame_queens_cog import (
     _parse_queens_date,
     _parse_linkedin_date_or_number,
     _queens_public_link_name,
+    _queens_entry_source_name,
     _clean_queens_linkedin_name, _format_queens_result,
 )
 
@@ -31,11 +32,11 @@ logger = logging.getLogger(__name__)
 
 
 class ImplQueensImportMixin:
-    def _resolve_queens_leaderboard(self, ctx, game, leaderboard):
+    def _resolve_queens_leaderboard(self, ctx, game, leaderboard, *, clean_you=False):
         """Resolve a parsed leaderboard into rated rows + unresolved names.
 
-        A manual import's ``You`` row belongs to the command author, whose
-        registered LinkedIn name supplies its external identity.
+        Registered importers resolve ``You`` through their link. Otherwise
+        keep the captured name, or an owner-scoped pending source for bare You.
         """
         entries = parse_queens_leaderboard(leaderboard)
         if not entries:
@@ -43,31 +44,36 @@ class ImplQueensImportMixin:
 
         importer_link = cf_common.user_db.get_minigame_player_link(
             ctx.guild.id, game.link_key, ctx.author.id)
-        if importer_link is None:
-            raise MinigameCogError(
-                f'Register the importer with `;{game.name} register` before '
-                f'importing {game.display_name} leaderboard results.')
-
         resolved = []
         unresolved = []
         seen_users = set()
 
         for entry in entries:
+            if '\x00' in entry.linkedin_name:
+                raise MinigameCogError('A LinkedIn display name cannot contain NUL characters.')
+            if entry.is_you and clean_you:
+                entry = entry._replace(no_hints=True, no_mistakes=True)
             normalized = normalize_queens_name(entry.linkedin_name)
-            if entry.is_you:
+            if entry.is_you and cf_common.user_db.is_minigame_banned(
+                    ctx.guild.id, game.name, ctx.author.id):
+                continue
+            if entry.is_you and importer_link is not None:
                 link = importer_link
+            elif entry.is_you and entry.linkedin_name == 'You':
+                link = None
             else:
                 link = cf_common.user_db.get_minigame_player_link_by_name(
                     ctx.guild.id, game.link_key, normalized)
-                if link is None:
-                    unresolved.append(_QueensResolvedEntry(
-                        user_id=None,
-                        linkedin_name=entry.linkedin_name,
-                        time_seconds=entry.time_seconds,
-                        no_hints=entry.no_hints,
-                        no_mistakes=entry.no_mistakes,
-                    ))
-                    continue
+            if link is None:
+                unresolved.append(_QueensResolvedEntry(
+                    user_id=None,
+                    linkedin_name=entry.linkedin_name,
+                    time_seconds=entry.time_seconds,
+                    no_hints=entry.no_hints,
+                    no_mistakes=entry.no_mistakes,
+                    source_user_id=str(ctx.author.id) if entry.is_you else None,
+                ))
+                continue
 
             if cf_common.user_db.is_minigame_banned(
                     ctx.guild.id, game.name, link.user_id):
@@ -85,11 +91,11 @@ class ImplQueensImportMixin:
 
         return resolved, unresolved
 
-    def _make_queens_import_preview(self, ctx, game, date_text, leaderboard):
+    def _make_queens_import_preview(self, ctx, game, date_text, leaderboard, *, clean_you=False):
         puzzle_date = _parse_queens_date(date_text)
         puzzle_number = game.linkedin.number_for_date(puzzle_date)
         resolved, unresolved = self._resolve_queens_leaderboard(
-            ctx, game, leaderboard)
+            ctx, game, leaderboard, clean_you=clean_you)
         if not resolved and not unresolved:
             raise MinigameCogError(
                 f'No leaderboard rows matched {game.display_name} players.')
@@ -154,7 +160,7 @@ class ImplQueensImportMixin:
                 existing_rows.setdefault(key, []).append(row)
 
         def should_save(entry):
-            normalized_name = normalize_queens_name(entry.linkedin_name)
+            normalized_name = _queens_entry_source_name(entry)
             key = self._queens_source_identity_key(
                 game, normalized_name, preview.puzzle_date)
             rows = existing_rows.get(key, [])
@@ -191,12 +197,12 @@ class ImplQueensImportMixin:
         }
         source_rows = []
         for entry in (*preview.resolved, *preview.unresolved):
-            normalized_name = normalize_queens_name(entry.linkedin_name)
+            normalized_name = _queens_entry_source_name(entry)
             link = links_by_name.get(normalized_name)
+            owner = link.user_id if link is not None else entry.source_user_id
             is_rated = (
-                str(link.user_id) not in opted_out_ids
-                if link is not None
-                else normalized_name not in opted_out_names
+                str(owner) not in opted_out_ids
+                and (link is not None or normalized_name not in opted_out_names)
             )
             source_rows.append(self._queens_external_result_values(
                 ctx.guild.id, game, ctx.channel.id, entry,

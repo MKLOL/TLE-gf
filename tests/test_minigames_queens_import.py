@@ -69,7 +69,7 @@ class TestQueensImport:
         assert minigames_module._parse_queens_date_or_number('#770') == (
             dt.date(2026, 6, 9))
 
-    def test_importer_must_be_linked(self, db, monkeypatch):
+    def test_unlinked_importer_keeps_bare_you(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         guild = _FakeGuild(100, members=[
             _FakeDiscordMember(300, 'ali', 'Ali'),
@@ -88,10 +88,13 @@ class TestQueensImport:
         )
 
         cog = Minigames(bot=None)
-        with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', content)
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', content)
+        assert not preview.resolved
+        assert preview.unresolved[0].linkedin_name == 'You'
+        assert preview.unresolved[0].source_user_id == '301'
+        assert cog._save_queens_import(ctx, QUEENS_GAME, preview).unresolved == 1
 
-    def test_importer_must_be_linked_even_for_unresolved_only_board(
+    def test_unlinked_importer_keeps_unresolved_only_board(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         guild = _FakeGuild(100, members=[
@@ -104,12 +107,14 @@ class TestQueensImport:
             message=SimpleNamespace(id=555),
         )
         cog = Minigames(bot=None)
-        with pytest.raises(MinigameCogError, match='Register the importer'):
-            cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', (
-                'Alice LinkedIn\n'
-                '\U0001f913\U0001f48e No hints & no mistakes!\n'
-                '0:04\n'
-            ))
+        preview = cog._make_queens_import_preview(ctx, QUEENS_GAME, '2026-06-08', (
+            'Alice LinkedIn\n'
+            '\U0001f913\U0001f48e No hints & no mistakes!\n'
+            '0:04\n'
+        ))
+        assert not preview.resolved
+        assert preview.unresolved[0].linkedin_name == 'Alice LinkedIn'
+        assert cog._save_queens_import(ctx, QUEENS_GAME, preview).unresolved == 1
 
     def test_preview_resolves_linked_names_and_you_then_saves_ratings(self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)

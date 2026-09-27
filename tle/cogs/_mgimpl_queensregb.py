@@ -20,6 +20,7 @@ from tle.cogs._minigame_helpers import (
 from tle.cogs._minigame_queens_cog import (
     _queens_puzzle_date_text, _linkedin_result_message_id,
     _format_queens_date,
+    _queens_entry_source_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class ImplQueensRegBMixin:
             *, is_rated=None, stored_at=None, source_message_id=None,
             rating_override=None):
         puzzle_date = normalize_puzzle_date(puzzle_date)
-        normalized_name = normalize_queens_name(entry.linkedin_name)
+        normalized_name = _queens_entry_source_name(entry)
         if is_rated is None:
             link = cf_common.user_db.get_minigame_player_link_by_name(
                 guild_id, game.link_key, normalized_name)
@@ -126,7 +127,7 @@ class ImplQueensRegBMixin:
         candidates = {}
         for entry in parse_queens_leaderboard(row.raw_content or ''):
             normalized = normalize_queens_name(entry.linkedin_name)
-            if normalized == 'you':
+            if normalized == 'you' or '\x00' in normalized:
                 continue
             if self._legacy_queens_entry_matches_row(entry, row):
                 candidates[normalized] = entry.linkedin_name

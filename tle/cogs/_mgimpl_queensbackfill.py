@@ -53,7 +53,8 @@ class ImplQueensBackfillMixin:
         if not isinstance(entry, dict):
             raise ValueError('entry is not an object')
         linkedin_name = entry.get('linkedin_name', '')
-        if not isinstance(linkedin_name, str) or not linkedin_name.strip():
+        if (not isinstance(linkedin_name, str) or not linkedin_name.strip()
+                or '\x00' in linkedin_name):
             raise ValueError('entry has no LinkedIn name')
         linkedin_name = linkedin_name.strip()
         puzzle_number = int(entry['puzzle_number'])

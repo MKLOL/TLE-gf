@@ -71,26 +71,20 @@ class GamesImportService:
     def _make(self, ctx, game, date, content):
         from tle.cogs._minigame_helpers import MinigameCogError
         try:
-            preview = self.cog._make_queens_import_preview(ctx, game, date, content)
+            preview = self.cog._make_queens_import_preview(
+                ctx, game, date, content, clean_you=True)
         except MinigameCogError as exc:
             raise ComplaintError(400, str(exc)) from None
-        # LinkedIn omits badges on the viewer's own result in some layouts.
-        # Only the explicit You row receives the requested clean-result rule.
-        from tle.cogs._minigame_linkedin import parse_linkedin_leaderboard
-        if any(entry.is_you for entry in parse_linkedin_leaderboard(content)):
-            preview = preview._replace(resolved=[
-                entry._replace(no_hints=True, no_mistakes=True)
-                if str(entry.user_id) == str(ctx.author.id) else entry
-                for entry in preview.resolved])
         return preview
 
     def _rows(self, ctx, game, preview):
-        from tle.cogs._minigame_queens_cog import _queens_public_link_name
+        from tle.cogs._minigame_queens_cog import (
+            _queens_public_link_name, _queens_entry_source_name,
+        )
         links = self.cog._queens_links_by_user(ctx.guild.id, game)
         optouts = self.db.get_minigame_optouts(ctx.guild.id, game.name)
         out_ids = {str(row.user_id) for row in optouts}
         out_names = {row.normalized_name for row in optouts}
-        from tle.cogs._minigame_linkedin import normalize_linkedin_name
         sources = {}
         for number in game.linkedin.puzzle_numbers_for_date(preview.puzzle_date):
             for source in self.db.get_minigame_unresolved_results_for_puzzle(
@@ -107,9 +101,11 @@ class GamesImportService:
         for entry in sorted((*preview.resolved, *preview.unresolved),
                             key=lambda row: row.time_seconds):
             link = links.get(str(entry.user_id))
-            normalized = normalize_linkedin_name(entry.linkedin_name)
+            normalized = _queens_entry_source_name(entry)
             source = sources.get(normalized)
-            rated = (str(entry.user_id) not in out_ids if link else normalized not in out_names)
+            owner = entry.user_id if link else entry.source_user_id
+            rated = (str(owner) not in out_ids
+                     and (link is not None or normalized not in out_names))
             if source is not None:
                 rated = bool(source[1].is_rated)
             rows.append({

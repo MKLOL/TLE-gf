@@ -122,11 +122,13 @@ def test_registration_change_requires_new_confirmation(games):
     assert games.db.get_minigame_results_for_guild(1, 'tango') == []
 
 
-def test_unregistered_importer_is_rejected(games):
+def test_unregistered_importer_keeps_all_named_rows(games):
     games.db.conn.execute('DELETE FROM minigame_player_link WHERE user_id = ?', ('10',))
     games.db.conn.commit()
-    with pytest.raises(ComplaintError, match='Register the importer'):
-        preview(games)
+    data = preview(games)
+    assert data['registered'] == 1 and data['unresolved'] == 2
+    assert data['skipped'] == 0
+    assert confirm(games, data)['unresolved'] == 2
 
 
 def test_names_containing_hint_are_not_silently_lost(games):

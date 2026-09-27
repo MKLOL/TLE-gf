@@ -18,6 +18,7 @@ from tle.cogs._minigame_queens_cog import (
     _clean_queens_linkedin_name,
     _is_queens_link_anonymous,
     _queens_public_link_name,
+    _queens_unassigned_source_name,
 )
 
 
@@ -71,6 +72,9 @@ class ImplQueensRegMixin:
         for linked_game in games:
             self._migrate_legacy_queens_results_to_external(
                 guild_id, linked_game)
+            cf_common.user_db.claim_minigame_unassigned_results(
+                guild_id, linked_game.name,
+                _queens_unassigned_source_name(member_id), normalized_name, name)
             claimed += self._claim_queens_unresolved_results(
                 guild_id, linked_game, member_id, normalized_name)
             self._recompute_minigame_ratings(
