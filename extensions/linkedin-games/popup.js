@@ -1,7 +1,7 @@
 import {request, settings} from "./api.js";
 
 const $ = selector => document.querySelector(selector);
-let config, catalog, pending;
+let config, catalog, pending, pendingConnection;
 let busy = false;
 function setBusy(value) {
   busy = value;
@@ -12,15 +12,17 @@ function showPreview(data) {
   $("#date").value = data.puzzle_date;
   $("#title").textContent = `${data.game_name} #${data.puzzle_number}`;
   $("#count").textContent = `${data.rows.length} players`;
-  $("#summary").textContent = `${data.puzzle_date} · ${data.registered} registered · ${data.unresolved} unlinked` +
-    (data.skipped ? ` · ${data.skipped} banned or duplicate players skipped` : "");
+  $("#summary").textContent = `${data.puzzle_date} · ${data.registered} matched · ${data.unresolved} unassigned` +
+    (data.skipped ? ` · ${data.skipped} banned or duplicate players skipped` : "") +
+    (data.unplayed ? ` · ${data.unplayed} without a completed score` : "");
   $("#players").replaceChildren();
   for (const entry of data.rows) {
     const tr = document.createElement("tr");
     const name = document.createElement("td");
     name.textContent = entry.name;
     const detail = document.createElement("small");
-    detail.textContent = entry.registered ? entry.discord_name : "Unlinked · stored for later";
+    detail.textContent = entry.registered ? `Matches Discord: ${entry.discord_name}` :
+      entry.is_own ? "Your result · will be saved until you register" : "Unassigned · will be saved for later";
     name.append(detail);
     const time = document.createElement("td");
     time.textContent = `${Math.floor(entry.time_seconds / 60)}:${String(entry.time_seconds % 60).padStart(2, "0")}`;
@@ -31,10 +33,16 @@ function showPreview(data) {
     $("#players").append(tr);
   }
   $("#preview").hidden = false;
+  $("#read-tools").hidden = true;
+  document.body.classList.add("reviewing");
+  $("#preview-question").focus();
 }
 async function clearPreview() {
   pending = null;
+  pendingConnection = null;
   $("#preview").hidden = true;
+  $("#read-tools").hidden = false;
+  document.body.classList.remove("reviewing");
   await chrome.storage.session.remove("pendingImport");
 }
 $("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -66,13 +74,15 @@ $("#read").addEventListener("click", async () => {
       $("#date").value = date.toISOString().slice(0, 10);
     }
     $("#status").textContent = "Matching players with your server…";
-    const data = await request(config, "/v1/games/imports/preview", {
+    const response = await request(config, "/v1/games/imports/preview", {
       game: game.id, puzzle_date: $("#date").value || game.today,
       puzzle_number: extracted.puzzleNumber, leaderboard: extracted.leaderboard,
     });
-    await chrome.storage.session.set({pendingImport: {server: config.server, data}});
+    const data = {...response, unplayed: extracted.unplayed || 0};
+    pendingConnection = {server: config.server, guild: catalog.guild_id, user: catalog.user_id};
+    await chrome.storage.session.set({pendingImport: {...pendingConnection, data}});
     showPreview(data);
-    $("#status").textContent = "Check the players and date, then confirm. This preview expires in 10 minutes.";
+    $("#status").textContent = "Please review the matches before importing.";
   } catch (error) { $("#status").textContent = error.message; }
   finally { setBusy(false); }
 });
@@ -80,12 +90,24 @@ $("#confirm").addEventListener("click", async () => {
   if (busy || !pending) return;
   setBusy(true);
   try {
-    if (Date.now() >= pending.expires_at * 1000) throw new Error("Preview expired. Read the leaderboard again.");
+    if (Date.now() >= pending.expires_at * 1000) {
+      await clearPreview();
+      throw new Error("This preview expired. Read the leaderboard again for a fresh preview.");
+    }
     config = await settings();
+    const current = await request(config, "/v1/games");
+    if (config.server !== pendingConnection?.server || current.guild_id !== pendingConnection.guild ||
+        current.user_id !== pendingConnection.user) {
+      await clearPreview();
+      throw new Error("Your connection changed. Read the leaderboard again to review the new matches.");
+    }
     const result = await request(config, `/v1/games/imports/${encodeURIComponent(pending.preview_id)}/confirm`, {});
     await clearPreview();
     $("#status").textContent = `Imported ${result.registered} registered and ${result.unresolved} unlinked results. ${result.unchanged} unchanged.`;
-  } catch (error) { $("#status").textContent = error.message; }
+  } catch (error) {
+    if ([401, 403, 404, 409].includes(error.status)) await clearPreview();
+    $("#status").textContent = error.message;
+  }
   finally { setBusy(false); }
 });
 
@@ -97,9 +119,13 @@ try {
   $("#connection").textContent = `${catalog.guild_name} · ${catalog.user_name}`;
   $("#date").value = catalog.games[0]?.today || "";
   const {pendingImport} = await chrome.storage.session.get("pendingImport");
-  if (pendingImport?.server === config.server && pendingImport.data.expires_at * 1000 > Date.now()) {
+  if (pendingImport?.server === config.server && pendingImport.guild === catalog.guild_id &&
+      pendingImport.user === catalog.user_id && pendingImport.data.expires_at * 1000 > Date.now()) {
+    pendingConnection = {server: config.server, guild: catalog.guild_id, user: catalog.user_id};
     showPreview(pendingImport.data);
-    $("#status").textContent = "Your pending preview is ready to confirm.";
+    $("#status").textContent = "Your preview is ready. Please review the matches before importing.";
+  } else if (pendingImport) {
+    await clearPreview();
   }
 } catch (error) { $("#status").textContent = error.message; }
 finally { setBusy(false); }

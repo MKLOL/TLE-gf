@@ -113,6 +113,7 @@ class GamesImportService:
                 'discord_name': self.cog._queens_public_user_name(
                     ctx.guild, entry.user_id, links) if link else None,
                 'registered': entry.user_id is not None,
+                'is_own': str(owner) == str(ctx.author.id),
                 'rated': rated,
                 'rating_override': source[1].rating_override if source else None,
                 'time_seconds': entry.time_seconds,

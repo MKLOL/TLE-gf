@@ -8,7 +8,7 @@ notice needs a public URL, and reviewers need access to a test Discord server.
 ## Create the draft
 
 1. Run `python3 extra/package_games_extension.py`. It writes
-   `dist/tle-games-1.2.2-draft.zip` with `manifest.json` at the ZIP root.
+   `dist/tle-games-1.2.3-draft.zip` with `manifest.json` at the ZIP root.
 2. Open <https://chrome.google.com/webstore/devconsole>, click **Add new item**
    (or **New item**), and upload that ZIP.
 3. Fill in **Store listing** using the description below. Choose English and

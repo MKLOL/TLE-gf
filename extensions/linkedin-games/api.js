@@ -34,7 +34,11 @@ export async function request(config, route, body) {
       credentials: "omit", redirect: "error", cache: "no-store", signal: controller.signal,
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `Server returned ${response.status}.`);
+    if (!response.ok) {
+      const error = new Error(data.error || `Server returned ${response.status}.`);
+      error.status = response.status;
+      throw error;
+    }
     return data;
   } catch (error) {
     if (error.name === "AbortError") throw new Error("Server timed out. You can retry Confirm safely.");

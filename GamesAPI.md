@@ -39,8 +39,10 @@ field used by the existing rankings.
 8. Manual personal posting is still available: open the Queens/Tango completed
    results page or connections leaderboard and click **Read my LinkedIn score**,
    then **Post my score**.
-   Moderators use **Read leaderboard** → **Confirm import** for other players.
-   Those bulk imports always require confirmation.
+   Moderators use **Read leaderboard** → **Yes, import results** for other players.
+   The preview asks whether to import and shows each LinkedIn-to-Discord match,
+   unassigned names, your pending result, the puzzle date, times, and badges.
+   **Not now** cancels without importing. Bulk imports always require confirmation.
 
 The game must be enabled (`;meta config enable queens` / `tango` / `akari`) and
 have a configured channel (`;queens here` / `;tango here` / `;akari here`). Personal

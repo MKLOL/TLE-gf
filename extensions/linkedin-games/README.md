@@ -23,3 +23,5 @@ with `python3 -m pytest tests/ -q`. Browser extraction and popup checks are in
 `tests/games_akari_runtime_browser.py`, `tests/games_linkedin_auto_browser.py`, and
 `tests/games_linkedin_runtime_browser.py`, and `tests/games_auto_options_browser.py`
 (requires Playwright and its Chromium build).
+`tests/games_import_preview_browser.py` checks the compact confirmation prompt,
+explicit Discord matches, unassigned rows, cancellation, and stale previews.
