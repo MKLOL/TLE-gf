@@ -14,17 +14,22 @@ async function clear() {
 function status(text) { $('#status').textContent = text; }
 function buttons(value) {
   busy = value;
-  for (const id of ['#own', '#post-own', '#cancel-own']) $(id).disabled = value;
+  for (const id of ['#own', '#post-own', '#cancel-own', '#read', '#open-review', '#cancel']) $(id).disabled = value;
+  $('#status').classList.toggle('loading', value);
+  $('#read-tools').setAttribute('aria-busy', String(value));
 }
 $('#cancel-own').addEventListener('click', clear);
 $('#own').addEventListener('click', async () => {
   if (busy) return;
   buttons(true);
+  status('Connecting to your server to read your score…');
   try {
     await clear();
     const config = await settings();
     const catalog = await request(config, '/v1/games');
+    status('Reading your visible LinkedIn score…');
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+    if (!tab?.id) throw new Error('Open your LinkedIn result tab, then read it again.');
     await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['leaderboard.js', 'linkedin-result.js']});
     const completed = await chrome.scripting.executeScript({target: {tabId: tab.id},
       func: () => globalThis.TleOwnLinkedInResult.read()});
@@ -42,7 +47,7 @@ $('#own').addEventListener('click', async () => {
     const date = new Date(game.anchor_date + 'T00:00:00Z');
     date.setUTCDate(date.getUTCDate() + data.puzzleNumber - game.anchor_number);
     const time = `${Math.floor(data.timeSeconds / 60)}:${String(data.timeSeconds % 60).padStart(2, '0')}`;
-    const value = {server: config.server, user: catalog.user_id, name: game.name, time,
+    const value = {server: config.server, guild: catalog.guild_id, user: catalog.user_id, name: game.name, time,
       body: {game: game.id, puzzle_date: date.toISOString().slice(0, 10), puzzle_number: data.puzzleNumber,
         time_seconds: data.timeSeconds, accuracy: 100, is_perfect: true}};
     await chrome.storage.session.set({pendingOwn: value});
@@ -54,10 +59,15 @@ $('#own').addEventListener('click', async () => {
 $('#post-own').addEventListener('click', async () => {
   if (busy || !pending) return;
   buttons(true);
+  status('Checking your account before posting your score…');
   try {
     const config = await settings();
     const catalog = await request(config, '/v1/games');
-    if (config.server !== pending.server || catalog.user_id !== pending.user) throw new Error('Your connection changed. Read your score again.');
+    if (config.server !== pending.server || catalog.user_id !== pending.user || catalog.guild_id !== pending.guild) {
+      await clear();
+      throw new Error('Your connection changed. Read your score again.');
+    }
+    status('Posting your score to Discord…');
     const result = await request(config, '/v1/games/results', pending.body);
     await clear();
     status(result.duplicate ? 'Your score was already registered and posted.' : 'Your score is registered and posted in Discord.');

@@ -83,7 +83,7 @@ async def personal_popup(browser, game='tango', leaderboard=False):
     errors, calls, injected = [], [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
     source.on('pageerror', lambda error: errors.append(str(error)))
-    catalog = {'user_id': '10', 'user_name': 'Member', 'guild_name': 'Test server',
+    catalog = {'user_id': '10', 'user_name': 'Member', 'guild_id': '1', 'guild_name': 'Test server',
                'games': [{'id': game, 'path': game, 'name': f'LinkedIn {game.title()}',
                           'anchor_date': '2026-09-26', 'anchor_number': number,
                           'enabled': True, 'can_import': False, 'today': '2026-09-26'}]}
@@ -135,6 +135,16 @@ async def personal_popup(browser, game='tango', leaderboard=False):
     await page.click('#own')
     await page.wait_for_function("!document.querySelector('#own').disabled")
     assert await page.locator('#own-preview').is_visible(), await page.locator('#status').inner_text()
+    # A token for the same person in another Discord server must not redirect
+    # a saved personal score into that other guild.
+    catalog['guild_id'] = '2'
+    await page.click('#post-own')
+    await page.wait_for_function("document.querySelector('#status').textContent.includes('connection changed')")
+    assert not any(url.endswith('/results') for url, body in calls)
+    assert not await page.locator('#own-preview').is_visible()
+    catalog['guild_id'] = '1'
+    await page.click('#own')
+    await page.wait_for_function("!document.querySelector('#own').disabled")
     await page.click('#post-own')
     await page.wait_for_function("document.querySelector('#status').textContent.includes('registered and posted')")
     assert [body for url, body in calls if url.endswith('/results')] == [{
