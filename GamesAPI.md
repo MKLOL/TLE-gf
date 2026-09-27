@@ -10,11 +10,14 @@ field used by the existing rankings.
 ## Install and connect
 
 1. Restart the bot with this version. Migrations 1.64.0 and 1.65.0 create games tokens and durable submission
-   receipts. The existing complaint HTTP listener serves the new routes on the same
+   receipts. Migration 1.66.0 makes existing active games tokens permanent; expired
+   or revoked tokens remain disabled, and complaint tokens are unchanged.
+   The existing complaint HTTP listener serves the new routes on the same
    host and port; `COMPLAINT_API_ENABLED=0` disables both APIs.
 2. In Chrome, visit `chrome://extensions`, enable Developer mode, choose **Load
    unpacked**, and select `extensions/linkedin-games` from this repository.
-3. In the Discord server, run `;make-games-token`. The bot sends a token by DM.
+3. In the Discord server, run `;make-games-token`. The bot sends a token by DM
+   that stays valid until you revoke it.
 4. Open the extension’s **Settings**, enter the server URL and token, and save.
    The default server URL matches the existing complaint API configuration:
    `http://51.81.82.26:8080`. Use an HTTPS endpoint if configured. HTTP sends the
@@ -57,8 +60,8 @@ cannot import games.
 
 | Command | Purpose |
 | --- | --- |
-| `;make-games-token [days]` | DM a token; default 30 days, range 1–365; personal to the issuing member. |
-| `;games-tokens` | List your active token IDs and expiry times in this server. |
+| `;make-games-token [days]` | DM a personal token; permanent by default, or valid for 1–365 days if specified. |
+| `;games-tokens` | List your active token IDs and expiry times in this server; permanent tokens show **Never**. |
 | `;revoke-games-token <id>` | Revoke one of your tokens in this server. |
 
 Only SHA-256 digests persist in SQLite. Failed DM delivery revokes the new

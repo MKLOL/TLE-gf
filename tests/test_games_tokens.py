@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from tests.games_helpers import games
 from tle.cogs._games_tokens import GamesTokenMixin
+from tle.util.db import games_token_db
 from tle.util.db.user_db_conn import UserDbConn
 from tle.util.db.user_db_upgrades import registry
 
@@ -31,7 +32,7 @@ def test_expiration_and_bad_tokens(games):
         assert games.db.authenticate_games_token(raw) is None
     games.db.conn.execute('UPDATE games_api_token SET expires_at = 0')
     assert games.db.authenticate_games_token(games.raw) is None
-    for days in (0, 366, True, 1.2):
+    for days in (0, -1, 366, True, 1.2, '30'):
         with pytest.raises(ValueError):
             games.db.create_games_token(1, 10, days)
 
@@ -47,11 +48,39 @@ def test_members_and_moderators_can_mint_and_failed_dm_revokes(games, monkeypatc
     games.member.roles = [SimpleNamespace(name='Moderator')]
     asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
     assert 'tlegames_' in ctx.author.send.call_args.args[0]
+    assert 'Never (valid until revoked)' in ctx.author.send.call_args.args[0]
+    assert ';revoke-games-token ' in ctx.author.send.call_args.args[0]
+    assert 'Bulk leaderboard imports do not require registration' in ctx.author.send.call_args.args[0]
     assert 'tlegames_' not in repr(ctx.send.call_args_list)
     count = len(games.db.list_games_tokens(1, 10))
     ctx.author.send.side_effect = OSError('DM failed')
     asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx))
     assert len(games.db.list_games_tokens(1, 10)) == count
+    failed = games.db.conn.execute('SELECT * FROM games_api_token ORDER BY id DESC').fetchone()
+    assert failed.expires_at == games_token_db.PERMANENT_EXPIRY
+    assert failed.revoked_at is not None
+
+
+def test_explicit_lifetime_and_token_list_display(games, monkeypatch):
+    import discord
+    monkeypatch.setattr(discord, 'AllowedMentions',
+                        SimpleNamespace(none=lambda: None), raising=False)
+    ctx = SimpleNamespace(guild=games.guild, author=games.member, send=AsyncMock())
+    ctx.author.send = AsyncMock()
+    asyncio.run(GamesTokenMixin.make_games_token(games.cog, ctx, 2))
+    dm = ctx.author.send.call_args.args[0]
+    assert 'expiry: in 2 days' in dm and 'Never' not in dm
+    timed, permanent = games.db.list_games_tokens(1, 10)
+    assert timed.expires_at == timed.created_at + 2 * 86400
+    games.db.create_games_token(2, 10)
+    games.db.create_games_token(1, 11)
+    ctx.send.reset_mock()
+    asyncio.run(GamesTokenMixin.games_tokens(games.cog, ctx))
+    listed = ctx.send.call_args.args[0]
+    assert f'#{permanent.id} — expiry: Never' in listed
+    assert f'#{timed.id} — expiry: <t:{int(timed.expires_at)}:R>' in listed
+    assert listed.count('— expiry:') == 2
+    assert ';revoke-games-token <id>' in listed and 'tlegames_' not in listed
 
 
 def test_new_schema_upgrade_and_token_survives_restart(tmp_path):

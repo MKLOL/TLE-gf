@@ -1,6 +1,7 @@
 """User database upgrades after 1.53.0."""
 
 import logging
+import time
 
 from tle.util.db._user_db_upgrade_registry import registry
 from tle.util.db.counting_db import create_counting_schema
@@ -133,4 +134,13 @@ def upgrade_1_64_0(db):
 def upgrade_1_65_0(db):
     from tle.util.db.games_submission_db import create_games_submission_schema
     create_games_submission_schema(db)
+    db.commit()
+
+
+@registry.register('1.66.0', 'Keep active games tokens valid until revoked')
+def upgrade_1_66_0(db):
+    from tle.util.db.games_token_db import PERMANENT_EXPIRY
+    db.execute('''UPDATE games_api_token SET expires_at = ?
+        WHERE revoked_at IS NULL AND expires_at > ?''',
+        (PERMANENT_EXPIRY, time.time()))
     db.commit()
