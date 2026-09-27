@@ -2,10 +2,8 @@
 
 Run: python -m tests.games_extension_browser (requires playwright + Chromium).
 """
-import json
 from pathlib import Path
 import tempfile
-import time
 
 from playwright.sync_api import sync_playwright
 
@@ -92,77 +90,8 @@ def extraction_checks(browser):
 
 
 def popup_checks(browser, extracted):
-    page = browser.new_page(viewport={'width': 540, 'height': 860})
-    errors, calls = [], []
-    page.on('pageerror', lambda error: errors.append(str(error)))
-    catalog = {
-        'guild_name': 'Test server', 'user_name': 'Moderator',
-        'games': [{'id': 'tango', 'path': 'tango', 'name': 'LinkedIn Tango',
-                   'enabled': True, 'can_import': True, 'today': '2026-09-26',
-                   'anchor_date': '2026-09-04', 'anchor_number': 697}],
-    }
-    preview = {
-        'preview_id': 'preview123', 'expires_at': time.time() + 600,
-        'game_name': 'LinkedIn Tango', 'game': 'tango', 'puzzle_number': 719,
-        'puzzle_date': '2026-09-26', 'registered': 1, 'unresolved': 1, 'skipped': 0,
-        'rows': [
-            {'name': '<img src=x onerror="alert(1)">', 'discord_name': 'Discord User',
-             'registered': True, 'rated': True, 'time_seconds': 10,
-             'no_hints': True, 'no_mistakes': True},
-            {'name': 'Unlinked User', 'discord_name': None, 'registered': False,
-             'rated': False, 'time_seconds': 27, 'no_hints': True, 'no_mistakes': False},
-        ],
-    }
-
-    def route_request(route):
-        url = route.request.url
-        if url.startswith('http://api.test/'):
-            assert route.request.headers['authorization'] == 'Bearer ' + TOKEN
-            calls.append((url, route.request.post_data_json if route.request.method == 'POST' else None))
-            response = catalog if url.endswith('/v1/games') else (
-                preview if url.endswith('/preview') else {'registered': 1, 'unresolved': 1, 'unchanged': 2})
-            route.fulfill(json=response)
-        else:
-            filename = url.split('/')[-1] or 'popup.html'
-            content_type = 'text/javascript' if filename.endswith('.js') else (
-                'text/css' if filename.endswith('.css') else 'text/html')
-            route.fulfill(body=(EXTENSION / filename).read_text(), content_type=content_type)
-
-    page.route('**/*', route_request)
-    page.add_init_script('''(() => {
-      const local = CONFIG, session = {};
-      const area = obj => ({
-        get: async () => obj, set: async data => Object.assign(obj, data),
-        remove: async key => { delete obj[key]; }, setAccessLevel: async () => {},
-      });
-      window.chrome = {
-        storage: {local: area(local), session: area(session)},
-        permissions: {contains: async () => true}, runtime: {openOptionsPage: () => {}},
-        tabs: {query: async () => [{id: 1}]},
-        scripting: {executeScript: async () => [{result: EXTRACTED}]},
-      };
-    })();'''.replace('CONFIG', json.dumps({'server': 'http://api.test', 'token': TOKEN}))
-       .replace('EXTRACTED', json.dumps(extracted)))
-    page.goto('http://extension.test/popup.html')
-    page.wait_for_function('document.querySelector("#connection").textContent.includes("Test server")')
-    page.click('#read')
-    page.wait_for_selector('#preview', state='visible')
-    assert len(page.locator('#players tr').all()) == 2
-    assert page.locator('#players img').count() == 0  # Names remain inert text.
-    assert 'No hints · No mistakes' in page.locator('#players').inner_text()
-    assert not any(url.endswith('/confirm') for url, _ in calls)
-    sent = next(data for url, data in calls if url.endswith('/preview'))
-    assert sent['game'] == 'tango' and sent['puzzle_number'] == 719
-    page.screenshot(path='/tmp/tle-games-preview.png', full_page=True)
-    page.click('#cancel')
-    assert not any(url.endswith('/confirm') for url, _ in calls)
-    page.click('#read')
-    page.wait_for_selector('#preview', state='visible')
-    page.click('#confirm')
-    page.wait_for_function('document.querySelector("#status").textContent.startsWith("Imported")')
-    assert [data for url, data in calls if url.endswith('/confirm')] == [{}]
-    assert not errors, errors
-    page.close()
+    from tests.games_popup_handoff_browser import check_basic
+    check_basic(browser, extracted)
 
 
 def extension_load_check(playwright):
@@ -194,4 +123,4 @@ if __name__ == '__main__':
         popup_checks(browser, extraction_checks(browser))
         browser.close()
         extension_load_check(playwright)
-    print('Browser extraction, badge handling, popup confirm/cancel, and MV3 loading passed.')
+    print('Browser extraction, badge handling, popup review handoff/cancel, and MV3 loading passed.')
