@@ -25,20 +25,26 @@ $('#own').addEventListener('click', async () => {
     const config = await settings();
     const catalog = await request(config, '/v1/games');
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
-    await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['leaderboard.js', 'extract.js']});
-    const result = await chrome.scripting.executeScript({target: {tabId: tab.id},
-      func: () => globalThis.TleReadLeaderboard(true)});
-    const data = result[0]?.result;
-    if (!data || data.error) throw new Error(data?.error || 'Could not read your score.');
+    await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['leaderboard.js', 'linkedin-result.js']});
+    const completed = await chrome.scripting.executeScript({target: {tabId: tab.id},
+      func: () => globalThis.TleOwnLinkedInResult.read()});
+    let data = completed[0]?.result;
+    if (!data) {
+      await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['extract.js']});
+      const leaderboard = await chrome.scripting.executeScript({target: {tabId: tab.id},
+        func: () => globalThis.TleReadLeaderboard(true)});
+      data = leaderboard[0]?.result;
+      if (!data || data.error) throw new Error(data?.error || 'Could not read your score.');
+      data.timeSeconds = data.rows[0].time.split(':').map(Number).reduce((total, part) => total * 60 + part, 0);
+    }
     const game = catalog.games.find(item => item.path === data.gamePath);
     if (!game?.enabled) throw new Error('This game is not enabled in your server.');
-    const row = data.rows[0];
     const date = new Date(game.anchor_date + 'T00:00:00Z');
     date.setUTCDate(date.getUTCDate() + data.puzzleNumber - game.anchor_number);
-    const time = row.time.split(':').map(Number).reduce((total, part) => total * 60 + part, 0);
-    const value = {server: config.server, user: catalog.user_id, name: game.name, time: row.time,
+    const time = `${Math.floor(data.timeSeconds / 60)}:${String(data.timeSeconds % 60).padStart(2, '0')}`;
+    const value = {server: config.server, user: catalog.user_id, name: game.name, time,
       body: {game: game.id, puzzle_date: date.toISOString().slice(0, 10), puzzle_number: data.puzzleNumber,
-        time_seconds: time, accuracy: 100, is_perfect: true}};
+        time_seconds: data.timeSeconds, accuracy: 100, is_perfect: true}};
     await chrome.storage.session.set({pendingOwn: value});
     show(value);
     status('Check your score, then press Post my score.');
