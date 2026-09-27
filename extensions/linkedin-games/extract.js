@@ -34,9 +34,10 @@ globalThis.TleReadLeaderboard = (ownOnly = false) => {
     if (!title.toLowerCase().startsWith(gamePath + ' ')) {
       throw new Error("The displayed leaderboard does not match this game. Wait for it to finish loading.");
     }
-    const label = board.querySelector('.pr-connections-leaderboard__header-puzzle-id')?.textContent.trim() || '';
-    const number = label.match(/^Puzzle No\.\s*(\d+)$/i);
-    if (!number) throw new Error("Could not read the leaderboard’s puzzle number.");
+    if ([...board.querySelectorAll('.artdeco-loader, [role="progressbar"], [aria-busy="true"]')].some(visible)) {
+      throw new Error('The leaderboard is still loading. Wait for it to finish, then try again.');
+    }
+    const puzzleNumber = helpers.puzzleNumber(board, location.href, visible);
     const rows = [];
     let unplayed = 0;
     for (const container of board.querySelectorAll('.pr-connections-leaderboard-player__container')) {
@@ -53,7 +54,7 @@ globalThis.TleReadLeaderboard = (ownOnly = false) => {
       if (!score && container.querySelector('.pr-connections-leaderboard-player__nudge-button')) {
         unplayed++; continue;
       }
-      if (['–', '—', '-'].includes(score)) { unplayed++; continue; }
+      if (['–', '—', '-', '-:--'].includes(score)) { unplayed++; continue; }
       if (!name || !score || !helpers.timePattern.test(score)) {
         throw new Error("A leaderboard row has no readable solve time. This game or layout is not supported yet.");
       }
@@ -75,7 +76,7 @@ globalThis.TleReadLeaderboard = (ownOnly = false) => {
     if (ownOnly && rows.length !== 1) throw new Error("Could not identify exactly one completed You row.");
     const leaderboard = helpers.serialize(rows);
     if (leaderboard.length > 12000) throw new Error("This leaderboard is too large to import.");
-    return {gamePath, puzzleNumber: Number(number[1]), leaderboard, count: rows.length, unplayed, rows};
+    return {gamePath, puzzleNumber, leaderboard, count: rows.length, unplayed, rows};
   } catch (error) {
     return {error: error.message};
   }
