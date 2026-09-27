@@ -39,6 +39,22 @@ def check(browser):
     assert 'No hints & no mistakes!' in today['rows'][3]['status']
     own = page.evaluate('TleReadLeaderboard(true)')
     assert own['count'] == 1 and own['rows'][0]['time'] == '0:25', own
+    assert own['leaderboard'].startswith('You\n')
+    # Keep the displayed LinkedIn name when the own row also has a You marker.
+    # The API needs both to preserve an unregistered importer's named result.
+    page.evaluate('''() => {
+        const row = document.querySelectorAll('.pr-connections-leaderboard-player__container')[15];
+        row.querySelector('.pr-connections-leaderboard-player__name-text').textContent = 'Example Player';
+        const marker = document.createElement('span'); marker.textContent = 'You';
+        row.querySelector('.pr-connections-leaderboard-player__content-column').append(marker);
+    }''')
+    named = read()
+    assert named['count'] == 17 and named['rows'][15]['name'] == 'Example Player'
+    assert named['rows'][15]['isYou']
+    assert 'Example Player\nYou\n' in named['leaderboard']
+    own = page.evaluate('TleReadLeaderboard(true)')
+    assert own['count'] == 1 and own['leaderboard'].startswith('Example Player\nYou\n')
+    reset()
 
     # Renderer: handleTabClick never changes the base URL, and Yesterday fetches
     # gameUrn with delta:1. This must not import Yesterday under Today's edition.

@@ -40,10 +40,12 @@ field used by the existing rankings.
    Those bulk imports always require confirmation.
 
 The game must be enabled (`;meta config enable queens` / `tango` / `akari`) and
-have a configured channel (`;queens here` / `;tango here` / `;akari here`). Register your own LinkedIn
-name once using `;queens register NAME` or `;tango register NAME`; both share the
-same identity. The leaderboard’s **You** row belongs to the token owner, so use
-your own token when viewing your LinkedIn account.
+have a configured channel (`;queens here` / `;tango here` / `;akari here`). Personal
+LinkedIn posting, including automatic posting, requires registering your name
+once using `;queens register NAME` or `;tango register NAME`; both share the same
+identity. Bulk leaderboard imports do not require the importer to register.
+The leaderboard’s **You** row belongs to the token owner, so use your own token
+when viewing your LinkedIn account.
 
 One moderator token covers every enabled LinkedIn game in its Discord server,
 including games added later. It is not tied to Queens or Tango. Any server member can create a token and submit only their own scores.
@@ -95,9 +97,15 @@ claiming successful registration or reposting it.
 
 ## Import behavior
 
+- Importer registration is optional. Confirmation saves the completed rows for
+  registered players and unassigned names, including the importer’s **You** row.
 - Names resolve through the existing shared LinkedIn registration. Anonymous
   links keep their existing public label. Unlinked results are saved for later
   registration. Bans and per-result rating opt-outs continue to apply.
+- If the importer is unregistered and the own row displays only **You**, its
+  result is kept as pending data belonging to that token owner. Registering
+  later claims it under the new LinkedIn name. Different importers’ **You** rows
+  remain separate; an unregistered importer does not block everyone else’s rows.
 - The explicit **You** row is treated as no hints and no mistakes. Everyone
   else’s actual badges are preserved; missing badges do not imply a clean solve.
 - Exact duplicates are skipped. A changed time or badge status replaces only
