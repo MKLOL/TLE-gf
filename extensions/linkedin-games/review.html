@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review leaderboard · TLE Games</title>
+  <link rel="stylesheet" href="review.css">
+</head>
+<body>
+  <main class="review-shell">
+    <header class="page-header">
+      <p class="eyebrow">TLE GAMES <span>/</span> IMPORT REVIEW</p>
+      <h1 id="title">Review leaderboard results</h1>
+      <p id="connection" class="connection">Checking your Discord connection…</p>
+    </header>
+    <div class="notice-bar"><p id="status" class="notice" role="status" aria-live="polite">Loading your preview…</p><span id="activity" class="activity" hidden aria-live="off"><span class="spinner" aria-hidden="true"></span><span id="elapsed">0s</span></span></div>
+    <section id="empty-state" class="empty-state" hidden>
+      <h2 id="empty-title"></h2>
+      <p id="empty-description"></p>
+      <button id="retry-load" type="button" hidden>Try loading again</button>
+      <button id="close-window" class="secondary" type="button">Close review</button>
+    </section>
+    <section id="review-content" hidden aria-label="Leaderboard review">
+      <div class="review-intro">
+        <p id="puzzle-meta" class="puzzle-meta"></p>
+        <p id="expiry" class="expiry" aria-live="off"></p>
+      </div>
+      <div id="summary" class="summary" aria-label="Import totals"></div>
+      <p id="excluded-summary" class="muted"></p>
+      <div class="table-card">
+        <div class="table-controls">
+          <label class="search-field" for="search">
+            <span class="sr-only">Find a player</span>
+            <input id="search" type="search" placeholder="Search LinkedIn or Discord names" autocomplete="off">
+          </label>
+          <div class="filters" role="group" aria-label="Filter player matches">
+            <button type="button" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" data-filter="matched" aria-pressed="false">Matched</button>
+            <button type="button" data-filter="unassigned" aria-pressed="false">Unassigned</button>
+          </div>
+        </div>
+        <div class="table-caption">
+          <p id="visible-count" aria-live="polite"></p>
+          <p>Search and filters only change this view. All preview results will be imported.</p>
+        </div>
+        <div class="table-scroll" tabindex="0" aria-label="LinkedIn to Discord player matches">
+          <table id="results-table">
+            <thead><tr><th scope="col">LinkedIn player</th><th scope="col">Discord account</th><th scope="col">Solve time</th><th scope="col">Result badges</th><th scope="col">Rating</th></tr></thead>
+            <tbody id="players"></tbody>
+          </table>
+          <p id="no-matches" class="no-matches" hidden>No players match your search.</p>
+        </div>
+      </div>
+      <p class="import-note">Unassigned scores are kept for later registration. Identical results are skipped; a changed score updates only that player’s result. Anonymous LinkedIn labels remain anonymous.</p>
+    </section>
+  </main>
+  <footer id="review-footer" class="review-footer" hidden>
+    <div class="footer-inner">
+      <div><h2 id="preview-question">Would you like to import these results?</h2><p id="confirm-scope">Nothing is saved until you confirm.</p></div>
+      <div class="actions"><button id="cancel" class="secondary" type="button">Not now</button><button id="confirm" type="button" disabled>Import results</button></div>
+    </div>
+  </footer>
+  <script type="module" src="review.js"></script>
+</body>
+</html>
