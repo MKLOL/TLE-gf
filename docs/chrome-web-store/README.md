@@ -8,7 +8,7 @@ notice needs a public URL, and reviewers need access to a test Discord server.
 ## Create the draft
 
 1. Run `python3 extra/package_games_extension.py`. It writes
-   `dist/tle-games-1.2.1-draft.zip` with `manifest.json` at the ZIP root.
+   `dist/tle-games-1.2.2-draft.zip` with `manifest.json` at the ZIP root.
 2. Open <https://chrome.google.com/webstore/devconsole>, click **Add new item**
    (or **New item**), and upload that ZIP.
 3. Fill in **Store listing** using the description below. Choose English and
@@ -59,8 +59,8 @@ or Discord product.
 community, including automatic personal submissions and confirmed moderator
 leaderboard imports.
 
-**activeTab:** Read the current LinkedIn connections leaderboard only when the
-user presses a read button in the extension.
+**activeTab:** Read the current LinkedIn completed result or connections
+leaderboard when the user presses a read button in the extension.
 
 **scripting:** Run packaged result readers on supported game pages. Register or
 remove the automatic readers according to the user's settings and site grants.

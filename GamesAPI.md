@@ -33,8 +33,9 @@ field used by the existing rankings.
 7. Enable **Pro Mode** in Daily Akari to include accuracy. Completing a daily
    puzzle posts and registers it automatically; archive puzzles are skipped.
    The extension's badge and popup show whether posting succeeded.
-8. Manual personal posting is still available: open the Queens/Tango connections
-   leaderboard and click **Read my LinkedIn score**, then **Post my score**.
+8. Manual personal posting is still available: open the Queens/Tango completed
+   results page or connections leaderboard and click **Read my LinkedIn score**,
+   then **Post my score**.
    Moderators use **Read leaderboard** → **Confirm import** for other players.
    Those bulk imports always require confirmation.
 
@@ -103,9 +104,11 @@ claiming successful registration or reposting it.
   that player’s result for that puzzle, just like a manual import.
 - The extension reads only loaded, displayed leaderboard rows. Expand the
   leaderboard before reading if LinkedIn has hidden additional results.
-- The displayed leaderboard’s puzzle number determines its date. The extension
-  refuses to guess when it cannot read that number. Current page labels must be
-  in English. Direct HTTP clients may supply a date without a puzzle number.
+- The leaderboard’s puzzle identity determines its date. Older layouts display
+  a puzzle number; Today/Yesterday layouts use the URL’s game edition and the
+  selected tab. The extension refuses ambiguous or loading views. Current page
+  labels must be in English. Direct HTTP clients may supply a date without a
+  puzzle number.
 - Previews expire after ten minutes or a bot restart. A new preview replaces an
   unconfirmed preview for the same token. Closing/reopening the popup retains
   the current preview for that Chrome session. Cancel imports nothing.
@@ -194,7 +197,12 @@ was checked against LinkedIn’s current public renderer. Isolated Chromium test
 exercise that captured structure with timed results and renderer-matching badge
 markup, hidden badges, reactions, unplayed rows, popup confirmation, and actual
 Manifest V3 loading. The Python suite covers the real importer and HTTP server.
-No played Queens/Tango session was available for a live end-to-end check.
+A completed Queens leaderboard was subsequently captured from Brave on
+2026-09-26. Its sanitized regression fixture covers the Today/Yesterday tabs,
+URL puzzle identity, timed-row and badge structure, and `-:--` unplayed results.
+Player identities and solve times in the fixture are synthetic.
+Personal posting tests execute the real readers against Queens/Tango completion
+views and require confirmation before submitting.
 
 Daily Akari's public renderer (`main-2BUVX3DN.js`, inspected 2026-09-26) receives
 `animTimeBtn`, `timeResult`, and fractional `accuracy` from the game frame. Its
@@ -206,7 +214,7 @@ fixtures exercise perfect, imperfect, rounded-100%, hours, duplicates, archives,
 source spoofing, and non-Pro Mode. A disposable Chromium profile also exercises the actual isolated content script,
 service worker, and a loopback HTTP server, including frame reloads. This test
 grants host permissions in a temporary extension copy; the native permission
-dialog is not automated. No personal LinkedIn tab was changed.
+dialog is not automated in the isolated runtime tests.
 
 Automatic LinkedIn capture is additionally tested against renderer-derived
 completed-result fixtures: normal, golden-chiclet and beginner variants; failed
