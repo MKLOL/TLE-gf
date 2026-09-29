@@ -13,6 +13,9 @@ import discord
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.cogs._starboard_attachments import _attachment_is_spoiler
+from tle.cogs._starboard_images import (
+    CARRIED_EMBED_TYPES, carried_image_urls, preview_image_urls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +282,10 @@ async def build_starboard_message(message, emoji_str, count, color,
             audio_attachments.append(att)
         else:
             other_attachments.append(att)
+    # Bot cards often embed their own attachment (e.g. a rating graph).
+    # That image belongs to the carried card, not the header/gallery too.
+    carried_urls = carried_image_urls(rendered.embeds)
+    image_urls = [url for url in image_urls if url not in carried_urls]
     image_url = image_urls[0] if image_urls else None
     has_video = bool(video_attachments)
     has_audio = bool(audio_attachments)
@@ -420,39 +427,7 @@ async def build_starboard_message(message, emoji_str, count, color,
         # multiple image-type embeds, collect all of them so the gallery
         # logic below can render them.
         if not image_urls and rendered.embeds:
-            for e in rendered.embeds:
-                if e.type == 'image' and e.url:
-                    image_urls.append(e.url)
-                    continue
-                if image_urls:
-                    # Once we've started collecting plain image URLs,
-                    # don't mix in special-case fallbacks below.
-                    break
-                if e.type == 'gifv':
-                    # Tenor gifv embeds: thumbnail.url is a static PNG like
-                    #   https://media.tenor.com/{ID}AAAAe/{name}.png
-                    # The animated GIF lives at the same domain with AAAAC:
-                    #   https://media.tenor.com/{ID}AAAAC/{name}.gif
-                    chosen = None
-                    thumb_url = getattr(e.thumbnail, 'url', None) or ''
-                    gif_url = re.sub(
-                        r'(media\.tenor\.com/[^/]+?)AAAA[a-zA-Z0-9](/[^.]+)\.\w+$',
-                        r'\1AAAAC\2.gif',
-                        thumb_url,
-                    )
-                    if gif_url != thumb_url:
-                        chosen = gif_url
-                    else:
-                        chosen = thumb_url or None
-                    if chosen:
-                        image_urls.append(chosen)
-                    break
-                if e.type == 'rich' and e.image and e.image.url:
-                    image_urls.append(e.image.url)
-                    break
-                if e.thumbnail and e.thumbnail.url:
-                    image_urls.append(e.thumbnail.url)
-                    break
+            image_urls = preview_image_urls(rendered.embeds)
             if image_urls:
                 embed.set_image(url=image_urls[0])
                 image_url = image_urls[0]
@@ -471,7 +446,7 @@ async def build_starboard_message(message, emoji_str, count, color,
     # embeds like Codeforces problem cards, and URL previews like blog
     # post link previews). Skip image/video/gifv auto-embeds.
     for e in rendered.embeds:
-        if e.type in ('rich', 'link', 'article'):
+        if e.type in CARRIED_EMBED_TYPES:
             embeds.append(e)
 
     # Discord allows a maximum of 10 embeds per message
