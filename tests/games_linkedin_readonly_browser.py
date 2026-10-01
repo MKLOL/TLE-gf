@@ -98,7 +98,8 @@ def run():
                 }''')
                 before = snapshot(page)
                 options.evaluate('(config) => chrome.storage.local.set(config)', {
-                    'server': f'http://127.0.0.1:{api.server_port}', 'token': TOKEN, 'autoAkari': False})
+                    'server': f'http://127.0.0.1:{api.server_port}', 'token': TOKEN, 'autoAkari': False,
+                    'autoLinkedIn': True, 'autoLinkedInConsentVersion': 1})
                 assert options.evaluate('chrome.runtime.sendMessage({type:"configure-auto"})')['ok']
                 scripts = options.evaluate('chrome.scripting.getRegisteredContentScripts()')
                 assert len(scripts) == 1 and scripts[0]['world'] == 'ISOLATED'

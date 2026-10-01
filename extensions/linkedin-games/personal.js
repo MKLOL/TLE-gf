@@ -1,5 +1,5 @@
 import {request, settings} from './api.js';
-import {enabled} from './auto-config.js';
+import {enabled, AUTOMATIC_KEYS} from './auto-config.js';
 const $ = selector => document.querySelector(selector);
 let pending, busy = false;
 function show(value) {
@@ -76,8 +76,8 @@ $('#post-own').addEventListener('click', async () => {
 });
 const {pendingOwn} = await chrome.storage.session.get('pendingOwn');
 if (pendingOwn) show(pendingOwn);
-const automatic = await chrome.storage.local.get(['autoAkari', 'autoLinkedIn', 'akariStatus', 'linkedinStatus']);
+const automatic = await chrome.storage.local.get([...AUTOMATIC_KEYS, 'akariStatus', 'linkedinStatus']);
 $('#akari-status').textContent = enabled(automatic, 'autoAkari') ? (automatic.akariStatus?.text ||
   'Daily Akari: automatic posting is on. Save Settings to allow site access; Pro Mode is required.') : 'Daily Akari automatic posting is off.';
 $('#linkedin-status').textContent = enabled(automatic, 'autoLinkedIn') ? (automatic.linkedinStatus?.text ||
-  'LinkedIn: automatic posting of your own score is on. Save Settings to allow site access.') : 'LinkedIn automatic posting is off.';
+  'LinkedIn: automatic posting of your own score is on. Save Settings to allow site access.') : 'LinkedIn automatic posting is off. Reading a leaderboard does not post your score to Discord.';

@@ -1,5 +1,5 @@
 import {request, settings} from './api.js';
-import {enabled, AKARI_ORIGIN, LINKEDIN_ORIGIN} from './auto-config.js';
+import {enabled, AUTOMATIC_KEYS, AKARI_ORIGIN, LINKEDIN_ORIGIN} from './auto-config.js';
 
 export async function automaticMessage(message, sender) {
   const linkedin = message.type === 'linkedin-result';
@@ -17,7 +17,7 @@ export async function automaticMessage(message, sender) {
   } else if (sender.frameId === 0 || url.origin !== 'https://dailyakari.com' ||
              !['/akari', '/akari.html'].includes(url.pathname)) return {ok: false};
   const key = linkedin ? 'autoLinkedIn' : 'autoAkari';
-  const config = await chrome.storage.local.get(['autoLinkedIn', 'autoAkari']);
+  const config = await chrome.storage.local.get(AUTOMATIC_KEYS);
   const site = linkedin ? LINKEDIN_ORIGIN : AKARI_ORIGIN;
   if (!enabled(config, key) || !await chrome.permissions.contains({origins: [site]})) return {ok: false, disabled: true};
   let status;
@@ -39,7 +39,7 @@ export async function automaticMessage(message, sender) {
         time_seconds: message.timeSeconds, accuracy: 100, is_perfect: true};
     } else if (body?.game !== 'akari') throw new Error('Invalid Akari result.');
     // A user may disable automatic posting or switch accounts during catalog IO.
-    const current = await chrome.storage.local.get(['autoLinkedIn', 'autoAkari', 'token', 'server']);
+    const current = await chrome.storage.local.get([...AUTOMATIC_KEYS, 'token', 'server']);
     if (!enabled(current, key) || current.token !== connection.token ||
         (current.server && current.server !== connection.server) ||
         !await chrome.permissions.contains({origins: [site]})) return {ok: false, disabled: true};

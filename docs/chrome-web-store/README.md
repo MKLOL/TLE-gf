@@ -8,7 +8,7 @@ notice needs a public URL, and reviewers need access to a test Discord server.
 ## Create the draft
 
 1. Run `python3 extra/package_games_extension.py`. It writes
-   `dist/tle-games-1.2.4-draft.zip` with `manifest.json` at the ZIP root.
+   `dist/tle-games-1.2.5-draft.zip` with `manifest.json` at the ZIP root.
 2. Open <https://chrome.google.com/webstore/devconsole>, click **Add new item**
    (or **New item**), and upload that ZIP.
 3. Fill in **Store listing** using the description below. Choose English and
@@ -31,7 +31,8 @@ Post your daily puzzle scores to your Discord community with TLE Games.
 Connect the extension to a Discord server running TLE-gf using a personal games
 token from the bot. Your own completed LinkedIn Queens and Tango results and
 Daily Akari scores can then be registered and posted automatically. Each game
-site has its own automatic-posting switch, enabled by default during setup.
+site has its own automatic-posting switch. LinkedIn requires explicit opt-in;
+Daily Akari is enabled by default during setup.
 
 Server moderators can also read a visible LinkedIn connections leaderboard,
 review the players, times, and hint/mistake badges, and confirm a bulk import.
@@ -116,7 +117,7 @@ the dashboard certifications.
 
 1. Install the extension and open Settings. Enter the supplied HTTPS server and
    test games token; save and grant the requested site permissions.
-2. Complete today's Queens or Tango in English, with the test Discord account's
+2. Enable LinkedIn automatic posting in Settings and save. Complete today's Queens or Tango in English, with the test Discord account's
    LinkedIn name registered. Leave the result visible. Check the extension's
    status and the configured test channel for the personal score post.
 3. Complete today's Daily Akari with Pro Mode enabled. Check that time, accuracy,

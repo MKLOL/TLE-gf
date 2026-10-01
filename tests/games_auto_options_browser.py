@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 from tests.games_extension_browser import EXTENSION, TOKEN
 
 
-def check(browser):
+def check(browser, legacy=False):
     page = browser.new_page()
     state = {'mode': 'success', 'pending': []}
     errors = []
@@ -26,7 +26,7 @@ def check(browser):
 
     page.route('**/*', route_request)
     page.add_init_script('''(() => {
-      window.saved = {server:'http://api.test',token:TOKEN};
+      window.saved = {server:'http://api.test',token:TOKEN,...LEGACY};
       window.activations=[]; window.grants=[];
       window.chrome={
         storage:{local:{get:async()=>({...saved}),set:async value=>Object.assign(saved,value),
@@ -34,14 +34,20 @@ def check(browser):
         permissions:{request:async request=>{grants.push(request);return true},contains:async()=>true},
         runtime:{sendMessage:async value=>{activations.push(value);return {ok:true}}},
       };
-    })()'''.replace('TOKEN', repr(TOKEN)))
+    })()'''.replace('TOKEN', repr(TOKEN)).replace('LEGACY', '{autoLinkedIn:true}' if legacy else '{}'))
     page.goto('http://extension.test/options.html')
-    assert page.locator('#auto-linkedin').is_checked() and page.locator('#auto-akari').is_checked()
+    assert not page.locator('#auto-linkedin').is_checked()
+    assert page.locator('#auto-akari').is_checked()
     page.click('button[type=submit]')
     page.wait_for_function("document.querySelector('#status').textContent.startsWith('Connected')")
-    assert page.evaluate('saved.autoLinkedIn && saved.autoAkari')
+    assert page.evaluate('saved.autoLinkedIn===false && saved.autoAkari')
     assert set(page.evaluate('grants[0].origins')) == {
-        'http://api.test/*', 'https://dailyakari.com/*', 'https://www.linkedin.com/*'}
+        'http://api.test/*', 'https://dailyakari.com/*'}
+    # Only actively checking and saving LinkedIn opts into background posting.
+    page.check('#auto-linkedin')
+    page.click('button[type=submit]')
+    page.wait_for_function('saved.autoLinkedIn===true && saved.autoLinkedInConsentVersion===1')
+    assert 'https://www.linkedin.com/*' in page.evaluate('grants.at(-1).origins')
 
     # Opt-out is local: no Save, no token validity, no API availability needed.
     state['mode'] = 'failure'
@@ -104,5 +110,6 @@ if __name__ == '__main__':
     with sync_playwright() as p:
         browser = p.chromium.launch()
         check(browser)
+        check(browser, legacy=True)
         browser.close()
-    print('Default-on options, site grants, offline opt-out, pending Save, and Forget races passed.')
+    print('LinkedIn opt-in for new/legacy settings, site grants, offline opt-out, pending Save, and Forget races passed.')

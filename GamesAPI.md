@@ -23,14 +23,17 @@ field used by the existing rankings.
    The default server URL matches the existing complaint API configuration:
    `http://51.81.82.26:8080`. Use an HTTPS endpoint if configured. HTTP sends the
    token and results without transport encryption.
-5. **Automatically import and post my LinkedIn scores** and **Automatically
-   import and post my Daily Akari scores** are enabled by default. Save Settings
-   and grant the requested site access, then reload any open game tabs once.
+5. **Automatically import and post my LinkedIn scores** is off by default.
+   Version 1.2.5 also disables the old default-on LinkedIn setting: enable the
+   switch and save again only if you want automatic Discord posts, including
+   when revisiting completed results. Manual reads/imports work with it off.
+   **Automatically import and post my Daily Akari scores** remains on by default.
+   Save Settings and grant the requested site access, then reload any open game tabs once.
    Either option can be turned off immediately without a working server/token;
    existing explicit opt-outs
    remain off after updates. New site permission is requested when you save,
    never silently granted on update.
-6. Complete Queens or Tango and leave its completed result visible. The extension
+6. If you opted into LinkedIn automatic posting, complete Queens or Tango and leave its completed result visible. The extension
    registers and posts your own result without opening the leaderboard, copying,
    or clicking Import. LinkedIn labels currently need to be in English. Only
    today's puzzle (LinkedIn's Pacific calendar) is submitted automatically.
@@ -124,7 +127,10 @@ claiming successful registration or reposting it.
   leaderboard before reading if LinkedIn has hidden additional results.
 - The leaderboard’s puzzle identity determines its date. Older layouts display
   a puzzle number; Today/Yesterday layouts use the URL’s game edition and the
-  selected tab. The extension refuses ambiguous or loading views. Current page
+  selected tab. The popup and review show the selected day and detected date.
+  Yesterday's pinned **You** row is counted once, preserving the ordinary row's
+  badges; conflicting pinned scores require waiting for the page to finish loading.
+  The extension refuses ambiguous or loading views. Current page
   labels must be in English. Direct HTTP clients may supply a date without a
   puzzle number.
 - Previews expire after ten minutes or a bot restart. A new preview replaces an
@@ -239,7 +245,8 @@ dialog is not automated in the isolated runtime tests.
 Automatic LinkedIn capture is additionally tested against renderer-derived
 completed-result fixtures: normal, golden-chiclet and beginner variants; failed
 and playing screens; averages and other players; ambiguous/missing scores;
-hidden views; and game mismatch. A real MV3 test exercises default-on behavior,
+hidden views; and game mismatch. A real MV3 test exercises default-off LinkedIn
+behavior, upgrade from the former default-on setting, explicit opt-in,
 SPA navigation from the feed, preload frames, unchanged-DOM deduplication, and
 explicit opt-out while a previously injected reader remains active. Native site
 permission prompts are not automated. The reader waits for a complete supported

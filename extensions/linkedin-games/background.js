@@ -1,4 +1,4 @@
-import {configureAutomatic} from './auto-config.js';
+import {configureAutomatic, AUTOMATIC_KEYS} from './auto-config.js';
 import {automaticMessage} from './auto-submit.js';
 
 let configuration = Promise.resolve();
@@ -23,7 +23,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 chrome.runtime.onInstalled.addListener(() => { configure().catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => { configure().catch(() => {}); });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.autoAkari || changes.autoLinkedIn || changes.token)) configure().catch(() => {});
+  if (area === 'local' && [...AUTOMATIC_KEYS, 'token'].some(key => changes[key])) configure().catch(() => {});
 });
 chrome.permissions.onAdded.addListener(() => { configure().catch(() => {}); });
 chrome.permissions.onRemoved.addListener(() => { configure().catch(() => {}); });

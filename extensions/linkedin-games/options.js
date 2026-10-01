@@ -1,12 +1,12 @@
 import {DEFAULT_SERVER, originPermission, request, serverURL} from "./api.js";
 
-import {enabled, AKARI_ORIGIN, LINKEDIN_ORIGIN} from "./auto-config.js";
+import {enabled, AUTOMATIC_KEYS, LINKEDIN_CONSENT_VERSION, AKARI_ORIGIN, LINKEDIN_ORIGIN} from "./auto-config.js";
 
 const status = document.querySelector("#status");
 const server = document.querySelector("#server");
 const token = document.querySelector("#token");
 await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
-const stored = await chrome.storage.local.get(["server", "token", "autoAkari", "autoLinkedIn"]);
+const stored = await chrome.storage.local.get(["server", "token", ...AUTOMATIC_KEYS]);
 server.value = stored.server || DEFAULT_SERVER;
 token.value = stored.token || "";
 document.querySelector("#auto-akari").checked = enabled(stored, "autoAkari");
@@ -39,7 +39,8 @@ document.querySelector("#settings").addEventListener("submit", async event => {
   const revision = ++settingsRevision;
   try {
     const config = {server: serverURL(server.value), token: token.value.trim(), autoAkari: document.querySelector("#auto-akari").checked,
-      autoLinkedIn: document.querySelector("#auto-linkedin").checked};
+      autoLinkedIn: document.querySelector("#auto-linkedin").checked,
+      autoLinkedInConsentVersion: LINKEDIN_CONSENT_VERSION};
     if (!/^tlegames_[A-Za-z0-9_-]{43}$/.test(config.token)) {
       throw new Error("Use the games token from ;make-games-token.");
     }

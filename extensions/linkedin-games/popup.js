@@ -33,7 +33,7 @@ function setBusy(value) {
 function showPreview(data) {
   pending = data;
   $("#title").textContent = `${data.game_name} #${data.puzzle_number}`;
-  $("#summary").textContent = `${data.puzzle_date} · ${data.registered} matched · ${data.unresolved} unassigned`;
+  $("#summary").textContent = `${data.leaderboardDay ? data.leaderboardDay + ' · ' : ''}${data.puzzle_date} · ${data.registered} matched · ${data.unresolved} unassigned`;
   $("#preview").hidden = false;
 }
 async function clearPreview() {
@@ -97,7 +97,7 @@ $("#read").addEventListener("click", async () => {
       game: game.id, puzzle_date: $("#date").value,
       puzzle_number: extracted.puzzleNumber, leaderboard: extracted.leaderboard,
     });
-    const data = {...response, unplayed: extracted.unplayed || 0};
+    const data = {...response, unplayed: extracted.unplayed || 0, leaderboardDay: extracted.leaderboardDay};
     // The toolbar popup may close as soon as the review window gains focus.
     // Persist everything before opening it, and bind its URL to this preview.
     await chrome.storage.session.set({pendingImport: {

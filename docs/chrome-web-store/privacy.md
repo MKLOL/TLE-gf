@@ -59,6 +59,8 @@ community's backup policy; ask the operator about those practices.
 
 ## Your choices
 
+LinkedIn automatic posting is off until you explicitly enable and save it;
+upgrades from the old default-on setting require this opt-in again.
 You can turn off automatic posting separately for LinkedIn and Akari, decline
 site permissions, cancel a moderator import before confirmation, or uninstall
 the extension. **Forget token** removes the extension's saved token. In Discord,

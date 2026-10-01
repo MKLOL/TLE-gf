@@ -38,7 +38,8 @@ globalThis.TleReadLeaderboard = (ownOnly = false) => {
       throw new Error('The leaderboard is still loading. Wait for it to finish, then try again.');
     }
     const puzzleNumber = helpers.puzzleNumber(board, location.href, visible);
-    const rows = [];
+    const leaderboardDay = helpers.selectedDay(board, visible);
+    const rows = [], pinned = [];
     let unplayed = 0;
     for (const container of board.querySelectorAll('.pr-connections-leaderboard-player__container')) {
       if (!visible(container)) continue;
@@ -69,14 +70,27 @@ globalThis.TleReadLeaderboard = (ownOnly = false) => {
           element.getAttribute('title') || '');
       }
       const status = badgeText.filter(value => /\bno hints?\b|\bno mistakes?\b|🤓|💎/i.test(value)).join(' ');
-      rows.push({name, isYou, time: score, status});
+      const destination = container.closest('.pr-connections-leaderboard__sticky-section') ? pinned : rows;
+      destination.push({name, isYou, time: score, status});
+    }
+    // Yesterday repeats You in a sticky footer. Prefer the ordinary row's name
+    // and badges; the footer can contain an unrelated "Top 1% today" insight.
+    for (const entry of pinned) {
+      const owners = rows.filter(row => row.isYou);
+      if (entry.isYou && owners.length === 1) {
+        if (entry.time !== owners[0].time) {
+          throw new Error('Your pinned score and leaderboard disagree. Wait for the selected day to finish loading, then read again.');
+        }
+        continue;
+      }
+      rows.push(entry);
     }
     if (!rows.length) throw new Error("No completed timed results are visible in this leaderboard.");
     if (rows.length > 200) throw new Error("This leaderboard has more than 200 loaded results.");
     if (ownOnly && rows.length !== 1) throw new Error("Could not identify exactly one completed You row.");
     const leaderboard = helpers.serialize(rows);
     if (leaderboard.length > 12000) throw new Error("This leaderboard is too large to import.");
-    return {gamePath, puzzleNumber, leaderboard, count: rows.length, unplayed, rows};
+    return {gamePath, puzzleNumber, leaderboardDay, leaderboard, count: rows.length, unplayed, rows};
   } catch (error) {
     return {error: error.message};
   }

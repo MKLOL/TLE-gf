@@ -105,7 +105,7 @@ function render() {
   const data = record.data;
   $('#title').textContent = `Review ${data.game_name} results`;
   $('#connection').textContent = `${catalog.guild_name} · ${catalog.user_name}`;
-  $('#puzzle-meta').textContent = `Puzzle #${data.puzzle_number} · ${data.puzzle_date} · LinkedIn’s Pacific calendar`;
+  $('#puzzle-meta').textContent = `${data.leaderboardDay ? data.leaderboardDay + ' · ' : ''}Puzzle #${data.puzzle_number} · ${data.puzzle_date} · LinkedIn’s Pacific calendar`;
   $('#summary').replaceChildren();
   for (const [count, label] of [[data.rows.length, 'Completed scores'], [data.registered, 'Matched to Discord'],
                               [data.unresolved, 'Unassigned scores']]) {

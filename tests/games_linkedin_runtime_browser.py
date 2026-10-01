@@ -60,17 +60,35 @@ def run():
                 options = context.new_page()
                 options.goto('chrome-extension://' + worker.url.split('/')[2] + '/options.html')
                 assert options.locator('#auto-akari').is_checked()
-                assert options.locator('#auto-linkedin').is_checked()
-                # Neither switch is stored. Automatic behavior must really default on.
+                assert not options.locator('#auto-linkedin').is_checked()
+                # An old default-on installation must stop without needing a Save.
                 options.evaluate('(config) => chrome.storage.local.set(config)', {
-                    'server': f'http://127.0.0.1:{api.server_port}', 'token': 'tlegames_' + 'a' * 43})
+                    'server': f'http://127.0.0.1:{api.server_port}', 'token': 'tlegames_' + 'a' * 43,
+                    'autoLinkedIn': True})
                 assert options.evaluate('chrome.runtime.sendMessage({type:"configure-auto"})')['ok']
-                assert set(options.evaluate('chrome.scripting.getRegisteredContentScripts().then(rows=>rows.map(row=>row.id))')) == {'tle-akari', 'tle-linkedin'}
+                assert options.evaluate('chrome.scripting.getRegisteredContentScripts().then(rows=>rows.map(row=>row.id))') == ['tle-akari']
                 context.route('https://www.linkedin.com/**', lambda route: route.fulfill(
                     body=FIXTURE if '/preload/' in route.request.url else '<p>Feed or playing screen</p>', content_type='text/html'))
                 page = context.new_page()
                 errors = []
                 page.on('pageerror', lambda error: errors.append(str(error)))
+                # Simulate a reader already installed by 1.2.4. The worker must
+                # refuse its submissions before any API request, then remove it.
+                options.evaluate('''chrome.scripting.registerContentScripts([{
+                    id:'tle-linkedin',matches:['https://www.linkedin.com/*'],
+                    js:['leaderboard.js','linkedin-result.js','linkedin-auto.js'],runAt:'document_start'
+                }])''')
+                page.goto('https://www.linkedin.com/games/tango/results/')
+                page.set_content('<iframe src="/preload/"></iframe>')
+                page.frame_locator('iframe').locator('.pr-top__header').wait_for()
+                page.wait_for_timeout(2300)
+                assert not posts and not gets
+                assert options.evaluate('chrome.runtime.sendMessage({type:"configure-auto"})')['ok']
+                assert options.evaluate('chrome.scripting.getRegisteredContentScripts().then(rows=>rows.map(row=>row.id))') == ['tle-akari']
+                # Explicit opt-in enables the same capture workflow as before.
+                options.evaluate('chrome.storage.local.set({autoLinkedInConsentVersion:1})')
+                assert options.evaluate('chrome.runtime.sendMessage({type:"configure-auto"})')['ok']
+                assert set(options.evaluate('chrome.scripting.getRegisteredContentScripts().then(rows=>rows.map(row=>row.id))')) == {'tle-akari', 'tle-linkedin'}
                 page.goto('https://www.linkedin.com/feed/')
                 page.set_content('<iframe src="/preload/"></iframe>')
                 page.frame_locator('iframe').locator('.pr-top__header').wait_for()
@@ -113,7 +131,7 @@ def run():
                 page.wait_for_timeout(2300)
                 assert len(posts) == 2
                 assert not errors, errors
-                print('Real default-on LinkedIn automatic posting, SPA/preload, own-only payload, deduplication and opt-out passed.')
+                print('Real MV3 legacy/default-off guard, explicit LinkedIn opt-in, SPA/preload, deduplication and opt-out passed.')
             finally:
                 context.close()
     finally:

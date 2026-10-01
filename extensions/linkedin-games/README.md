@@ -16,8 +16,9 @@ Run `python3 extra/package_games_extension.py` to create a minimal upload ZIP.
 - `review.*`, `review-window.js`: resizable moderator review window, searchable
   LinkedIn-to-Discord matches, and explicit import confirmation.
 - `akari.js`, `linkedin-result.js`, `linkedin-auto.js`: read-only personal completion capture.
-- `auto-config.js`, `auto-submit.js`, `background.js`: default-on automatic posting and site permissions.
-  Explicit opt-outs remain disabled; moderator bulk imports still need confirmation.
+- `auto-config.js`, `auto-submit.js`, `background.js`: opt-in LinkedIn automatic posting,
+  default-on Akari posting, and site permissions. Upgrading to 1.2.5 disables legacy
+  default-on LinkedIn settings until explicitly enabled again. Moderator bulk imports need confirmation.
 
 Verification: Python service/token tests plus real HTTP/Discord integration run
 with `python3 -m pytest tests/ -q`. Browser extraction and popup checks are in
@@ -38,3 +39,5 @@ result submissions or extra LinkedIn requests occur.
 opening the full review window. Closing that window keeps the preview available
 through **Review matches…** in the toolbar popup until it expires. Searching or
 filtering only changes the display; confirmation explicitly imports all rows.
+The selected Today/Yesterday tab determines the date shown in the review.
+Yesterday's duplicate pinned **You** result is included only once.
