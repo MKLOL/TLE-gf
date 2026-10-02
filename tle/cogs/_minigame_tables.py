@@ -23,7 +23,6 @@ from tle.util.akari_rating import rank_for_rating
 from tle.util.akari_weekly import rank_week
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
 from tle.cogs._minigame_table_cells import _draw_table_cell
-from tle.cogs._minigame_standings_image import _get_standings_table_image
 from tle.cogs._minigame_result_rows import (  # noqa: F401
     _PuzzlePlayerInfo,
     _format_akari_result_status,
@@ -116,14 +115,7 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
                                   row_colors=None,
                                   cell_colors=None,
                                   width=_AKARI_IMAGE_WIDTH,
-                                  standings_style=False,
                                   filename='akari-results.png'):
-    if standings_style:
-        return _get_standings_table_image(
-            table_rows, title=title, footer=footer, header=header, cols=cols,
-            cell_colors=cell_colors, right_align_cols=right_align_cols,
-            column_margins=column_margins, fonts=_AKARI_IMAGE_FONTS,
-            width=width, filename=filename)
     title_height = _AKARI_IMAGE_ROW_HEIGHT if title is not None else 0
     footer_height = _AKARI_IMAGE_ROW_HEIGHT if footer is not None else 0
     height = int(
@@ -444,13 +436,12 @@ def _get_akari_weekly_table_image_file(
         footer=footer,
         header=(('#', 'Name', 'Rating', 'Score', 'Performance', 'Δ')
                 if annotated else ('#', 'Player', identity_label, 'Score', 'Days')),
-        cols=((54, 246, 174, 140, 164, 82)
+        cols=((54, 216, 180, 140, 170, 100)
               if annotated else _AKARI_WEEKLY_COLS),
         row_colors=row_colors, cell_colors=cell_colors,
         right_align_cols=((0, 3, 5) if annotated else (0, 3, 4)),
         center_header_cols=(),
         # Reserve a wider gap after the right-aligned Score column.
-        column_margins={3: 40, 5: 0} if annotated else None,
-        standings_style=annotated,
+        column_margins={3: 40} if annotated else None,
         filename=filename,
     )
