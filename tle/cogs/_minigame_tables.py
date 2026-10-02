@@ -111,6 +111,7 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
                                   cols=_AKARI_PUZZLE_COLS,
                                   right_align_cols=None,
                                   center_header_cols=(),
+                                  column_margins=None,
                                   row_colors=None,
                                   cell_colors=None,
                                   width=_AKARI_IMAGE_WIDTH,
@@ -138,10 +139,11 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
         context.rectangle(0, y, width, _AKARI_IMAGE_ROW_HEIGHT)
         context.fill()
 
-    def draw_cell(text, cell_width, *, align=Pango.Alignment.LEFT, bold=False):
+    def draw_cell(text, cell_width, *, align=Pango.Alignment.LEFT, bold=False,
+                  column_margin=_AKARI_IMAGE_COLUMN_MARGIN):
         _draw_table_cell(
             layout, context, Pango, PangoCairo, text, cell_width,
-            _AKARI_IMAGE_COLUMN_MARGIN, align, bold)
+            column_margin, align, bold)
 
     def draw_line(text, y, color, *, bold=False):
         context.set_source_rgb(*(component / 255 for component in color))
@@ -167,7 +169,9 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
             align = (Pango.Alignment.CENTER if i in centered else
                      Pango.Alignment.RIGHT if i in right_set else
                      Pango.Alignment.LEFT)
-            draw_cell(value, cell_width, align=align, bold=bold)
+            margin = (column_margins or {}).get(i, _AKARI_IMAGE_COLUMN_MARGIN)
+            draw_cell(value, cell_width, align=align, bold=bold,
+                      column_margin=margin)
 
     y = _AKARI_IMAGE_MARGIN
     if title is not None:
@@ -432,10 +436,12 @@ def _get_akari_weekly_table_image_file(
         footer=footer,
         header=(('#', 'Name', 'Rating', 'Score', 'Performance', 'Δ')
                 if annotated else ('#', 'Player', identity_label, 'Score', 'Days')),
-        cols=((54, 246, 180, 110, 170, 100)
+        cols=((54, 216, 180, 140, 170, 100)
               if annotated else _AKARI_WEEKLY_COLS),
         row_colors=row_colors, cell_colors=cell_colors,
-        right_align_cols=((0, 3, 4, 5) if annotated else (0, 3, 4)),
-        center_header_cols=(4,) if annotated else (),
+        right_align_cols=((0, 3, 5) if annotated else (0, 3, 4)),
+        center_header_cols=(),
+        # Reserve a wider gap after the right-aligned Score column.
+        column_margins={3: 40} if annotated else None,
         filename=filename,
     )
