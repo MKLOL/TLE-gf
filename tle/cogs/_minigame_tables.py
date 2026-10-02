@@ -110,6 +110,7 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
                                   header=('#', 'Name', 'Handle', 'Result', 'Time'),
                                   cols=_AKARI_PUZZLE_COLS,
                                   right_align_cols=None,
+                                  center_header_cols=(),
                                   row_colors=None,
                                   cell_colors=None,
                                   width=_AKARI_IMAGE_WIDTH,
@@ -157,13 +158,15 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
     else:
         right_set = set(right_align_cols)
 
-    def draw_row(row, y, color, *, bold=False, per_cell=None):
+    def draw_row(row, y, color, *, bold=False, per_cell=None,
+                 centered=()):
         context.move_to(_AKARI_IMAGE_MARGIN, y)
         for i, (value, cell_width) in enumerate(zip(row, cols)):
             c = per_cell[i] if per_cell is not None else color
             context.set_source_rgb(*(component / 255 for component in c))
-            align = (Pango.Alignment.RIGHT if i in right_set
-                     else Pango.Alignment.LEFT)
+            align = (Pango.Alignment.CENTER if i in centered else
+                     Pango.Alignment.RIGHT if i in right_set else
+                     Pango.Alignment.LEFT)
             draw_cell(value, cell_width, align=align, bold=bold)
 
     y = _AKARI_IMAGE_MARGIN
@@ -171,7 +174,8 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
         draw_line(title, y, _SMOKE_WHITE, bold=True)
         y += _AKARI_IMAGE_ROW_HEIGHT
 
-    draw_row(header, y, _SMOKE_WHITE, bold=True)
+    draw_row(header, y, _SMOKE_WHITE, bold=True,
+             centered=center_header_cols)
     y += int(_AKARI_IMAGE_ROW_HEIGHT * _AKARI_IMAGE_HEADER_SPACING)
 
     for i, row in enumerate(table_rows):
@@ -432,5 +436,6 @@ def _get_akari_weekly_table_image_file(
               if annotated else _AKARI_WEEKLY_COLS),
         row_colors=row_colors, cell_colors=cell_colors,
         right_align_cols=((0, 3, 4, 5) if annotated else (0, 3, 4)),
+        center_header_cols=(4,) if annotated else (),
         filename=filename,
     )

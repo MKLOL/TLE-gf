@@ -117,6 +117,7 @@ def test_current_renderer_uses_rating_and_performance_colors(monkeypatch):
         None, standings, title='Current', name_fn=lambda g, r: r.user_id,
         identity_fn=lambda g, r: '-')
     assert options['header'] == ('#', 'Name', 'Rating', 'Score', 'Performance', 'Δ')
+    assert options['center_header_cols'] == (4,)
     assert sum(options['cols']) == 860
     assert len(options['cell_colors'][0]) == len(rows[0]) == 6
     assert options['cell_colors'][0][2] == _akari_row_text_color(1200)
