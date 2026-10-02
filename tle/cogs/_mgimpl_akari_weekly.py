@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, tasks
-from tle.util.akari_weekly import week_start
+from tle.util.akari_weekly import week_start, annotate_weekly_standings
 from tle.cogs._minigame_akari import AKARI_GAME
 from tle.cogs._minigame_helpers import ChannelOrThread, MinigameCogError, _mg
 from tle.cogs._minigame_tables import _AKARI_IMAGE_MAX_ROWS
@@ -95,18 +95,19 @@ class ImplAkariWeeklyMixin:
 
     async def _cmd_akari_current_week_ratings(
             self, ctx, *, excluded_ids=None, included_ids=None,
-            weekdays=None, date_bounds=None, show_all=False):
+            weekdays=None, date_bounds=None, show_all=False, first_days=None):
         as_of_date, standings_date = self._weekly_display_dates(ctx.guild.id)
-        _rows, standings = await self._akari_weekly_preview(
+        rating_rows, standings = await self._akari_weekly_preview(
             ctx.guild.id, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
             date_bounds=date_bounds, as_of_date=as_of_date,
-            standings_date=standings_date)
+            standings_date=standings_date, first_days=first_days)
+        standings = annotate_weekly_standings(standings, rating_rows)
         if not show_all:
             visible = (cf_common.user_db.get_akari_registrants(ctx.guild.id)
                        - self._akari_banned_user_ids(ctx.guild.id))
             standings = [row for row in standings if row.user_id in visible]
-        await self._send_akari_weekly_scores(ctx, standings)
+        await self._send_akari_weekly_scores(ctx, standings, first_days=first_days)
 
     async def _cmd_akari_weekly_post(self, ctx, args):
         if not args:

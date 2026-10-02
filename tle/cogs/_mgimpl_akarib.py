@@ -298,7 +298,7 @@ class ImplAkariBMixin:
                                         test_decay=False, weekly=False,
                                         weekdays=None, date_bounds=None,
                                         beta=False, time_only=False,
-                                        current=False):
+                                        current=False, first_days=None):
         """Admin view: leaderboard image including shadow-rated (unopted-in) users.
 
         Same image as ``;mg akari ratings`` but without the registration filter —
@@ -318,7 +318,7 @@ class ImplAkariBMixin:
         if current:
             return await self._cmd_akari_current_week_ratings(
                 ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds, show_all=True)
+                weekdays=weekdays, date_bounds=date_bounds, first_days=first_days, show_all=True)
         filtered = bool(excluded_ids or included_ids or test_decay or beta
                         or time_only
                         or weekdays is not None or date_bounds is not None)

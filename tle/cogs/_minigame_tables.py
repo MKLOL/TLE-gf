@@ -20,6 +20,7 @@ from gi.repository import Pango, PangoCairo
 
 from tle.util import codeforces_common as cf_common
 from tle.util.akari_rating import rank_for_rating
+from tle.util.akari_weekly import rank_week
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
 from tle.cogs._minigame_table_cells import _draw_table_cell
 from tle.cogs._minigame_result_rows import (  # noqa: F401
@@ -370,19 +371,16 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
 
 def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
                              name_fn=None):
-    """Weekly rows: rank, player, handle, rounded score, submitted days."""
+    """Weekly scores, optionally annotated with rating, performance and delta."""
     if identity_fn is None:
         identity_fn = lambda g, row: _safe_cf_handle(g, row.user_id)
     if name_fn is None:
         name_fn = lambda g, row: _safe_user_name(g, row.user_id)
     rows = []
-    previous_score = None
-    rank = 0
-    for index, standing in enumerate(standings, start=1):
+    ranks = rank_week(standings)
+    for standing in standings:
         rounded_score = round(standing.score * 1000)
-        if previous_score is None or rounded_score != previous_score:
-            rank = index
-            previous_score = rounded_score
+        rank = ranks[str(standing.user_id)]
         rows.append((
             rank,
             name_fn(guild, standing),
@@ -390,6 +388,14 @@ def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
             rounded_score,
             standing.days_played,
         ))
+    if standings and standings[0].rating is not None:
+        rows = [row + (
+            f'{round(s.rating)} · {rank_for_rating(round(s.rating)).title_abbr}',
+            (f'{round(s.performance)} · '
+             f'{rank_for_rating(round(s.performance)).title_abbr}'
+             if s.performance is not None else '—'),
+            f'{round(s.delta):+d}' if s.delta is not None else '—')
+                for row, s in zip(rows, standings)]
     return rows
 
 
@@ -405,12 +411,26 @@ def _get_akari_weekly_table_image_file(
     if len(standings) > len(table_rows):
         footer = (f'Players {start_index + 1}–{start_index + len(table_rows)} '
                   f'of {len(standings)}')
+    annotated = bool(standings and standings[0].rating is not None)
+    displayed = standings[start_index:start_index + _AKARI_IMAGE_MAX_ROWS]
+    row_colors = ([_akari_row_text_color(s.rating) for s in displayed]
+                  if annotated else None)
+    cell_colors = ([tuple([color] * 3 + [_BLACK, _BLACK, color,
+                    _akari_row_text_color(s.performance)
+                    if s.performance is not None else _BLACK,
+                    (_DELTA_GREEN if round(s.delta) > 0 else _DELTA_GRAY)
+                    if s.delta is not None else _BLACK])
+                   for s, color in zip(displayed, row_colors)]
+                   if annotated else None)
     return _mg()._get_akari_puzzle_table_image(
         table_rows,
         title=title,
         footer=footer,
-        header=('#', 'Player', identity_label, 'Score', 'Days'),
-        cols=_AKARI_WEEKLY_COLS,
-        right_align_cols=(0, 3, 4),
+        header=(('#', 'Name', identity_label, 'Score', 'Days', 'Rating', 'Performance', 'Delta')
+                if annotated else ('#', 'Player', identity_label, 'Score', 'Days')),
+        cols=((44, 170, 150, 80, 46, 130, 140, 100)
+              if annotated else _AKARI_WEEKLY_COLS),
+        row_colors=row_colors, cell_colors=cell_colors,
+        right_align_cols=((0, 3, 4, 7) if annotated else (0, 3, 4)),
         filename=filename,
     )

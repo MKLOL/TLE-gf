@@ -162,3 +162,9 @@ one token for every game using `;make-games-token`.
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)
+
+Akari current weekly standings use `;akari ratings +current`, with rating-tier
+colors, completed weekly ratings, and provisional performance and prospective rating delta against that
+weekly rating field. Use `;akari ratings +current +days=3` to score only
+Monday through Wednesday (N may be 1–7). This filter does not alter completed
+weekly ratings. The slash command offers the equivalent `first_days` option.
