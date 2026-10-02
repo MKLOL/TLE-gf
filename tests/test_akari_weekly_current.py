@@ -27,13 +27,13 @@ def test_performance_uses_completed_weekly_field_and_ties():
     table = _akari_weekly_table_rows(
         None, result, name_fn=lambda g, r: r.user_id,
         identity_fn=lambda g, r: '-')
-    assert len(table[0]) == 8
-    assert table[0][5].startswith('1600')
-    assert table[0][6] == table[1][6]
+    assert len(table[0]) == 5
+    assert table[0][1].startswith('1600')
+    assert table[0][3] == table[1][3] == str(round(expected))
     expected_deltas = compute_round({'10': 1600, '20': 1200},
                                     {'10': 1, '20': 1}, damping=0.75)
     assert result[0].delta == expected_deltas['10']
-    assert table[0][7] == f"{round(expected_deltas['10']):+d}"
+    assert table[0][4] == f"{round(expected_deltas['10']):+d}"
 
 
 def test_new_player_baseline_and_solo_performance():
@@ -115,9 +115,9 @@ def test_current_renderer_uses_rating_and_performance_colors(monkeypatch):
     rows, options = _get_akari_weekly_table_image_file(
         None, standings, title='Current', name_fn=lambda g, r: r.user_id,
         identity_fn=lambda g, r: '-')
-    assert options['header'][-3:] == ('Rating', 'Performance', 'Delta')
+    assert options['header'] == ('Name', 'Rating', 'Score', 'Performance', 'Δ')
     assert sum(options['cols']) == 860
-    assert len(options['cell_colors'][0]) == len(rows[0]) == 8
-    assert options['cell_colors'][0][5] == _akari_row_text_color(1200)
-    assert options['cell_colors'][0][6] == _akari_row_text_color(
+    assert len(options['cell_colors'][0]) == len(rows[0]) == 5
+    assert options['cell_colors'][0][1] == _akari_row_text_color(1200)
+    assert options['cell_colors'][0][3] == _akari_row_text_color(
         standings[0].performance)
