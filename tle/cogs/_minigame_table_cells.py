@@ -13,37 +13,41 @@ class _PreserveSuffixText(str):
         return value
 
 
-def _cell_markup(text, bold):
+def _cell_markup(text, bold, font_features=None):
     markup = html.escape(str(text))
-    return f'<b>{markup}</b>' if bold else markup
+    markup = f'<b>{markup}</b>' if bold else markup
+    if font_features:
+        features = html.escape(font_features, quote=True)
+        markup = f'<span font_features="{features}">{markup}</span>'
+    return markup
 
 
 def _draw_table_cell(layout, context, pango, pango_cairo, text, cell_width,
-                     column_margin, align, bold=False):
+                     column_margin, align, bold=False, font_features=None):
     """Draw one cell, reserving room for a protected trailing annotation."""
     available_width = max(1, cell_width - column_margin)
     suffix = getattr(text, 'preserved_suffix', None)
     layout.set_alignment(align)
     if suffix is not None:
         layout.set_width(-1)
-        layout.set_markup(_cell_markup(text, bold), -1)
+        layout.set_markup(_cell_markup(text, bold, font_features), -1)
         full_width, _ = layout.get_pixel_size()
         if full_width > available_width:
-            layout.set_markup(_cell_markup(suffix, bold), -1)
+            layout.set_markup(_cell_markup(suffix, bold, font_features), -1)
             suffix_width, _ = layout.get_pixel_size()
             prefix_width = max(1, available_width - suffix_width)
             layout.set_width(int(prefix_width * pango.SCALE))
             layout.set_markup(
-                _cell_markup(text.preserved_prefix, bold), -1)
+                _cell_markup(text.preserved_prefix, bold, font_features), -1)
             pango_cairo.show_layout(context, layout)
             context.rel_move_to(prefix_width, 0)
             layout.set_width(int(suffix_width * pango.SCALE))
-            layout.set_markup(_cell_markup(suffix, bold), -1)
+            layout.set_markup(_cell_markup(suffix, bold, font_features), -1)
             pango_cairo.show_layout(context, layout)
             context.rel_move_to(cell_width - prefix_width, 0)
             return
 
     layout.set_width(int(available_width * pango.SCALE))
-    layout.set_markup(_cell_markup(text, bold), -1)
+    layout.set_markup(_cell_markup(text, bold, font_features), -1)
     pango_cairo.show_layout(context, layout)
     context.rel_move_to(cell_width, 0)

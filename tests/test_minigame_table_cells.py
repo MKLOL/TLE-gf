@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 from tle.cogs._minigame_table_cells import (
     _PreserveSuffixText,
@@ -67,3 +68,27 @@ def test_short_name_and_rating_suffix_stay_adjacent():
 
     assert layout.drawn == [('Alice (1304 CM)', 290)]
     assert context.moves == [(300, 0)]
+
+
+def test_tabular_digits_keep_long_name_suffix_and_escape_markup():
+    class _MarkupLayout(_Layout):
+        def get_pixel_size(self):
+            root = ElementTree.fromstring(f'<root>{self.markup}</root>')
+            return len(''.join(root.itertext())) * 10, 18
+
+    layout = _MarkupLayout()
+    context = _Context()
+    text = _PreserveSuffixText(
+        '<Admin> Alice & Bob with a long name', ' (1304 CM)')
+
+    _draw_table_cell(
+        layout, context, SimpleNamespace(SCALE=1), _PangoCairo,
+        text, cell_width=230, column_margin=10, align='left',
+        bold=True, font_features='tnum')
+
+    assert layout.drawn == [
+        ('<span font_features="tnum"><b>&lt;Admin&gt; Alice &amp; Bob '
+         'with a long name</b></span>', 120),
+        ('<span font_features="tnum"><b> (1304 CM)</b></span>', 100),
+    ]
+    assert context.moves == [(120, 0), (110, 0)]

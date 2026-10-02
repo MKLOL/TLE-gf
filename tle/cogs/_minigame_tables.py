@@ -22,7 +22,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util.akari_rating import rank_for_rating
 from tle.util.akari_weekly import rank_week
 from tle.cogs._minigame_helpers import _mg, _safe_user_name, _safe_cf_handle
-from tle.cogs._minigame_table_cells import _draw_table_cell
+from tle.cogs._minigame_table_cells import _PreserveSuffixText, _draw_table_cell
 from tle.cogs._minigame_standings_image import _get_standings_table_image
 from tle.cogs._minigame_result_rows import (  # noqa: F401
     _PuzzlePlayerInfo,
@@ -43,13 +43,15 @@ _AKARI_IMAGE_HEADER_SPACING = 1.25
 _AKARI_IMAGE_COLUMN_MARGIN = 10
 # Table layouts share the same Cairo renderer.  Akari keeps separate Result
 # and Time columns; Queens omits Result because the day leaderboard is ranked
-# by time only.  Widths sum to ``_AKARI_IMAGE_WIDTH − 2 × MARGIN`` (860).
-_AKARI_RATING_COLS = (54, 300, 260, 150, 96)
-_AKARI_WEEKLY_COLS = (54, 300, 300, 110, 96)
-_AKARI_PUZZLE_COLS = (54, 300, 260, 150, 96)
-_AKARI_PUZZLE_DELTA_COLS = (54, 280, 190, 90, 80, 100, 66)
-_QUEENS_RESULTS_COLS = (54, 360, 340, 106)
-_QUEENS_RESULTS_DELTA_COLS = (54, 300, 280, 90, 80, 56)
+# by time only.  Most layouts use 860 px of a 900 px image; annotated Akari
+# results need 960 px (1000 px image) for seven columns and rating suffixes.
+# These are preferred widths; the card renderer also measures numeric cells.
+_AKARI_RATING_COLS = (56, 282, 246, 176, 100)
+_AKARI_WEEKLY_COLS = (56, 300, 260, 140, 104)
+_AKARI_PUZZLE_COLS = (56, 296, 268, 112, 128)
+_AKARI_PUZZLE_DELTA_COLS = (56, 320, 190, 88, 132, 92, 82)
+_QUEENS_RESULTS_COLS = (56, 346, 330, 128)
+_QUEENS_RESULTS_DELTA_COLS = (56, 298, 204, 132, 88, 82)
 
 _AKARI_IMAGE_FONTS = [
     'Noto Sans',
@@ -117,11 +119,13 @@ def _get_akari_puzzle_table_image(table_rows, *, title=None, footer=None,
                                   cell_colors=None,
                                   width=_AKARI_IMAGE_WIDTH,
                                   standings_style=False,
+                                  flexible_cols=(1, 2),
                                   filename='akari-results.png'):
     if standings_style:
         return _get_standings_table_image(
             table_rows, title=title, footer=footer, header=header, cols=cols,
-            cell_colors=cell_colors, right_align_cols=right_align_cols,
+            cell_colors=cell_colors, row_colors=row_colors,
+            right_align_cols=right_align_cols, flexible_cols=flexible_cols,
             column_margins=column_margins, fonts=_AKARI_IMAGE_FONTS,
             width=width, filename=filename)
     title_height = _AKARI_IMAGE_ROW_HEIGHT if title is not None else 0
@@ -236,16 +240,17 @@ def _get_akari_puzzle_table_image_file(guild, rows, title,
             '#', 'Name', identity_label, 'Result', 'Time', 'Perf',
             '\N{INCREMENT}')
         cols = _AKARI_PUZZLE_DELTA_COLS
-        right_align_cols = (0, 4, 5, 6)
+        right_align_cols = (0, 3, 4, 6)
     else:
         header = ('#', 'Name', identity_label, 'Result', 'Time')
         cols = _AKARI_PUZZLE_COLS
-        right_align_cols = None  # default — # and Time right
+        right_align_cols = (0, 3, 4)
     return _mg()._get_akari_puzzle_table_image(
         displayed_rows, title=title, footer=footer,
         header=header, cols=cols,
         right_align_cols=right_align_cols, row_colors=row_colors,
-        cell_colors=cell_colors)
+        cell_colors=cell_colors, column_margins={4: 40} if annotated else None,
+        width=sum(cols) + 2 * _AKARI_IMAGE_MARGIN, standings_style=True)
 
 
 def _get_queens_results_table_image_file(guild, rows, title,
@@ -281,7 +286,7 @@ def _get_queens_results_table_image_file(guild, rows, title,
         header = (
             '#', 'Name', identity_label, 'Time', 'Perf', '\N{INCREMENT}')
         cols = _QUEENS_RESULTS_DELTA_COLS
-        right_align_cols = (0, 3, 4, 5)
+        right_align_cols = (0, 3, 5)
     else:
         header = ('#', 'Name', identity_label, 'Time')
         cols = _QUEENS_RESULTS_COLS
@@ -290,7 +295,8 @@ def _get_queens_results_table_image_file(guild, rows, title,
         displayed_rows, title=title, footer=footer,
         header=header, cols=cols,
         right_align_cols=right_align_cols, row_colors=row_colors,
-        cell_colors=cell_colors,
+        cell_colors=cell_colors, column_margins={3: 40} if annotated else None,
+        standings_style=True,
         filename=filename)
 
 
@@ -313,7 +319,7 @@ def _akari_rating_table_rows(guild, rating_rows, registrants, *,
     for index, row in enumerate(rating_rows, start=1):
         name = name_fn(guild, row)
         if mark_registered and row.user_id in registrants:
-            name = f'{name} \N{CHECK MARK}'
+            name = _PreserveSuffixText(name, ' \N{CHECK MARK}')
         rating = round(row.rating)
         rank = rank_for_rating(rating, ranks)
         rows.append((
@@ -382,7 +388,7 @@ def _get_akari_rating_table_image_file(guild, rating_rows, registrants,
         table_rows, title=title, footer=footer,
         header=('#', 'Name', identity_label, 'Rating', games_label),
         cols=_AKARI_RATING_COLS,
-        row_colors=row_colors)
+        row_colors=row_colors, standings_style=True)
 
 
 def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
@@ -444,13 +450,13 @@ def _get_akari_weekly_table_image_file(
         footer=footer,
         header=(('#', 'Name', 'Rating', 'Score', 'Performance', 'Δ')
                 if annotated else ('#', 'Player', identity_label, 'Score', 'Days')),
-        cols=((54, 246, 174, 140, 164, 82)
+        cols=((56, 264, 164, 138, 156, 82)
               if annotated else _AKARI_WEEKLY_COLS),
         row_colors=row_colors, cell_colors=cell_colors,
         right_align_cols=((0, 3, 5) if annotated else (0, 3, 4)),
         center_header_cols=(),
         # Reserve a wider gap after the right-aligned Score column.
-        column_margins={3: 40, 5: 0} if annotated else None,
-        standings_style=annotated,
+        column_margins={3: 40} if annotated else None,
+        standings_style=True, flexible_cols=(1,) if annotated else (1, 2),
         filename=filename,
     )
