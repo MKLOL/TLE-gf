@@ -390,7 +390,7 @@ def _akari_weekly_table_rows(guild, standings, *, identity_fn=None,
         ))
     if standings and standings[0].rating is not None:
         rows = [(
-            row[1],
+            row[0], row[1],
             f'{round(s.rating)} · {rank_for_rating(round(s.rating)).title_abbr}',
             row[3],
             str(round(s.performance)) if s.performance is not None else '—',
@@ -415,7 +415,7 @@ def _get_akari_weekly_table_image_file(
     displayed = standings[start_index:start_index + _AKARI_IMAGE_MAX_ROWS]
     row_colors = ([_akari_row_text_color(s.rating) for s in displayed]
                   if annotated else None)
-    cell_colors = ([tuple([color, color, _BLACK,
+    cell_colors = ([tuple([color, color, color, _BLACK,
                     _akari_row_text_color(s.performance)
                     if s.performance is not None else _BLACK,
                     (_DELTA_GREEN if round(s.delta) > 0 else _DELTA_GRAY)
@@ -426,11 +426,11 @@ def _get_akari_weekly_table_image_file(
         table_rows,
         title=title,
         footer=footer,
-        header=(('Name', 'Rating', 'Score', 'Performance', 'Δ')
+        header=(('#', 'Name', 'Rating', 'Score', 'Performance', 'Δ')
                 if annotated else ('#', 'Player', identity_label, 'Score', 'Days')),
-        cols=((300, 180, 110, 170, 100)
+        cols=((54, 246, 180, 110, 170, 100)
               if annotated else _AKARI_WEEKLY_COLS),
         row_colors=row_colors, cell_colors=cell_colors,
-        right_align_cols=((2, 3, 4) if annotated else (0, 3, 4)),
+        right_align_cols=((0, 3, 4, 5) if annotated else (0, 3, 4)),
         filename=filename,
     )
