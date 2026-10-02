@@ -4,6 +4,7 @@
 import time
 
 import discord
+from tle.util.akari_weekly import parse_weekly_days
 from discord.ext import commands
 
 from tle import constants
@@ -25,6 +26,7 @@ logger = __import__('logging').getLogger(__name__)
 
 
 class AkariCmdsMixin:
+
     @commands.group(name='akari', aliases=['dailyakari'], brief='Daily Akari commands',
                     invoke_without_command=True)
     async def akari(self, ctx):
@@ -32,11 +34,13 @@ class AkariCmdsMixin:
         await ctx.send_help(ctx.command)
 
     @akari.command(name='here', brief='Set the Daily Akari channel to the current channel')
+
     @akari_mod_only()
     async def akari_here(self, ctx):
         await self._cmd_here(ctx, AKARI_GAME)
 
     @akari.command(name='clear', brief='Clear the Daily Akari channel')
+
     @akari_mod_only()
     async def akari_clear(self, ctx, *args):
         # Refuse stray arguments so ``;akari clear 446`` cannot silently
@@ -54,6 +58,7 @@ class AkariCmdsMixin:
 
     @akari.command(name='weeklypost', brief='(Mod) Configure weekly posts',
                    usage='[here|thread CHANNEL|time HH:MM|clear]')
+
     @akari_mod_only()
     async def akari_weeklypost(self, ctx, *args):
         await self._cmd_akari_weekly_post(ctx, args)
@@ -91,6 +96,7 @@ class AkariCmdsMixin:
     @akari.command(name='ban',
                    brief='(Mod) Block a user from Akari ingestion',
                    usage='@user [reason...]')
+
     @akari_mod_only()
     async def akari_ban(self, ctx, member: CaseInsensitiveMember, *,
                         reason: str = None):
@@ -115,6 +121,7 @@ class AkariCmdsMixin:
     @akari.command(name='unban',
                    brief='(Mod) Lift an Akari ingestion ban',
                    usage='@user')
+
     @akari_mod_only()
     async def akari_unban(self, ctx, member: CaseInsensitiveMember):
         removed = cf_common.user_db.unban_akari_user(ctx.guild.id, member.id)
@@ -128,6 +135,7 @@ class AkariCmdsMixin:
 
     @akari.command(name='bans',
                    brief='(Mod) List Akari ingestion bans')
+
     @akari_mod_only()
     async def akari_bans(self, ctx):
         rows = cf_common.user_db.get_akari_bans(ctx.guild.id)
@@ -180,6 +188,7 @@ class AkariCmdsMixin:
     @akari_stats.command(name='debug',
                          brief='(Mod) Puzzle results with ratings for ALL players',
                          usage='<puzzle_id|date> [+time] [+test] [+exclude=…] [+include=…]')
+
     @akari_mod_only()
     async def akari_stats_debug(self, ctx, *args):
         args, time_only = _split_akari_time_filter(args)
@@ -197,12 +206,14 @@ class AkariCmdsMixin:
 
     @akari.command(name='remove', brief='Remove a user result for a puzzle',
                    usage='@user puzzle_id')
+
     @akari_mod_only()
     async def akari_remove(self, ctx, member: CaseInsensitiveMember, puzzle_id: int):
         await self._cmd_remove(ctx, AKARI_GAME, member, puzzle_id)
 
     @akari.command(name='add', brief='Manually add a result for a user/puzzle',
                    usage='@user puzzle_id <perfect|N%> <time>')
+
     @akari_mod_only()
     async def akari_add(self, ctx, member: CaseInsensitiveMember,
                         puzzle_id: int, result: str, time: str):
@@ -215,55 +226,47 @@ class AkariCmdsMixin:
 
     @akari.group(name='import', brief='Manage imported history',
                  invoke_without_command=True)
+
     @akari_mod_only()
     async def akari_import(self, ctx):
         await ctx.send_help(ctx.command)
-
     @akari_import.command(name='start', brief='Rebuild imported history')
     @akari_mod_only()
     async def akari_import_start(self, ctx, channel: ChannelOrThread = None):
         await self._cmd_import_start(ctx, AKARI_GAME, channel)
-
     @akari_import.command(name='status', brief='Show import status')
     @akari_mod_only()
     async def akari_import_status(self, ctx):
         await self._cmd_import_status(ctx, AKARI_GAME)
-
     @akari_import.command(name='cancel', brief='Cancel a running import')
     @akari_mod_only()
     async def akari_import_cancel(self, ctx):
         await self._cmd_import_cancel(ctx, AKARI_GAME)
-
     @akari_import.command(name='clear', brief='Delete imported history')
     @akari_mod_only()
     async def akari_import_clear(self, ctx):
         await self._cmd_import_clear(ctx, AKARI_GAME)
-
     @akari_import.command(name='orphans',
                           brief='(Temp, mod) List imported results with no live counterpart')
     @akari_mod_only()
     async def akari_import_orphans(self, ctx):
         await self._cmd_import_orphans(ctx, AKARI_GAME)
-
     @akari.command(name='reparse', brief='Reparse all stored raw messages')
     @akari_mod_only()
     async def akari_reparse(self, ctx):
         await self._cmd_reparse(ctx, AKARI_GAME)
-
     @akari.command(name='export', brief='(Mod) Download a snapshot of the result tables')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def akari_export(self, ctx):
         await self._cmd_akari_export(ctx, AKARI_GAME)
-
     @akari.command(name='diff',
                    brief='(Mod) Diff an uploaded snapshot against current results',
                    usage='(attach a .db / .zip snapshot)')
     @commands.has_any_role(constants.TLE_ADMIN, constants.TLE_MODERATOR)
     async def akari_diff(self, ctx):
         await self._cmd_akari_diff(ctx, AKARI_GAME)
-
     @akari.group(name='ratings', brief='Show Akari rating leaderboard',
-                 usage='[+weekly|+current] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
+                 usage='[+weekly|+current] [+days=N] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
                  invoke_without_command=True)
     async def akari_ratings(self, ctx, *args):
         args, beta = _split_queens_improved_filter(args)
@@ -273,6 +276,10 @@ class AkariCmdsMixin:
         if weekly and current:
             raise MinigameCogError('Choose either `+weekly` or `+current`.')
         args = tuple(arg for arg in args if arg not in ('+weekly', '+current'))
+        try:
+            args, first_days = parse_weekly_days(args, current=current)
+        except ValueError as exc:
+            raise MinigameCogError(str(exc)) from exc
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
@@ -283,10 +290,9 @@ class AkariCmdsMixin:
         await self._cmd_akari_ratings(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive, test_decay=test_decay,
-            weekly=weekly, current=current, weekdays=weekdays,
+            weekly=weekly, current=current, first_days=first_days, weekdays=weekdays,
             date_bounds=date_bounds,
             beta=beta, time_only=time_only)
-
     @akari.group(name='rating',
                  brief='Show registered users\' Akari rating graph',
                  usage='[@user1 @user2 ...] [+beta] [+time] [+decay] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date] [+recalculate]',
@@ -304,7 +310,6 @@ class AkariCmdsMixin:
             test_decay=test_decay, weekdays=weekdays,
             date_bounds=date_bounds, recalculate=recalculate, beta=beta,
             time_only=time_only)
-
     @akari_rating.command(name='debug',
                           brief='(Mod) Rating graph for any user (incl. shadow-rated)',
                           usage='@user1 [@user2 ...] [+beta] [+time] [+decay] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date] [+recalculate]')
@@ -323,7 +328,6 @@ class AkariCmdsMixin:
             test_decay=test_decay, weekdays=weekdays,
             date_bounds=date_bounds, recalculate=recalculate, beta=beta,
             time_only=time_only)
-
     @akari.group(name='performance', aliases=['perf'],
                  brief='Show registered users\' Akari performance graph',
                  usage='[@user1 @user2 ...] [+beta] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
@@ -342,7 +346,6 @@ class AkariCmdsMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
             beta=beta, time_only=time_only)
-
     @akari_performance.command(name='debug',
                                brief='(Mod) Performance graph for any user (incl. shadow-rated)',
                                usage='@user1 [@user2 ...] [+beta] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
@@ -362,13 +365,11 @@ class AkariCmdsMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
             beta=beta, time_only=time_only)
-
     @akari.command(name='skips',
                    brief='Show skipped days since the first Akari submission',
                    usage='[@user]')
     async def akari_skips(self, ctx, member: CaseInsensitiveMember = None):
         await self._cmd_akari_skips(ctx, member or ctx.author)
-
     @akari.group(name='history',
                  brief='Paginated rating delta log for a registered user',
                  usage='[@user] [+beta] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
@@ -390,7 +391,6 @@ class AkariCmdsMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
             beta=beta, time_only=time_only)
-
     @akari_history.command(name='debug',
                            brief='(Mod) Rating delta log for any user (incl. shadow-rated)',
                            usage='@user [+beta] [+time] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
@@ -413,17 +413,15 @@ class AkariCmdsMixin:
             excluded_ids=excluded_ids, included_ids=included_ids,
             test_decay=test_decay, weekdays=weekdays, date_bounds=date_bounds,
             beta=beta, time_only=time_only)
-
     @akari_ratings.command(name='recompute', brief='(Mod) Rebuild the rating snapshot')
     @akari_mod_only()
     async def akari_ratings_recompute(self, ctx):
         self._recompute_akari_ratings(ctx.guild.id)
         await ctx.send(embed=discord_common.embed_success(
             f'{AKARI_GAME.display_name} ratings recomputed.'))
-
     @akari_ratings.command(name='debug', aliases=['all'],
                            brief='(Mod) Leaderboard incl. shadow-rated (unopted-in) users',
-                           usage='[+weekly|+current] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
+                           usage='[+weekly|+current] [+days=N] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
     @akari_mod_only()
     async def akari_ratings_debug(self, ctx, *args):
         args, beta = _split_queens_improved_filter(args)
@@ -433,6 +431,10 @@ class AkariCmdsMixin:
         if weekly and current:
             raise MinigameCogError('Choose either `+weekly` or `+current`.')
         args = tuple(arg for arg in args if arg not in ('+weekly', '+current'))
+        try:
+            args, first_days = parse_weekly_days(args, current=current)
+        except ValueError as exc:
+            raise MinigameCogError(str(exc)) from exc
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
@@ -443,40 +445,35 @@ class AkariCmdsMixin:
         await self._cmd_akari_ratings_debug(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive, test_decay=test_decay,
-            weekly=weekly, current=current, weekdays=weekdays,
+            weekly=weekly, current=current, first_days=first_days, weekdays=weekdays,
             date_bounds=date_bounds,
             beta=beta, time_only=time_only)
 
     # ── Delegated-admin tier, bulk deletion, per-date results ───────────
-
     @akari.group(name='admins', aliases=['admin'],
                  brief='Manage extra Daily Akari command admins',
                  invoke_without_command=True)
     @akari_mod_only()
     async def akari_admins(self, ctx):
         await self._cmd_akari_admins(ctx)
-
     @akari_admins.command(name='add',
                           brief='(Mod) Add an Akari command admin',
                           usage='@user')
     @akari_mod_only()
     async def akari_admins_add(self, ctx, member: CaseInsensitiveMember):
         await self._cmd_akari_admins_add(ctx, member)
-
     @akari_admins.command(name='remove',
                           brief='(Mod) Remove an Akari command admin',
                           usage='@user')
     @akari_mod_only()
     async def akari_admins_remove(self, ctx, member: CaseInsensitiveMember):
         await self._cmd_akari_admins_remove(ctx, member)
-
     @akari.command(name='delete',
                    brief='(Mod) Remove all Akari results for a date/puzzle',
                    usage='date|#number')
     @akari_mod_only()
     async def akari_delete(self, ctx, selector: str = None):
         await self._cmd_akari_delete_date(ctx, selector)
-
     @akari.command(name='clean', aliases=['cleanup'],
                    brief='(Mod) Remove Akari results for an inclusive date range',
                    usage='start-date|#number [end-date|#number]')
@@ -484,13 +481,11 @@ class AkariCmdsMixin:
     async def akari_clean(self, ctx, start_date: str = None,
                           end_date: str = None):
         await self._cmd_akari_clean(ctx, start_date, end_date)
-
     @akari.group(name='results', brief='Show Akari puzzle/date leaderboard',
                  usage='[date|#number] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
                  invoke_without_command=True)
     async def akari_results(self, ctx, *args):
         await self._cmd_akari_results(ctx, args)
-
     @akari_results.command(name='debug',
                            brief='(Mod) Puzzle/date results with ratings for ALL players',
                            usage='[date|#number] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')

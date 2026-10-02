@@ -13,7 +13,7 @@ import math
 from collections import namedtuple
 
 from tle import constants
-from tle.util.akari_rating import RatingState, compute_round
+from tle.util.akari_rating import RatingState, compute_round, _pow10, event_performance
 
 
 # Rating movement for one weekly contest.  Daily ratings use 0.25; a larger
@@ -38,7 +38,8 @@ DEFAULT_DIFFICULTY = 3
 
 WeeklyStanding = namedtuple(
     'WeeklyStanding',
-    'user_id score days_played perfects total_time week_start week_end',
+    'user_id score days_played perfects total_time week_start week_end rating performance delta',
+    defaults=(None, None, None),
 )
 
 
@@ -253,3 +254,39 @@ def compute_weekly_ratings(rows, difficulties=None, *, as_of_date=None,
         )
         for user_id, rating in ratings.items()
     }
+
+
+def annotate_weekly_standings(standings, rating_rows):
+    """Provisional performance against the completed weekly rating field."""
+    ratings = {str(row.user_id): row.rating for row in rating_rows}
+    field = [_pow10(ratings.get(str(row.user_id), constants.AKARI_START_RATING))
+             for row in standings]
+    ranks = rank_week(standings)
+    round_ratings = {str(row.user_id): ratings.get(
+        str(row.user_id), constants.AKARI_START_RATING) for row in standings}
+    deltas = (compute_round(round_ratings, ranks, damping=WEEKLY_RATING_DAMPING)
+              if len(standings) > 1 else {})
+    return [row._replace(
+        rating=ratings.get(str(row.user_id), constants.AKARI_START_RATING),
+        performance=(event_performance(field, ranks[str(row.user_id)])
+                     if len(field) > 1 else None),
+        delta=deltas.get(str(row.user_id))) for row in standings]
+
+
+def parse_weekly_days(args, *, current):
+    """Extract a first-N-calendar-days filter for current standings."""
+    remaining, days = [], None
+    for arg in args:
+        if not arg.startswith('+days='):
+            remaining.append(arg)
+            continue
+        if not current:
+            raise ValueError('`+days=N` requires `+current`.')
+        try:
+            value = int(arg.split('=', 1)[1])
+        except ValueError as exc:
+            raise ValueError('Use `+days=N` with N from 1 to 7.') from exc
+        if not 1 <= value <= 7 or days is not None:
+            raise ValueError('Specify `+days=N` once, with N from 1 to 7.')
+        days = value
+    return tuple(remaining), days

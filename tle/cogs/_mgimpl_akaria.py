@@ -131,7 +131,7 @@ class ImplAkariAMixin:
                                   included_ids=None, include_inactive=False,
                                   test_decay=False, weekly=False,
                                   weekdays=None, date_bounds=None, beta=False,
-                                  time_only=False, current=False):
+                                  time_only=False, current=False, first_days=None):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -157,7 +157,7 @@ class ImplAkariAMixin:
         if current:
             return await self._cmd_akari_current_week_ratings(
                 ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds)
+                weekdays=weekdays, date_bounds=date_bounds, first_days=first_days)
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         # Banned players stay rated (forward-only ban) but are hidden from
         # public boards at display time, like Queens'; debug shows them.
@@ -213,7 +213,7 @@ class ImplAkariAMixin:
                 for row in cf_common.user_db.get_akari_bans(guild_id)}
 
     @staticmethod
-    async def _send_akari_weekly_scores(ctx, standings):
+    async def _send_akari_weekly_scores(ctx, standings, *, first_days=None):
         """Send the provisional current-week scores table (or an empty notice).
 
         Shared by the public and ``debug`` ratings commands so both render the
@@ -228,6 +228,8 @@ class ImplAkariAMixin:
         score_title = (
             f'Daily Akari Current Weekly Ratings · {start:%b %d}–{end:%b %d} '
             f'(in progress)')
+        if first_days is not None:
+            score_title += f' · first {first_days} days'
         score_file = _mg()._get_akari_weekly_table_image_file(
             ctx.guild, standings, title=score_title)
         await ctx.send(file=score_file)
@@ -235,7 +237,7 @@ class ImplAkariAMixin:
     async def _akari_weekly_preview(self, guild_id, *, excluded_ids=None,
                                     included_ids=None, weekdays=None,
                                     date_bounds=None, as_of_date=None,
-                                    standings_date=None):
+                                    standings_date=None, first_days=None):
         """Build weekly ratings plus provisional current-week standings."""
         result_rows = cf_common.user_db.get_minigame_results_for_guild(
             guild_id, AKARI_GAME.name)
@@ -263,8 +265,13 @@ class ImplAkariAMixin:
             result_rows, difficulties, as_of_date=today)
         rating_rows = sorted(
             states.values(), key=lambda s: (-s.rating, -s.games, int(s.user_id)))
+        current_rows = result_rows
+        if first_days is not None:
+            current_rows = [r for r in result_rows
+                            if dt.date.fromisoformat(str(r.puzzle_date)).weekday()
+                            < first_days]
         standings = current_week_standings(
-            result_rows, difficulties, as_of_date=standings_date)
+            current_rows, difficulties, as_of_date=standings_date)
         return rating_rows, standings
 
     @staticmethod

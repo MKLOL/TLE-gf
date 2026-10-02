@@ -163,6 +163,7 @@ class AkariSlashMixin:
     @app_commands.describe(
         weekly='Show ratings from completed weekly contests',
         current='Show only this week\'s in-progress standings',
+        first_days='Show only the first N days of the current week (1-7)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
         beta='Use the beta testing rating system',
@@ -170,6 +171,7 @@ class AkariSlashMixin:
     async def slash_akari_ratings(self, interaction: discord.Interaction,
                                   weekly: bool = False,
                                   current: bool = False,
+                                  first_days: Optional[int] = None,
                                   weekdays: Optional[str] = None,
                                   date_filter: Optional[str] = None,
                                   beta: bool = False,
@@ -179,8 +181,13 @@ class AkariSlashMixin:
             if weekly and current:
                 raise MinigameCogError(
                     'Choose either `weekly` or `current`.')
+            if first_days is not None and (
+                    not current or not 1 <= first_days <= 7):
+                raise MinigameCogError(
+                    '`first_days` requires `current` and a value from 1 to 7.')
             await self._cmd_akari_ratings(
                 _SlashCtx(interaction), weekly=weekly, current=current,
+                first_days=first_days,
                 beta=beta,
                 time_only=time_only,
                 weekdays=self._slash_queens_weekdays(weekdays),
