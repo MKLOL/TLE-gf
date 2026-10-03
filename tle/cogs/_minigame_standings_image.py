@@ -1,4 +1,4 @@
-"""Shared minigame table cards with measured columns and protected labels."""
+"""Shared minigame tables with measured columns and protected labels."""
 
 import html
 import io
@@ -15,15 +15,12 @@ from tle.cogs._minigame_table_cells import _draw_table_cell
 
 
 _MARGIN = 20
-_ROW_HEIGHT = 44
-_HEADER_HEIGHT = 44
-_TITLE_BG = (37, 43, 47)
-_TITLE_TEXT = (248, 250, 252)
-_SUBTITLE_TEXT = (185, 197, 204)
-_HEADER_BG = (239, 242, 245)
-_HEADER_TEXT = (75, 87, 98)
-_ROW_BACKGROUNDS = ((255, 255, 255), (246, 248, 250))
-_RULE = (214, 221, 227)
+_ROW_HEIGHT = 40
+_HEADER_HEIGHT = 40
+_BACKGROUND = (54, 62, 63)
+_HEADER_TEXT = (250, 250, 250)
+_SECONDARY_TEXT = (220, 224, 224)
+_ROW_BACKGROUNDS = ((245, 245, 245), (235, 235, 235))
 
 
 def _fit_table_columns(cols, minimums, flexible_cols):
@@ -86,29 +83,15 @@ def _get_standings_table_image(
     width = max(width, sum(cols) + 2 * _MARGIN)
     content_width = width - 2 * _MARGIN
 
-    heading, _, subtitle = (title or '').partition(' · ')
-    heading_height = (prepare(heading, content_width, 28, 700, wrap=True).height
+    heading_height = (prepare(title, content_width, 24, 700, wrap=True).height
                       if title else 0)
-    subtitle_height = (prepare(subtitle, content_width, 18, wrap=True).height
-                       if subtitle else 0)
-    title_height = (2 * _MARGIN + heading_height
-                    + (8 + subtitle_height if subtitle else 0)) if title else 0
-    footer_height = (prepare(footer, content_width, 16, wrap=True).height + 24
+    title_height = 16 + heading_height + 8 if title else 16
+    footer_height = (prepare(footer, content_width, 18, wrap=True).height + 8
                      if footer else 0)
     height = (title_height + _HEADER_HEIGHT + len(table_rows) * _ROW_HEIGHT
-              + footer_height + 16)
+              + footer_height + _MARGIN)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     context = cairo.Context(surface)
-
-    # Transparent corners keep the card clean on either Discord theme.
-    radius = 12
-    for x, y, start in ((width - radius, radius, -math.pi / 2),
-                        (width - radius, height - radius, 0),
-                        (radius, height - radius, math.pi / 2),
-                        (radius, radius, math.pi)):
-        context.arc(x, y, radius, start, start + math.pi / 2)
-    context.close_path()
-    context.clip()
 
     def rectangle(y, h, color):
         context.set_source_rgb(*(channel / 255 for channel in color))
@@ -144,18 +127,12 @@ def _get_standings_table_image(
                     font_features='tnum')
             x += cell_width
 
-    rectangle(0, height, _ROW_BACKGROUNDS[0])
+    rectangle(0, height, _BACKGROUND)
     if title:
-        rectangle(0, title_height, _TITLE_BG)
-        draw(heading, _MARGIN, _MARGIN, content_width, heading_height,
-             _TITLE_TEXT, size=28, weight=700, wrap=True)
-        if subtitle:
-            draw(subtitle, _MARGIN, _MARGIN + heading_height + 8,
-                 content_width, subtitle_height, _SUBTITLE_TEXT, size=18, wrap=True)
-    rectangle(title_height, _HEADER_HEIGHT, _HEADER_BG)
+        draw(title, _MARGIN, 16, content_width, heading_height,
+             _HEADER_TEXT, size=24, weight=700, wrap=True)
     draw_row(header, title_height, colors=[_HEADER_TEXT] * len(cols),
              is_header=True)
-    rectangle(title_height + _HEADER_HEIGHT - 1, 1, _RULE)
     y = title_height + _HEADER_HEIGHT
     for index, row in enumerate(table_rows):
         rectangle(y, _ROW_HEIGHT, _ROW_BACKGROUNDS[index % 2])
@@ -165,9 +142,8 @@ def _get_standings_table_image(
         draw_row(row, y, colors=colors)
         y += _ROW_HEIGHT
     if footer:
-        rectangle(y, 1, _RULE)
-        draw(footer, _MARGIN, y + 12, content_width, footer_height - 24,
-             _HEADER_TEXT, size=16, wrap=True)
+        draw(footer, _MARGIN, y + 8, content_width, footer_height - 8,
+             _SECONDARY_TEXT, size=18, wrap=True)
 
     image_data = io.BytesIO()
     surface.write_to_png(image_data)
