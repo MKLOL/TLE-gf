@@ -10,7 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.akari_difficulty import fetch_akari_difficulties
 from tle.util.akari_weekly import (
-    compute_weekly_ratings, current_week_standings, week_start,
+    compute_weekly_ratings, current_week_standings, filter_weekly_days, week_start,
 )
 
 from tle.cogs._minigame_common import (
@@ -261,11 +261,7 @@ class ImplAkariAMixin:
             result_rows, difficulties, as_of_date=today)
         rating_rows = sorted(
             states.values(), key=lambda s: (-s.rating, -s.games, int(s.user_id)))
-        current_rows = result_rows
-        if first_days is not None:
-            current_rows = [r for r in result_rows
-                            if dt.date.fromisoformat(str(r.puzzle_date)).weekday()
-                            < first_days]
+        current_rows = filter_weekly_days(result_rows, first_days)
         standings = current_week_standings(
             current_rows, difficulties, as_of_date=standings_date)
         return rating_rows, standings

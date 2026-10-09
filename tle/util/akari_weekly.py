@@ -281,7 +281,7 @@ def parse_weekly_days(args, *, weekly):
             remaining.append(arg)
             continue
         if not weekly:
-            raise ValueError('`+days=N` requires `;akari results +weekly`.')
+            raise ValueError('`+days=N` requires `results +weekly`.')
         try:
             value = int(arg.split('=', 1)[1])
         except ValueError as exc:
@@ -290,3 +290,24 @@ def parse_weekly_days(args, *, weekly):
             raise ValueError('Specify `+days=N` once, with N from 1 to 7.')
         days = value
     return tuple(remaining), days
+
+
+def parse_weekly_results_args(args):
+    """Extract the shared weekly results mode and first-days filter."""
+    if '+current' in args:
+        raise ValueError(
+            '`+current` was removed. Use `results +weekly [+days=N]`.')
+    weekly = '+weekly' in args
+    remaining = tuple(arg for arg in args if arg != '+weekly')
+    remaining, days = parse_weekly_days(remaining, weekly=weekly)
+    return remaining, weekly, days
+
+
+def filter_weekly_days(rows, first_days):
+    """Restrict current standings to the first N Monday-based calendar days."""
+    if first_days is None:
+        return rows
+    return [row for row in rows
+            if (row.puzzle_date if isinstance(row.puzzle_date, dt.date)
+                else dt.date.fromisoformat(str(row.puzzle_date))).weekday()
+            < first_days]

@@ -10,7 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.akari_rating import rank_for_rating
 from tle.util.akari_weekly import (
-    compute_weekly_ratings, current_week_standings,
+    compute_weekly_ratings, current_week_standings, filter_weekly_days,
 )
 
 from tle.cogs._minigame_queens import (
@@ -189,9 +189,8 @@ class ImplQueensCmdMixin:
             raise MinigameCogError(
                 '`+weekly` and `+beta` are separate testing rating '
                 'systems and cannot be combined.')
-        standings = []
         if weekly:
-            rows, standings = self._queens_weekly_preview(
+            rows, _standings = self._queens_weekly_preview(
                 ctx.guild.id, game,
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds)
@@ -211,7 +210,7 @@ class ImplQueensCmdMixin:
         elif not weekly and rows is None:
             rows = cf_common.user_db.get_minigame_ratings(
                 ctx.guild.id, game.name)
-        if not rows and not standings:
+        if not rows:
             raise MinigameCogError(
                 f'No {game.display_name} ratings yet.')
         links_by_user = self._queens_links_by_user(ctx.guild.id, game)
@@ -224,13 +223,7 @@ class ImplQueensCmdMixin:
             row for row in rows
             if row.user_id in linked_ids and row.user_id not in banned_ids
         ]
-        if weekly and not show_all:
-            standings = [
-                standing for standing in standings
-                if standing.user_id in linked_ids
-                and standing.user_id not in banned_ids
-            ]
-        if not shown and not standings:
+        if not shown:
             raise MinigameCogError(
                 f'No registered {game.display_name} players yet. '
                 f'Players register with `;{game.name} register LinkedIn Name`.')
@@ -243,15 +236,13 @@ class ImplQueensCmdMixin:
             if date_label:
                 suffix_parts.append(date_label)
             title = (
-                f'{game.display_name} Ratings'
+                f'{game.display_name} {"Weekly Ratings" if weekly else "Ratings"}'
                 f'{_queens_improved_title_suffix(improved)}'
-                f'{" [weekly preview]" if weekly else ""} '
-                f'({", ".join(suffix_parts)})')
+                f' ({", ".join(suffix_parts)})')
         else:
             title = (
-                f'{game.display_name} Ratings'
+                f'{game.display_name} {"Weekly Ratings" if weekly else "Ratings"}'
                 f'{_queens_improved_title_suffix(improved)}'
-                f'{" [weekly preview]" if weekly else ""}'
                 f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}')
         if shown:
             discord_file = _mg()._get_akari_rating_table_image_file(
@@ -264,13 +255,10 @@ class ImplQueensCmdMixin:
                 name_fn=self._queens_name_fn(links_by_user),
                 ranks=game_ranks(game))
             await ctx.send(file=discord_file)
-        if weekly:
-            await self._send_queens_weekly_scores(
-                ctx, game, standings, links_by_user)
 
     def _queens_weekly_preview(self, guild_id, game, *, excluded_ids=None,
                                included_ids=None, weekdays=None,
-                               date_bounds=None):
+                               date_bounds=None, first_days=None):
         """Build speed-based weekly ratings and this week's live scores."""
         result_rows = self._filtered_minigame_result_rows(
             guild_id, game,
@@ -296,11 +284,12 @@ class ImplQueensCmdMixin:
             key=lambda state: (
                 -state.rating, -state.games, int(state.user_id)))
         standings = current_week_standings(
-            scoring_rows, difficulties, as_of_date=today)
+            filter_weekly_days(scoring_rows, first_days),
+            difficulties, as_of_date=today)
         return rating_rows, standings
 
     async def _send_queens_weekly_scores(
-            self, ctx, game, standings, links_by_user):
+            self, ctx, game, standings, links_by_user, *, first_days=None):
         if not standings:
             await ctx.send(embed=discord_common.embed_neutral(
                 f'No {game.display_name} scores have been posted '
@@ -308,11 +297,13 @@ class ImplQueensCmdMixin:
             return
         start = standings[0].week_start
         end = standings[0].week_end
+        title = (f'{game.display_name} Current Weekly Results · '
+                 f'{start:%b %d}–{end:%b %d} (in progress)')
+        if first_days is not None:
+            title += f' · first {first_days} days'
         score_file = _mg()._get_akari_weekly_table_image_file(
             ctx.guild, standings,
-            title=(
-                f'{game.display_name} Weekly Scores · '
-                f'{start:%b %d}–{end:%b %d} (in progress)'),
+            title=title,
             identity_label='LinkedIn',
             identity_fn=self._queens_rating_identity_fn(links_by_user),
             name_fn=self._queens_name_fn(links_by_user),

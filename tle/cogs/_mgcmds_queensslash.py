@@ -206,9 +206,11 @@ class QueensSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @queens_slash.command(name='results', description='Show a Queens date leaderboard')
+    @queens_slash.command(name='results', description='Show Queens date or current weekly results')
     @app_commands.describe(
         date='Date or puzzle number (defaults to today)',
+        weekly='Show this week\'s in-progress standings',
+        first_days='Show only the first N days of the current week (1-7)',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         beta='Use the beta testing rating system',
@@ -216,25 +218,31 @@ class QueensSlashMixin:
     async def slash_queens_results(
         self, interaction: discord.Interaction,
         date: Optional[str] = None,
+        weekly: bool = False,
+        first_days: Optional[int] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
         unrated: bool = False,
     ):
         await interaction.response.defer()
+        args = [date] if date else []
+        args += self._slash_queens_weekday_args(weekdays)
+        args += str(date_filter or '').split()
+        args += ['+beta'] if beta else []
+        args += ['+unrated'] if unrated else []
+        args += ['+weekly'] if weekly else []
+        args += [f'+days={first_days}'] if first_days is not None else []
         try:
-            await self._cmd_queens_stats_date(
-                _SlashCtx(interaction), QUEENS_GAME,
-                date or _queens_current_puzzle_date().isoformat(),
-                weekdays=self._slash_queens_weekdays(weekdays),
-                date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=beta, show_unrated=unrated)
+            await self._cmd_queens_results(
+                _SlashCtx(interaction), QUEENS_GAME, args,
+                default_date=_queens_current_puzzle_date())
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
     @queens_slash.command(name='ratings', description='Show Queens rating leaderboard')
     @app_commands.describe(
-        weekly='Preview weekly-contest ratings and this week\'s scores',
+        weekly='Show ratings from completed weekly contests',
         weekdays='Queens days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         beta='Use the beta testing rating system')

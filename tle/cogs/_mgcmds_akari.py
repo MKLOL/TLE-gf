@@ -271,10 +271,7 @@ class AkariCmdsMixin:
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
         weekly = '+weekly' in args
-        if '+current' in args or any(arg.startswith('+days=') for arg in args):
-            raise MinigameCogError(
-                'For current weekly standings, use '
-                '`;akari results +weekly [+days=N]`.')
+        self._reject_weekly_rating_results_args(args, AKARI_GAME)
         args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,
@@ -423,10 +420,7 @@ class AkariCmdsMixin:
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
         weekly = '+weekly' in args
-        if '+current' in args or any(arg.startswith('+days=') for arg in args):
-            raise MinigameCogError(
-                'For current weekly standings, use '
-                '`;akari results debug +weekly [+days=N]`.')
+        self._reject_weekly_rating_results_args(args, AKARI_GAME, show_all=True)
         args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,

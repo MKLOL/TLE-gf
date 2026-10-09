@@ -49,7 +49,7 @@ class GuessGameCmdsMixin:
         await self._cmd_vs(ctx, GUESSGAME_GAME, member1, member2, *args)
 
     @guessgame.command(name='results', aliases=['matchups'], brief='Show per-puzzle side-by-side results',
-                       usage='@user1 @user2 [p>=N] [p<N] [filters...]')
+                       usage='@user1 @user2 [+weekly [+days=N]] [p>=N] [p<N] [filters...]')
     async def gg_results(self, ctx, member1: CaseInsensitiveMember, member2: CaseInsensitiveMember, *args):
         await self._cmd_guessgame_matchups(ctx, member1, member2, *args)
 

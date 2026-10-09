@@ -13,7 +13,7 @@ import logging
 
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-from tle.util.akari_weekly import parse_weekly_days
+from tle.util.akari_weekly import parse_weekly_results_args
 
 from tle.cogs._minigame_akari import (
     AKARI_GAME, puzzle_date_for, _split_akari_time_filter,
@@ -213,10 +213,8 @@ class ImplAkariCMixin:
         """
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
-        weekly = '+weekly' in args
-        args = tuple(arg for arg in args if arg != '+weekly')
         try:
-            args, first_days = parse_weekly_days(args, weekly=weekly)
+            args, weekly, first_days = parse_weekly_results_args(args)
         except ValueError as exc:
             raise MinigameCogError(str(exc)) from exc
         (remaining, include_decay, excluded_ids, included_ids,
