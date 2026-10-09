@@ -151,7 +151,7 @@ class TestDifficultyCacheDb:
 
 
 class TestWeeklyCommand:
-    def test_weekly_and_current_flags_send_separate_tables(
+    def test_weekly_ratings_and_results_send_separate_tables(
             self, db, monkeypatch):
         from tle.cogs import minigames as minigames_module
         from tle.cogs._minigame_akari import expected_puzzle_number
@@ -200,9 +200,10 @@ class TestWeeklyCommand:
         assert sent[0]['file'][1] == 'Daily Akari Weekly Ratings'
 
         sent.clear()
-        asyncio.run(cog._cmd_akari_ratings(ctx, current=True))
+        asyncio.run(cog._cmd_akari_results(ctx, ('+weekly',)))
         assert len(sent) == 1
         assert sent[0]['file'][0] == 'weekly'
+        assert 'Current Weekly Results' in sent[0]['file'][1]
         assert sent[0]['file'][2] == ['20', '10']
 
     def test_public_weekly_scores_hide_opted_out_players(
@@ -250,7 +251,7 @@ class TestWeeklyCommand:
 
         ctx = SimpleNamespace(guild=_FakeGuild(1), send=send)
 
-        asyncio.run(cog._cmd_akari_ratings(ctx, current=True))
+        asyncio.run(cog._cmd_akari_results(ctx, ('+weekly',)))
         public_scores = [k['file'] for k in weekly_sent
                          if k.get('file', (None,))[0] == 'weekly']
         assert public_scores == [('weekly', ['20'])]
@@ -258,7 +259,7 @@ class TestWeeklyCommand:
         # The admin debug board is an explicit "show everyone" view and must
         # still include the opted-out player.
         weekly_sent.clear()
-        asyncio.run(cog._cmd_akari_ratings_debug(ctx, current=True))
+        asyncio.run(cog._cmd_akari_results(ctx, ('+weekly',), show_all=True))
         debug_scores = [k['file'] for k in weekly_sent
                         if k.get('file', (None,))[0] == 'weekly']
         assert debug_scores == [('weekly', ['20', '10'])]

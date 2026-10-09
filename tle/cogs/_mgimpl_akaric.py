@@ -13,6 +13,7 @@ import logging
 
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
+from tle.util.akari_weekly import parse_weekly_days
 
 from tle.cogs._minigame_akari import (
     AKARI_GAME, puzzle_date_for, _split_akari_time_filter,
@@ -202,25 +203,41 @@ class ImplAkariCMixin:
             f'{parsed_start.isoformat()} to {parsed_end.isoformat()} '
             f'({days} day(s)).'))
 
-    # ── Per-date results view (``;akari results``) ──────────────────────
+    # ── Per-date and current weekly results (``;akari results``) ────────
 
     async def _cmd_akari_results(self, ctx, args, *, show_all=False):
-        """Render the results table for one puzzle/date, defaulting to today.
+        """Render one puzzle/date (today by default) or current weekly results.
 
         Thin front-end over ``_cmd_akari_stats_puzzle`` — the Akari analogue
         of ``;queens results``.
         """
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
+        weekly = '+weekly' in args
+        args = tuple(arg for arg in args if arg != '+weekly')
+        try:
+            args, first_days = parse_weekly_days(args, weekly=weekly)
+        except ValueError as exc:
+            raise MinigameCogError(str(exc)) from exc
         (remaining, include_decay, excluded_ids, included_ids,
          _include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
         self._validate_akari_beta(
-            beta, include_decay=include_decay, test_decay=test_decay,
+            beta, include_decay=include_decay, test_decay=test_decay, weekly=weekly,
             time_only=time_only)
+        if weekly:
+            if remaining:
+                raise MinigameCogError(
+                    '`+weekly` shows the current week and cannot be combined '
+                    'with a puzzle/date selector. Use '
+                    '`;akari results +weekly [+days=N]`.')
+            return await self._cmd_akari_current_week_results(
+                ctx, excluded_ids=excluded_ids, included_ids=included_ids,
+                weekdays=weekdays, date_bounds=date_bounds,
+                first_days=first_days, show_all=show_all)
         if len(remaining) > 1:
             raise MinigameCogError(
-                'Usage: `;akari results [date|#number] [+beta] [+test] '
+                'Usage: `;akari results [date|#number | +weekly [+days=N]] [+beta] [+test] '
                 '[+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] '
                 '[d>=date] [d<date] [+time]`.')
         # '#N', not a bare number: a 4-digit bare number parses as a year

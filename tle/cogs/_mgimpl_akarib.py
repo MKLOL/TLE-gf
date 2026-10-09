@@ -297,8 +297,7 @@ class ImplAkariBMixin:
                                         include_inactive=False,
                                         test_decay=False, weekly=False,
                                         weekdays=None, date_bounds=None,
-                                        beta=False, time_only=False,
-                                        current=False, first_days=None):
+                                        beta=False, time_only=False):
         """Admin view: leaderboard image including shadow-rated (unopted-in) users.
 
         Same image as ``;mg akari ratings`` but without the registration filter —
@@ -308,17 +307,13 @@ class ImplAkariBMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         self._validate_akari_beta(
-            beta, test_decay=test_decay, weekly=weekly or current,
+            beta, test_decay=test_decay, weekly=weekly,
             time_only=time_only)
         if weekly:
             return await self._cmd_akari_completed_weekly_ratings(
                 ctx, excluded_ids=excluded_ids, included_ids=included_ids,
                 include_inactive=include_inactive, weekdays=weekdays,
                 date_bounds=date_bounds, show_all=True)
-        if current:
-            return await self._cmd_akari_current_week_ratings(
-                ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds, first_days=first_days, show_all=True)
         filtered = bool(excluded_ids or included_ids or test_decay or beta
                         or time_only
                         or weekdays is not None or date_bounds is not None)

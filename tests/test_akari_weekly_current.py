@@ -45,18 +45,18 @@ def test_new_player_baseline_and_solo_performance():
     assert result[0].delta is None
 
 
-@pytest.mark.parametrize('args,current', [
+@pytest.mark.parametrize('args,weekly', [
     (('+days=0',), True), (('+days=8',), True),
     (('+days=no',), True), (('+days=2', '+days=3'), True),
     (('+days=2',), False),
 ])
-def test_invalid_days(args, current):
+def test_invalid_days(args, weekly):
     with pytest.raises(ValueError):
-        parse_weekly_days(args, current=current)
+        parse_weekly_days(args, weekly=weekly)
 
 
 def test_parse_days_preserves_other_filters():
-    assert parse_weekly_days(('+days=3', '+dow=mon'), current=True) == (
+    assert parse_weekly_days(('+days=3', '+dow=mon'), weekly=True) == (
         ('+dow=mon',), 3)
 
 
@@ -90,16 +90,16 @@ def test_command_forwards_day_limit(db, monkeypatch):
     cog = Minigames(bot=None)
     ctx = SimpleNamespace(guild=_FakeGuild(1), author=_FakeDiscordMember(10, 'Alice'))
     captured = []
-    async def ratings(ctx, **kwargs):
+    async def results(ctx, **kwargs):
         captured.append(kwargs)
-    monkeypatch.setattr(cog, '_cmd_akari_ratings', ratings)
-    callback = getattr(cog.akari_ratings, 'callback', cog.akari_ratings)
-    if hasattr(cog.akari_ratings, 'callback'):
-        asyncio.run(callback(cog, ctx, '+current', '+days=3'))
+    monkeypatch.setattr(cog, '_cmd_akari_current_week_results', results)
+    callback = getattr(cog.akari_results, 'callback', cog.akari_results)
+    if hasattr(cog.akari_results, 'callback'):
+        asyncio.run(callback(cog, ctx, '+weekly', '+days=3'))
     else:
-        asyncio.run(callback(ctx, '+current', '+days=3'))
+        asyncio.run(callback(ctx, '+weekly', '+days=3'))
     assert captured[0]['first_days'] == 3
-    assert captured[0]['current'] is True
+    assert captured[0]['show_all'] is False
 
 
 def test_current_renderer_uses_rating_and_performance_colors(monkeypatch):

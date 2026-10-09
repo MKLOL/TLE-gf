@@ -273,15 +273,15 @@ def annotate_weekly_standings(standings, rating_rows):
         delta=deltas.get(str(row.user_id))) for row in standings]
 
 
-def parse_weekly_days(args, *, current):
+def parse_weekly_days(args, *, weekly):
     """Extract a first-N-calendar-days filter for current standings."""
     remaining, days = [], None
     for arg in args:
         if not arg.startswith('+days='):
             remaining.append(arg)
             continue
-        if not current:
-            raise ValueError('`+days=N` requires `+current`.')
+        if not weekly:
+            raise ValueError('`+days=N` requires `;akari results +weekly`.')
         try:
             value = int(arg.split('=', 1)[1])
         except ValueError as exc:

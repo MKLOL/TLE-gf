@@ -1,4 +1,4 @@
-"""Completed/current Akari weekly ratings and scheduled announcements."""
+"""Completed Akari weekly ratings, current results, and announcements."""
 
 import datetime as dt
 import inspect
@@ -93,9 +93,10 @@ class ImplAkariWeeklyMixin:
             mark_registered=show_all, games_label='Weeks')
         await ctx.send(file=rating_file)
 
-    async def _cmd_akari_current_week_ratings(
+    async def _cmd_akari_current_week_results(
             self, ctx, *, excluded_ids=None, included_ids=None,
             weekdays=None, date_bounds=None, show_all=False, first_days=None):
+        self._require_enabled(ctx.guild.id, AKARI_GAME)
         as_of_date, standings_date = self._weekly_display_dates(ctx.guild.id)
         rating_rows, standings = await self._akari_weekly_preview(
             ctx.guild.id, excluded_ids=excluded_ids,
