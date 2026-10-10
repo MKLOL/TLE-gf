@@ -163,8 +163,18 @@ one token for every game using `;make-games-token`.
 
 [MIT](https://choosealicense.com/licenses/mit/)
 
-Akari current weekly standings use `;akari ratings +current`, with rating-tier
+Akari current weekly standings use `;akari results +weekly`, with rating-tier
 colors, completed weekly ratings, and provisional performance and prospective rating delta against that
-weekly rating field. Use `;akari ratings +current +days=3` to score only
+weekly rating field. Use `;akari results +weekly +days=3` to score only
 Monday through Wednesday (N may be 1–7). This filter does not alter completed
-weekly ratings. The slash command offers the equivalent `first_days` option.
+weekly ratings, shown with `;akari ratings +weekly`. The `/akari results`
+slash command offers the equivalent `weekly` and `first_days` options.
+
+Queens and Tango use the same commands: `;queens results +weekly +days=3`
+and `;tango results +weekly +days=3` show Monday through Wednesday of the
+current Pacific puzzle week, while `ratings +weekly` shows only completed-week
+ratings. Both `/queens results` and `/tango results` offer `weekly` and
+`first_days`. Moderator views use `results debug +weekly [+days=N]`.
+GuessThe.Game keeps its pairwise results format and supports the same filter
+with `;gg results @user1 @user2 +weekly +days=3`.
+`+current` is no longer supported; use `results +weekly` for live results.

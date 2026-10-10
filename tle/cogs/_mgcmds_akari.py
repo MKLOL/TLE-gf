@@ -4,7 +4,6 @@
 import time
 
 import discord
-from tle.util.akari_weekly import parse_weekly_days
 from discord.ext import commands
 
 from tle import constants
@@ -266,31 +265,25 @@ class AkariCmdsMixin:
     async def akari_diff(self, ctx):
         await self._cmd_akari_diff(ctx, AKARI_GAME)
     @akari.group(name='ratings', brief='Show Akari rating leaderboard',
-                 usage='[+weekly|+current] [+days=N] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
+                 usage='[+weekly] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
                  invoke_without_command=True)
     async def akari_ratings(self, ctx, *args):
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
         weekly = '+weekly' in args
-        current = '+current' in args
-        if weekly and current:
-            raise MinigameCogError('Choose either `+weekly` or `+current`.')
-        args = tuple(arg for arg in args if arg not in ('+weekly', '+current'))
-        try:
-            args, first_days = parse_weekly_days(args, current=current)
-        except ValueError as exc:
-            raise MinigameCogError(str(exc)) from exc
+        self._reject_weekly_rating_results_args(args, AKARI_GAME)
+        args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
         self._validate_akari_beta(
             beta, include_decay=include_decay,
-            test_decay=test_decay, weekly=weekly or current,
+            test_decay=test_decay, weekly=weekly,
             time_only=time_only)
         await self._cmd_akari_ratings(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive, test_decay=test_decay,
-            weekly=weekly, current=current, first_days=first_days, weekdays=weekdays,
+            weekly=weekly, weekdays=weekdays,
             date_bounds=date_bounds,
             beta=beta, time_only=time_only)
     @akari.group(name='rating',
@@ -421,31 +414,25 @@ class AkariCmdsMixin:
             f'{AKARI_GAME.display_name} ratings recomputed.'))
     @akari_ratings.command(name='debug', aliases=['all'],
                            brief='(Mod) Leaderboard incl. shadow-rated (unopted-in) users',
-                           usage='[+weekly|+current] [+days=N] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
+                           usage='[+weekly] [+beta] [+time] [+test] [+inactive] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
     @akari_mod_only()
     async def akari_ratings_debug(self, ctx, *args):
         args, beta = _split_queens_improved_filter(args)
         args, time_only = _split_akari_time_filter(args)
         weekly = '+weekly' in args
-        current = '+current' in args
-        if weekly and current:
-            raise MinigameCogError('Choose either `+weekly` or `+current`.')
-        args = tuple(arg for arg in args if arg not in ('+weekly', '+current'))
-        try:
-            args, first_days = parse_weekly_days(args, current=current)
-        except ValueError as exc:
-            raise MinigameCogError(str(exc)) from exc
+        self._reject_weekly_rating_results_args(args, AKARI_GAME, show_all=True)
+        args = tuple(arg for arg in args if arg != '+weekly')
         (_remaining, include_decay, excluded_ids, included_ids,
          include_inactive, test_decay, weekdays, date_bounds,
          _recalculate) = await self._extract_akari_extended_filters(ctx, args)
         self._validate_akari_beta(
             beta, include_decay=include_decay,
-            test_decay=test_decay, weekly=weekly or current,
+            test_decay=test_decay, weekly=weekly,
             time_only=time_only)
         await self._cmd_akari_ratings_debug(
             ctx, excluded_ids=excluded_ids, included_ids=included_ids,
             include_inactive=include_inactive, test_decay=test_decay,
-            weekly=weekly, current=current, first_days=first_days, weekdays=weekdays,
+            weekly=weekly, weekdays=weekdays,
             date_bounds=date_bounds,
             beta=beta, time_only=time_only)
 
@@ -481,14 +468,14 @@ class AkariCmdsMixin:
     async def akari_clean(self, ctx, start_date: str = None,
                           end_date: str = None):
         await self._cmd_akari_clean(ctx, start_date, end_date)
-    @akari.group(name='results', brief='Show Akari puzzle/date leaderboard',
-                 usage='[date|#number] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
+    @akari.group(name='results', brief='Show Akari puzzle/date or current weekly results',
+                 usage='[date|#number | +weekly [+days=N]] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]',
                  invoke_without_command=True)
     async def akari_results(self, ctx, *args):
         await self._cmd_akari_results(ctx, args)
     @akari_results.command(name='debug',
-                           brief='(Mod) Puzzle/date results with ratings for ALL players',
-                           usage='[date|#number] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
+                           brief='(Mod) Puzzle/date or current weekly results for ALL players',
+                           usage='[date|#number | +weekly [+days=N]] [+time] [+beta] [+test] [+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]')
     @akari_mod_only()
     async def akari_results_debug(self, ctx, *args):
         await self._cmd_akari_results(ctx, args, show_all=True)

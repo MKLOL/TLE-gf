@@ -100,6 +100,7 @@ from tle.cogs._mgimpl_queenssources import ImplQueensSourcesMixin
 from tle.cogs._mgimpl_queensprivacy import ImplQueensPrivacyMixin
 from tle.cogs._mgimpl_queensimport import ImplQueensImportMixin
 from tle.cogs._mgimpl_queenscmd import ImplQueensCmdMixin
+from tle.cogs._mgimpl_linkedin_results import ImplLinkedInResultsMixin
 from tle.cogs._mgimpl_queenscmdb import ImplQueensCmdBMixin
 from tle.cogs._mgimpl_queensbackfill import ImplQueensBackfillMixin
 from tle.cogs._mgimpl_queenstext import ImplQueensTextMixin
@@ -158,6 +159,7 @@ class Minigames(
     ImplQueensPrivacyMixin,
     ImplQueensImportMixin,
     ImplQueensCmdMixin,
+    ImplLinkedInResultsMixin,
     ImplQueensCmdBMixin,
     ImplQueensBackfillMixin,
     ImplQueensTextMixin,

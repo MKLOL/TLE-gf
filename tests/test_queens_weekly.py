@@ -162,7 +162,7 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         ]
         assert standings[0].score > standings[1].score
 
-    def test_weekly_sends_ratings_and_pacific_current_week_scores(
+    def test_weekly_ratings_and_results_send_separate_pacific_tables(
             self, db, monkeypatch):
         monkeypatch.setattr(cf_common, 'user_db', db)
         db.set_guild_config(_GUILD_ID, QUEENS_GAME.feature_flag, '1')
@@ -195,10 +195,9 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         cog = Minigames(bot=None)
 
         asyncio.run(cog._cmd_queens_ratings(ctx, QUEENS_GAME, weekly=True))
-
-        assert [item['file'][0] for item in sent] == ['ratings', 'scores']
+        assert [item['file'][0] for item in sent] == ['ratings']
         rating_call = captured['ratings'][0]
-        assert 'weekly preview' in rating_call['title'].lower()
+        assert 'Weekly Ratings' in rating_call['title']
         assert rating_call['games_label'] == 'Weeks'
         assert rating_call['identity_label'] == 'LinkedIn'
         assert rating_call['rows'][0].user_id == str(alice.id)
@@ -206,7 +205,11 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
         assert rating_call['identity_fn'](
             guild, rating_call['rows'][0]) == 'Anonymous'
 
+        sent.clear()
+        asyncio.run(cog._cmd_queens_results(ctx, QUEENS_GAME, ('+weekly',)))
+        assert [item['file'][0] for item in sent] == ['scores']
         score_call = captured['scores'][0]
+        assert 'Current Weekly Results' in score_call['title']
         assert score_call['standings'][0].user_id == str(bob.id)
         assert score_call['standings'][0].week_start == current_monday
         assert score_call['identity_label'] == 'LinkedIn'
@@ -247,6 +250,10 @@ class TestQueensWeeklyRatings(_QueensCommandsBase):
             public_ctx, QUEENS_GAME, weekly=True, show_all=False))
         asyncio.run(cog._cmd_queens_ratings(
             debug_ctx, QUEENS_GAME, weekly=True, show_all=True))
+        asyncio.run(cog._cmd_queens_results(
+            public_ctx, QUEENS_GAME, ('+weekly',), show_all=False))
+        asyncio.run(cog._cmd_queens_results(
+            debug_ctx, QUEENS_GAME, ('+weekly',), show_all=True))
 
         assert [row.user_id for row in captured['ratings'][0]['rows']] == [
             str(alice.id),

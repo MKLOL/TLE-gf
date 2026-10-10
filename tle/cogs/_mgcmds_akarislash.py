@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 
 from tle.cogs._minigame_akari import AKARI_GAME
-from tle.cogs._minigame_helpers import MinigameCogError, _SlashCtx
+from tle.cogs._minigame_helpers import _SlashCtx
 from tle.cogs._minigame_slash_consts import _TIMEFRAME_CHOICES, _MODE_CHOICES
 
 logger = logging.getLogger(__name__)
@@ -133,9 +133,11 @@ class AkariSlashMixin:
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
-    @akari_slash.command(name='results', description='Show an Akari puzzle/date leaderboard')
+    @akari_slash.command(name='results', description='Show Akari puzzle/date or current weekly results')
     @app_commands.describe(
         selector='Puzzle number, #number, or date (defaults to today)',
+        weekly='Show this week\'s in-progress standings',
+        first_days='Show only the first N days of the current week (1-7)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
         beta='Use the beta testing rating system',
@@ -143,6 +145,8 @@ class AkariSlashMixin:
     async def slash_akari_results(
         self, interaction: discord.Interaction,
         selector: Optional[str] = None,
+        weekly: bool = False,
+        first_days: Optional[int] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
@@ -154,6 +158,8 @@ class AkariSlashMixin:
         args += str(date_filter or '').split()
         args += ['+beta'] if beta else []
         args += ['+time'] if time_only else []
+        args += ['+weekly'] if weekly else []
+        args += [f'+days={first_days}'] if first_days is not None else []
         try:
             await self._cmd_akari_results(_SlashCtx(interaction), args)
         except Exception as _slash_exc:
@@ -162,32 +168,20 @@ class AkariSlashMixin:
     @akari_slash.command(name='ratings', description='Show Akari rating leaderboard')
     @app_commands.describe(
         weekly='Show ratings from completed weekly contests',
-        current='Show only this week\'s in-progress standings',
-        first_days='Show only the first N days of the current week (1-7)',
         weekdays='Days: mon,wed, weekday, or weekend',
         date_filter='Date filter, e.g. d>=01062026 d<08062026',
         beta='Use the beta testing rating system',
         time_only='Ignore accuracy and rate only by completion time')
     async def slash_akari_ratings(self, interaction: discord.Interaction,
                                   weekly: bool = False,
-                                  current: bool = False,
-                                  first_days: Optional[int] = None,
                                   weekdays: Optional[str] = None,
                                   date_filter: Optional[str] = None,
                                   beta: bool = False,
                                   time_only: bool = False):
         await interaction.response.defer()
         try:
-            if weekly and current:
-                raise MinigameCogError(
-                    'Choose either `weekly` or `current`.')
-            if first_days is not None and (
-                    not current or not 1 <= first_days <= 7):
-                raise MinigameCogError(
-                    '`first_days` requires `current` and a value from 1 to 7.')
             await self._cmd_akari_ratings(
-                _SlashCtx(interaction), weekly=weekly, current=current,
-                first_days=first_days,
+                _SlashCtx(interaction), weekly=weekly,
                 beta=beta,
                 time_only=time_only,
                 weekdays=self._slash_queens_weekdays(weekdays),

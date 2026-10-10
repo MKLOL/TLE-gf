@@ -1,5 +1,6 @@
 """Shared here/clear/show/vs/top/streak/remove commands. (Minigames cog impl mixin; see minigames.py)."""
 
+import datetime as dt
 import logging
 
 import discord
@@ -9,6 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util import paginator
 from tle.util import ranking
+from tle.util.akari_weekly import parse_weekly_results_args, week_start
 
 from tle.cogs._minigame_common import (
     compute_vs, compute_vs_matchups, compute_streak, compute_longest_streak,
@@ -258,10 +260,17 @@ class ImplSharedCmdMixin:
         game = GUESSGAME_GAME
         self._require_enabled(ctx.guild.id, game)
         try:
+            args, weekly, first_days = parse_weekly_results_args(args)
             args, scoring_name, scoring = resolve_scoring(game, args)
             dlo, dhi, plo, phi = parse_date_args(args)
         except ValueError as e:
             raise MinigameCogError(str(e)) from e
+
+        if weekly:
+            start = week_start(dt.date.today())
+            end = start + dt.timedelta(days=first_days or 7)
+            dlo = max(dlo, dt.datetime.combine(start, dt.time.min).timestamp())
+            dhi = min(dhi, dt.datetime.combine(end, dt.time.min).timestamp())
 
         rows1 = cf_common.user_db.get_minigame_results_for_user(
             ctx.guild.id, game.name, member1.id, dlo, dhi, plo, phi)

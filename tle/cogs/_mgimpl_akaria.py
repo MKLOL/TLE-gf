@@ -10,7 +10,7 @@ from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
 from tle.util.akari_difficulty import fetch_akari_difficulties
 from tle.util.akari_weekly import (
-    compute_weekly_ratings, current_week_standings, week_start,
+    compute_weekly_ratings, current_week_standings, filter_weekly_days, week_start,
 )
 
 from tle.cogs._minigame_common import (
@@ -131,7 +131,7 @@ class ImplAkariAMixin:
                                   included_ids=None, include_inactive=False,
                                   test_decay=False, weekly=False,
                                   weekdays=None, date_bounds=None, beta=False,
-                                  time_only=False, current=False, first_days=None):
+                                  time_only=False):
         """Guild leaderboard — registered, recently-active players only.
 
         ``excluded_ids`` / ``included_ids`` run an ad-hoc replay with the
@@ -147,17 +147,13 @@ class ImplAkariAMixin:
         """
         self._require_enabled(ctx.guild.id, AKARI_GAME)
         self._validate_akari_beta(
-            beta, test_decay=test_decay, weekly=weekly or current,
+            beta, test_decay=test_decay, weekly=weekly,
             time_only=time_only)
         if weekly:
             return await self._cmd_akari_completed_weekly_ratings(
                 ctx, excluded_ids=excluded_ids, included_ids=included_ids,
                 include_inactive=include_inactive, weekdays=weekdays,
                 date_bounds=date_bounds)
-        if current:
-            return await self._cmd_akari_current_week_ratings(
-                ctx, excluded_ids=excluded_ids, included_ids=included_ids,
-                weekdays=weekdays, date_bounds=date_bounds, first_days=first_days)
         registrants = cf_common.user_db.get_akari_registrants(ctx.guild.id)
         # Banned players stay rated (forward-only ban) but are hidden from
         # public boards at display time, like Queens'; debug shows them.
@@ -216,7 +212,7 @@ class ImplAkariAMixin:
     async def _send_akari_weekly_scores(ctx, standings, *, first_days=None):
         """Send the provisional current-week scores table (or an empty notice).
 
-        Shared by the public and ``debug`` ratings commands so both render the
+        Shared by the public and ``debug`` results commands so both render the
         in-progress week identically.
         """
         if not standings:
@@ -226,7 +222,7 @@ class ImplAkariAMixin:
         start = standings[0].week_start
         end = standings[0].week_end
         score_title = (
-            f'Daily Akari Current Weekly Ratings · {start:%b %d}–{end:%b %d} '
+            f'Daily Akari Current Weekly Results · {start:%b %d}–{end:%b %d} '
             f'(in progress)')
         if first_days is not None:
             score_title += f' · first {first_days} days'
@@ -265,11 +261,7 @@ class ImplAkariAMixin:
             result_rows, difficulties, as_of_date=today)
         rating_rows = sorted(
             states.values(), key=lambda s: (-s.rating, -s.games, int(s.user_id)))
-        current_rows = result_rows
-        if first_days is not None:
-            current_rows = [r for r in result_rows
-                            if dt.date.fromisoformat(str(r.puzzle_date)).weekday()
-                            < first_days]
+        current_rows = filter_weekly_days(result_rows, first_days)
         standings = current_week_standings(
             current_rows, difficulties, as_of_date=standings_date)
         return rating_rows, standings

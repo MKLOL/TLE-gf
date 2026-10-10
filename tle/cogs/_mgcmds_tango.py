@@ -12,8 +12,8 @@ from tle.cogs._minigame_helpers import (
     MinigameCogError, ChannelOrThread, CaseInsensitiveMember, tango_mod_only,
     _safe_member_name,
 )
-from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 from tle.cogs._minigame_queens_filters import _split_queens_improved_filter
+from tle.cogs._minigame_queens_cog import _queens_current_puzzle_date
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -174,58 +174,21 @@ class TangoCmdsMixin:
     async def tango_stats(self, ctx, *args):
         await self._cmd_queens_stats(ctx, TANGO_GAME, *args)
 
-    @tango.group(name='results', brief='Show Tango date leaderboard',
-                  usage='[date|number] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+    @tango.group(name='results', brief='Show Tango date or current weekly results',
+                  usage='[date|number | +weekly [+days=N]] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def tango_results(self, ctx, *args):
-        show_unrated = any(
-            str(arg).strip().casefold() == '+unrated' for arg in args)
-        args = tuple(
-            arg for arg in args
-            if str(arg).strip().casefold() != '+unrated')
-        args, improved = _split_queens_improved_filter(args)
-        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
-         date_bounds) = (
-            await self._extract_queens_rating_filters(ctx, TANGO_GAME, args))
-        if len(remaining) > 1:
-            raise MinigameCogError(
-                'Usage: `;tango results [date|number] '
-                '[+unrated] [+beta] [+exclude=…] [+include=…] '
-                '[+dow=mon,wed|weekday|weekend] '
-                '[d>=date] [d<date]`.')
-        date_arg = (
-            remaining[0] if remaining
-            else _queens_current_puzzle_date().isoformat()
-        )
-        await self._cmd_queens_stats_date(
-            ctx, TANGO_GAME, date_arg,
-            excluded_ids=excluded_ids, included_ids=included_ids,
-            weekdays=weekdays, date_bounds=date_bounds, improved=improved,
-            show_unrated=show_unrated)
+        await self._cmd_queens_results(
+            ctx, TANGO_GAME, args, default_date=_queens_current_puzzle_date())
 
     @tango_results.command(name='debug',
-                            brief='(Mod) Date results with ratings for ALL players',
-                            usage='[date|number] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            brief='(Mod) Date or current weekly results for ALL players',
+                            usage='[date|number | +weekly [+days=N]] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @tango_mod_only()
     async def tango_results_debug(self, ctx, *args):
-        args, improved = _split_queens_improved_filter(args)
-        (remaining, _include_decay, excluded_ids, included_ids, weekdays,
-         date_bounds) = (
-            await self._extract_queens_rating_filters(ctx, TANGO_GAME, args))
-        if len(remaining) > 1:
-            raise MinigameCogError(
-                'Usage: `;tango results debug [date|number] '
-                '[+beta] [+exclude=…] [+include=…] '
-                '[+dow=mon,wed|weekday|weekend] '
-                '[d>=date] [d<date]`.')
-        date_arg = (
-            remaining[0] if remaining
-            else _queens_current_puzzle_date().isoformat()
-        )
-        await self._cmd_queens_stats_date(
-            ctx, TANGO_GAME, date_arg, show_all=True,
-            excluded_ids=excluded_ids, included_ids=included_ids,
-            weekdays=weekdays, date_bounds=date_bounds, improved=improved)
+        await self._cmd_queens_results(
+            ctx, TANGO_GAME, args, show_all=True,
+            default_date=_queens_current_puzzle_date())
 
     @tango.group(name='import',
                   brief='Preview pasted Tango results or manage imported history',
@@ -323,6 +286,7 @@ class TangoCmdsMixin:
                   invoke_without_command=True)
     async def tango_ratings(self, ctx, *args):
         self._require_enabled(ctx.guild.id, TANGO_GAME)
+        self._reject_weekly_rating_results_args(args, TANGO_GAME)
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
@@ -446,6 +410,7 @@ class TangoCmdsMixin:
                             usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @tango_mod_only()
     async def tango_ratings_debug(self, ctx, *args):
+        self._reject_weekly_rating_results_args(args, TANGO_GAME, show_all=True)
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
