@@ -14,6 +14,9 @@ def xai_cost_microusd(*stats_groups):
     """Use xAI's billed cost when returned, with token-price fallback."""
     total = 0
     for group in stats_groups:
+        if isinstance(group, dict) and 'accounted_microusd' in group:
+            total += _integer(group, 'accounted_microusd')
+            continue
         if isinstance(group, dict) and 'cost_microusd' in group:
             total += _integer(group, 'cost_microusd')
             continue
@@ -43,7 +46,7 @@ def has_xai_cost_observation(*stats_groups):
     """True when exact cost or enough token usage exists to reconcile."""
     return any(
         isinstance(group, dict) and (
-            'cost_microusd' in group
+            'cost_microusd' in group or 'accounted_microusd' in group
             or _integer(group, 'input_tokens')
             or _integer(group, 'output_tokens'))
         for group in stats_groups)
