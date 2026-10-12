@@ -96,7 +96,8 @@ def build_user_content(prompt, images=None):
 
 def build_payload(model, prompt, images=None, system_instruction=None,
                   max_output_tokens=None, temperature=None,
-                  reasoning_effort=None):
+                  reasoning_effort=None, input_items=None, tools=None,
+                  tool_choice=None):
     """Assemble one stateless, non-retained Responses API request."""
     turns = []
     if system_instruction:
@@ -105,6 +106,11 @@ def build_payload(model, prompt, images=None, system_instruction=None,
                   'content': build_user_content(prompt, images)})
     payload = {
         'model': model, 'input': turns, 'stream': False, 'store': False}
+    if input_items is not None:
+        payload['input'] = list(input_items)
+    if tools is not None:
+        payload.update(tools=tools, tool_choice=tool_choice or 'auto',
+                       parallel_tool_calls=False)
     if max_output_tokens is not None:
         payload['max_output_tokens'] = max_output_tokens
     if temperature is not None:
@@ -282,7 +288,9 @@ async def generate_once(api_key, payload, session=None):
 async def complete(pool, prompt, images=None, system_instruction=None,
                    max_output_tokens=None, temperature=None,
                    reasoning_effort=None, session=None, stats=None,
-                   max_attempts=None, models=None):
+                   max_attempts=None, models=None, input_items=None,
+                   tools=None, tool_choice=None, return_response=False,
+                   budget=None):
     """Try healthy xAI key/model buckets, falling back down the ladder."""
     if pool.key_count() == 0:
         raise NoKeysError('No xAI API keys are configured.')
@@ -323,11 +331,21 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             lease.model, prompt, images=images,
             system_instruction=system_instruction,
             max_output_tokens=max_output_tokens, temperature=temperature,
-            reasoning_effort=reasoning_effort)
+            reasoning_effort=reasoning_effort, input_items=input_items,
+            tools=tools, tool_choice=tool_choice)
+        if budget is not None:
+            try:
+                budget.claim(payload)
+            except Exception:
+                record()
+                raise
         attempts += 1
+        observed = {}
         try:
             status, body, headers = await generate_once(
                 lease.api_key, payload, session=session)
+            if budget is not None:
+                _record_stats(observed, 0, body)
         except asyncio.CancelledError:
             # A deadline can cancel this coroutine after the provider has the
             # request. Count that attempt and avoid immediately reusing the
@@ -341,11 +359,22 @@ async def complete(pool, prompt, images=None, system_instruction=None,
             pool.report_transient(lease, message=err)
             failures.append(ServiceUnavailableError('network error'))
             continue
+        except Exception:
+            record()
+            raise
+        finally:
+            if budget is not None:
+                budget.observe(observed)
 
         message = error_message(body) or f'HTTP {status}'
         if status == 200:
             pool.report_success(lease)
             record(body)
+            if return_response:
+                actual_model = body.get('model')
+                if actual_model:
+                    lease = lease._replace(model=actual_model)
+                return body, lease
             try:
                 answer, actual_model = extract_text(body)
             except XaiError:
