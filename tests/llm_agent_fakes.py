@@ -55,8 +55,11 @@ def env(monkeypatch):
     channel.permissions_for = lambda m: NS(view_channel=m.id not in channel.denied,
                                            read_message_history=m.id not in channel.denied, manage_threads=False)
     channel.is_private = lambda: channel.private
-    channel.get_member = lambda mid: members.get(mid) if mid in channel.thread_members else None
-    channel.fetch_member = AsyncMock(side_effect=discord.NotFound('missing'))
+    async def fetch_member(mid):
+        if mid not in channel.thread_members:
+            raise discord.NotFound('missing')
+        return NS(id=mid)
+    channel.fetch_member = AsyncMock(side_effect=fetch_member)
     messages = {}
     async def fetch(mid):
         if mid not in messages:

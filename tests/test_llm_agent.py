@@ -69,10 +69,11 @@ def test_admission_blocks_before_any_paid_call(env, monkeypatch, restriction):
 
 
 @pytest.mark.parametrize('replied', [False, True])
-@pytest.mark.parametrize('change', ['permissions', 'privacy', 'feature'])
+@pytest.mark.parametrize('change', ['permissions', 'privacy', 'feature', 'membership'])
 def test_access_changes_withhold_retrieved_text(env, replied, change):
     target = env.message('Private evidence')
     env.search.return_value = env.hits(target)
+    env.channel.private = change == 'membership'
     if replied:
         env.ctx.message.reference = NS(resolved=target)
     async def provider(*args, **kwargs):
@@ -80,16 +81,32 @@ def test_access_changes_withhold_retrieved_text(env, replied, change):
             return call()
         if change == 'permissions':
             env.channel.denied.add(1)
+        elif change == 'membership':
+            env.channel.thread_members.remove(1)
         else:
             env.db.set_guild_config(100, 'llm_context' if change == 'privacy' else 'grok_tools',
                                    'off' if change == 'privacy' else '0')
         return answer(target.content)
     env.provider.side_effect = provider
     text = env.invoke()
-    if not replied or change == 'permissions':
+    if not replied or change in ('permissions', 'membership'):
         assert 'access changed' in text and target.content not in text
     else:
         assert text == target.content  # Explicit reply remains allowed without history forwarding.
+
+
+@pytest.mark.parametrize('replied', [False, True])
+def test_private_thread_members_can_search_and_reply(env, replied):
+    env.channel.private = True
+    target = env.message('Pizza is my favorite.')
+    if replied:
+        env.ctx.message.reference = NS(resolved=target)
+        env.provider.side_effect = [answer('Pizza.')]
+    else:
+        env.search.return_value = env.hits(target)
+        env.provider.side_effect = [call(), answer('Pizza.')]
+    assert env.invoke() == 'Pizza.'
+    assert {entry.args[0] for entry in env.channel.fetch_member.call_args_list} == {1, 99}
 
 
 @pytest.mark.parametrize('mode', ['disabled', 'image', 'literal', 'reply'])

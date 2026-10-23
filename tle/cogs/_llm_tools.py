@@ -123,7 +123,9 @@ class MessageTools:
             if not (permissions.view_channel and permissions.read_message_history):
                 raise ValueError('Message history is not accessible.')
             if (getattr(ctx.channel, 'is_private', lambda: False)()
-                    and not permissions.manage_threads and ctx.channel.get_member(member.id) is None):
+                    and not permissions.manage_threads):
+                # Thread has no get_member API. Fetch live membership so a
+                # removal during an in-flight lookup also fails closed.
                 await ctx.channel.fetch_member(member.id)
 
     def in_scope(self, message):
