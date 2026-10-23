@@ -10,6 +10,7 @@ from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common, gemini_api, llm_models, xai_api
 from tle.cogs import _llm_access as llm_access
+from tle.cogs import _llm_agent as llm_agent
 from tle.cogs import _llm_accounting as accounting
 from tle.cogs import _llm_context as llm_context
 from tle.cogs import _llm_entrypoints as llm_entrypoints
@@ -217,6 +218,7 @@ async def ask_grok(cog, ctx, question):
         constants.LLM_MAX_IMAGE_BYTES,
         max_total_bytes=constants.LLM_MAX_TOTAL_IMAGE_BYTES,
         mime_check=xai_api.is_supported_image)
+    agent_enabled = llm_agent.enabled(db(), ctx.guild.id) and not attachments
     router_stats, answer_stats = (
         accounting.new_stage_stats(), accounting.new_stage_stats())
     started = time.monotonic()
@@ -232,7 +234,8 @@ async def ask_grok(cog, ctx, question):
             window_seconds=user_rate.window_seconds,
             daily_limit=constants.XAI_DAILY_REQUEST_LIMIT,
             guild_id=ctx.guild.id, model=constants.XAI_MODELS[0],
-            reserved_microusd=accounting.xai_reservation_microusd(),
+            reserved_microusd=(llm_agent.xai_budget.reservation_microusd()
+                              if agent_enabled else accounting.xai_reservation_microusd()),
             daily_budget_microusd=accounting.daily_budget_microusd(),
             return_id=True,
             enforce_user_limit=(
@@ -241,6 +244,11 @@ async def ask_grok(cog, ctx, question):
             raise llm_limits.GrokGuardError(
                 str(reservation_id),
                 getattr(reservation_id, 'retry_at', None), user_rate)
+        if agent_enabled:
+            answer, lease, window = await llm_agent.answer(
+                cog, ctx, pool, question, referenced, controls, answer_stats)
+            mode = (llm_context.MODE_CONTEXT if window else llm_context.MODE_DIRECT)
+            return answer, controls.mode is not None
         mode, window, explicit = await _prepare_context(
             cog, ctx, 'xai', pool, question, referenced, attachments,
             controls, router_stats)
@@ -449,7 +457,9 @@ async def _unexpected(cog, ctx, provider, started, router_stats,
                       answer_stats, mode, window, model):
     trace_id = secrets.token_hex(4)
     _record(cog, ctx, provider, 'unexpected', started, model,
-            router_stats, answer_stats, mode, window)
+            router_stats, answer_stats, mode, window,
+            cost=(accounting.xai_cost_microusd(router_stats, answer_stats)
+                  if provider == 'xai' else 0))
     cog.logger.exception('Unexpected %s LLM failure (reference %s)',
                          provider, trace_id)
     await ctx.send(embed=discord_common.embed_alert(
