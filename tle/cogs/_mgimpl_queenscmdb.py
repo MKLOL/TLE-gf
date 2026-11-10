@@ -318,10 +318,11 @@ class ImplQueensCmdBMixin:
                                      show_all=False, excluded_ids=None,
                                      included_ids=None, weekdays=None,
                                      date_bounds=None, improved=False,
-                                     show_unrated=False):
+                                     show_unrated=False, all_results=False):
         self._require_enabled(ctx.guild.id, game)
-        self._sync_queens_materialized_results(
-            ctx.guild.id, game, migrate_legacy=False)
+        if not all_results:
+            self._sync_queens_materialized_results(
+                ctx.guild.id, game, migrate_legacy=False)
         puzzle_date = _parse_linkedin_date_or_number(game, date_arg)
         puzzle_number = game.linkedin.number_for_date(puzzle_date)
         day_start = dt.datetime.combine(puzzle_date, dt.time.min).timestamp()
@@ -332,8 +333,12 @@ class ImplQueensCmdBMixin:
         rows = self._filter_minigame_banned_rows(
             ctx.guild.id, game, rows)
         links_by_user = self._queens_links_by_user(ctx.guild.id, game)
+        if all_results:
+            rows = [row for row in self._filtered_minigame_result_rows(
+                ctx.guild.id, game, all_results=True)
+                if normalize_puzzle_date(row.puzzle_date) == puzzle_date]
         unrated_rows = []
-        if show_unrated:
+        if show_unrated and not all_results:
             links_by_name = {
                 link.normalized_name: link
                 for link in links_by_user.values()
@@ -364,7 +369,8 @@ class ImplQueensCmdBMixin:
                 ctx.guild.id, game, next(iter(puzzle_numbers)),
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds,
-                improved=improved)
+                improved=improved,
+                **({"all_results": True} if all_results else {}))
             registrants = (
                 set(puzzle_info.keys())
                 if show_all
@@ -374,7 +380,7 @@ class ImplQueensCmdBMixin:
             ctx.guild, rows,
             f'{game.display_name} #{puzzle_number} '
             f'{puzzle_date.isoformat()} Results'
-            f'{" + Unrated" if show_unrated else ""}'
+            f'{" + All (hypothetical)" if all_results else " + Unrated" if show_unrated else ""}'
             f'{_queens_improved_title_suffix(improved)}'
             f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}',
             puzzle_info=puzzle_info,

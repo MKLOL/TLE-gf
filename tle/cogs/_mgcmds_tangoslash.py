@@ -208,6 +208,7 @@ class TangoSlashMixin:
 
     @tango_slash.command(name='results', description='Show Tango date or current weekly results')
     @app_commands.describe(
+        all_results='Calculate hypothetical ratings including linked unrated results',
         date='Date or puzzle number (defaults to today)',
         weekly='Show this week\'s in-progress standings',
         first_days='Show only the first N days of the current week (1-7)',
@@ -223,12 +224,14 @@ class TangoSlashMixin:
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        all_results: bool = False,
         unrated: bool = False,
     ):
         await interaction.response.defer()
         args = [date] if date else []
         args += self._slash_queens_weekday_args(weekdays)
         args += str(date_filter or '').split()
+        args += ['+all'] if all_results else []
         args += ['+beta'] if beta else []
         args += ['+unrated'] if unrated else []
         args += ['+weekly'] if weekly else []
@@ -242,6 +245,7 @@ class TangoSlashMixin:
 
     @tango_slash.command(name='ratings', description='Show Tango rating leaderboard')
     @app_commands.describe(
+        all_results='Calculate hypothetical ratings including linked unrated results',
         weekly='Show ratings from completed weekly contests',
         weekdays='Tango days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
@@ -252,6 +256,7 @@ class TangoSlashMixin:
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        all_results: bool = False,
     ):
         await interaction.response.defer()
         try:
@@ -259,7 +264,8 @@ class TangoSlashMixin:
                 _SlashCtx(interaction), TANGO_GAME,
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=beta, weekly=weekly)
+                improved=beta, weekly=weekly,
+                **({"all_results": True} if all_results else {}))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 

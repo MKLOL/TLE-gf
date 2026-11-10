@@ -175,7 +175,7 @@ class TangoCmdsMixin:
         await self._cmd_queens_stats(ctx, TANGO_GAME, *args)
 
     @tango.group(name='results', brief='Show Tango date or current weekly results',
-                  usage='[date|number | +weekly [+days=N]] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[date|number | +weekly [+days=N]] [+unrated] [+all] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def tango_results(self, ctx, *args):
         await self._cmd_queens_results(
@@ -282,11 +282,13 @@ class TangoCmdsMixin:
         await self._cmd_reparse(ctx, TANGO_GAME)
 
     @tango.group(name='ratings', brief='Show Tango rating leaderboard',
-                  usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[+all] [+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def tango_ratings(self, ctx, *args):
         self._require_enabled(ctx.guild.id, TANGO_GAME)
         self._reject_weekly_rating_results_args(args, TANGO_GAME)
+        all_results = any(str(arg).casefold() == '+all' for arg in args)
+        args = tuple(arg for arg in args if str(arg).casefold() != '+all')
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
@@ -295,13 +297,13 @@ class TangoCmdsMixin:
             await self._extract_queens_rating_filters(ctx, TANGO_GAME, args))
         if remaining:
             raise MinigameCogError(
-                'Usage: `;tango ratings [+weekly] [+beta] '
+                'Usage: `;tango ratings [+all] [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(
             ctx, TANGO_GAME, excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved,
-            weekly=weekly)
+            weekly=weekly, **({"all_results": True} if all_results else {}))
 
     @tango.group(name='rating',
                   brief='Show Tango rating graph',
@@ -407,7 +409,7 @@ class TangoCmdsMixin:
 
     @tango_ratings.command(name='debug', aliases=['all'],
                             brief='(Mod) Leaderboard including unregistered rated users',
-                            usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            usage='[+all] [+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @tango_mod_only()
     async def tango_ratings_debug(self, ctx, *args):
         self._reject_weekly_rating_results_args(args, TANGO_GAME, show_all=True)

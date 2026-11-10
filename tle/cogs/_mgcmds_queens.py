@@ -175,7 +175,7 @@ class QueensCmdsMixin:
         await self._cmd_queens_stats(ctx, QUEENS_GAME, *args)
 
     @queens.group(name='results', brief='Show Queens date or current weekly results',
-                  usage='[date|number | +weekly [+days=N]] [+unrated] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[date|number | +weekly [+days=N]] [+unrated] [+all] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_results(self, ctx, *args):
         await self._cmd_queens_results(
@@ -291,11 +291,13 @@ class QueensCmdsMixin:
         await self._cmd_reparse(ctx, QUEENS_GAME)
 
     @queens.group(name='ratings', brief='Show Queens rating leaderboard',
-                  usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
+                  usage='[+all] [+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]',
                   invoke_without_command=True)
     async def queens_ratings(self, ctx, *args):
         self._require_enabled(ctx.guild.id, QUEENS_GAME)
         self._reject_weekly_rating_results_args(args, QUEENS_GAME)
+        all_results = any(str(arg).casefold() == '+all' for arg in args)
+        args = tuple(arg for arg in args if str(arg).casefold() != '+all')
         weekly = '+weekly' in args
         args = tuple(arg for arg in args if arg != '+weekly')
         args, improved = _split_queens_improved_filter(args)
@@ -304,13 +306,13 @@ class QueensCmdsMixin:
             await self._extract_queens_rating_filters(ctx, QUEENS_GAME, args))
         if remaining:
             raise MinigameCogError(
-                'Usage: `;queens ratings [+weekly] [+beta] '
+                'Usage: `;queens ratings [+all] [+weekly] [+beta] '
                 '[+exclude=…] [+include=…] '
                 '[+dow=mon,wed|weekday|weekend] [d>=date] [d<date]`.')
         await self._cmd_queens_ratings(
             ctx, QUEENS_GAME, excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved,
-            weekly=weekly)
+            weekly=weekly, **({"all_results": True} if all_results else {}))
 
     @queens.group(name='rating',
                   brief='Show Queens rating graph',
@@ -416,7 +418,7 @@ class QueensCmdsMixin:
 
     @queens_ratings.command(name='debug', aliases=['all'],
                             brief='(Mod) Leaderboard including unregistered rated users',
-                            usage='[+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
+                            usage='[+all] [+weekly] [+beta] [+exclude=…] [+include=…] [+dow=mon,wed|weekday|weekend] [d>=date] [d<date]')
     @queens_mod_only()
     async def queens_ratings_debug(self, ctx, *args):
         self._reject_weekly_rating_results_args(args, QUEENS_GAME, show_all=True)

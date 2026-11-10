@@ -178,3 +178,12 @@ ratings. Both `/queens results` and `/tango results` offer `weekly` and
 GuessThe.Game keeps its pairwise results format and supports the same filter
 with `;gg results @user1 @user2 +weekly +days=3`.
 `+current` is no longer supported; use `results +weekly` for live results.
+
+Queens and Tango support hypothetical daily ratings with `;queens ratings +all`
+and `;queens results [date|number] +all` (replace `queens` with `tango`). These
+replay all linked players' results, including opt-outs and manually unrated
+results, without changing official ratings or opt-out settings. Unlinked scores
+are excluded; existing hidden-player and public ban rules still apply. The
+output is labeled hypothetical. `+unrated` remains display-only. `+all` supports
+player/date/weekday filters and `+beta`, but cannot be combined with `+weekly`.
+The corresponding slash commands offer `all_results`.

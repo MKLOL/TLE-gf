@@ -9,6 +9,7 @@ from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util.akari_beta_rating import compute_akari_beta_ratings
 from tle.util.minigame_rating import compute_ratings
+from tle.cogs._minigame_linkedin_all import all_linked_results
 from tle.util.queens_improved_rating import compute_queens_improved_ratings
 
 from tle.cogs._minigame_akari import (
@@ -116,16 +117,19 @@ class ImplRatingMixin:
 
     def _filtered_minigame_result_rows(self, guild_id, game, *,
                                        excluded_ids=None, included_ids=None,
-                                       weekdays=None, date_bounds=None):
+                                       weekdays=None, date_bounds=None, all_results=False):
         """Merged result rows with every read-side filter applied.
 
         Weekday and date-bounds filters are game-agnostic (no-ops when None);
         the registered-players-only cut is Queens-specific (Akari shadow-rates
         everyone, Queens rates only linked players).
         """
-        self._sync_minigame_results_for_read(guild_id, game)
-        rows = cf_common.user_db.get_minigame_results_for_guild(
-            guild_id, game.name)
+        if all_results:
+            rows = all_linked_results(guild_id, game)
+        else:
+            self._sync_minigame_results_for_read(guild_id, game)
+            rows = cf_common.user_db.get_minigame_results_for_guild(
+                guild_id, game.name)
         rows = self._filter_minigame_banned_rows(guild_id, game, rows)
         if game.linkedin_identity:
             rows = self._filter_queens_registered_result_rows(
@@ -158,11 +162,12 @@ class ImplRatingMixin:
     def _minigame_rating_rows(self, guild_id, game, *, excluded_ids=None,
                               included_ids=None, weekdays=None,
                               date_bounds=None, extra_compute_kwargs=None,
-                              improved=False):
+                              improved=False, all_results=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
-            date_bounds=date_bounds)
+            date_bounds=date_bounds,
+            **({"all_results": True} if all_results else {}))
         states = self._minigame_rating_engine(game, improved)(
             rows, **self._minigame_compute_kwargs(
                 game, extra_compute_kwargs, improved=improved))
@@ -206,11 +211,12 @@ class ImplRatingMixin:
                                      excluded_ids=None, included_ids=None,
                                      weekdays=None, date_bounds=None,
                                      extra_compute_kwargs=None,
-                                     improved=False):
+                                     improved=False, all_results=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
-            date_bounds=date_bounds)
+            date_bounds=date_bounds,
+            **({"all_results": True} if all_results else {}))
         histories = {}
         compute_kwargs = self._minigame_compute_kwargs(
             game, extra_compute_kwargs, improved=improved)

@@ -183,8 +183,10 @@ class ImplQueensCmdMixin:
     async def _cmd_queens_ratings(self, ctx, game, *, show_all=False,
                                   excluded_ids=None, included_ids=None,
                                   weekdays=None, date_bounds=None,
-                                  improved=False, weekly=False):
+                                  improved=False, weekly=False, all_results=False):
         self._require_enabled(ctx.guild.id, game)
+        if weekly and all_results:
+            raise MinigameCogError('`+all` cannot be combined with `+weekly`.')
         if weekly and improved:
             raise MinigameCogError(
                 '`+weekly` and `+beta` are separate testing rating '
@@ -194,19 +196,20 @@ class ImplQueensCmdMixin:
                 ctx.guild.id, game,
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds)
-        elif not improved:
+        elif not improved and not all_results:
             self._recompute_minigame_ratings(ctx.guild.id, game)
             rows = None
         else:
             rows = None
         if not weekly and (
-                improved or excluded_ids or included_ids
+                all_results or improved or excluded_ids or included_ids
                 or weekdays is not None or date_bounds is not None):
             rows = self._minigame_rating_rows(
                 ctx.guild.id, game,
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds,
-                improved=improved)
+                improved=improved,
+                **({"all_results": True} if all_results else {}))
         elif not weekly and rows is None:
             rows = cf_common.user_db.get_minigame_ratings(
                 ctx.guild.id, game.name)
@@ -244,6 +247,8 @@ class ImplQueensCmdMixin:
                 f'{game.display_name} {"Weekly Ratings" if weekly else "Ratings"}'
                 f'{_queens_improved_title_suffix(improved)}'
                 f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}')
+        if all_results:
+            title += ' + All (hypothetical)'
         if shown:
             discord_file = _mg()._get_akari_rating_table_image_file(
                 ctx.guild, shown, linked_ids,
