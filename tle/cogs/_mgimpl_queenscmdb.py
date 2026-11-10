@@ -40,9 +40,9 @@ class ImplQueensCmdBMixin:
                                       require_registered=True,
                                       excluded_ids=None, included_ids=None,
                                       weekdays=None, date_bounds=None,
-                                      improved=False):
+                                      improved=False, all_results=False):
         self._require_enabled(ctx.guild.id, game)
-        if not improved:
+        if not improved and not all_results:
             self._recompute_minigame_ratings(ctx.guild.id, game)
         if require_registered:
             for member in members:
@@ -50,14 +50,15 @@ class ImplQueensCmdBMixin:
                     ctx.guild.id, game, member)
 
         filtered = bool(
-            improved or excluded_ids or included_ids or weekdays is not None)
+            all_results or improved or excluded_ids or included_ids or weekdays is not None)
         per_member = []
         for member in members:
             if filtered:
                 row, history = self._minigame_user_data(
                     ctx.guild.id, game, member.id,
                     excluded_ids=excluded_ids, included_ids=included_ids,
-                    weekdays=weekdays, improved=improved)
+                    weekdays=weekdays, improved=improved,
+                    **({"all_results": True} if all_results else {}))
             else:
                 row = cf_common.user_db.get_minigame_rating(
                     ctx.guild.id, game.name, member.id)
@@ -123,6 +124,8 @@ class ImplQueensCmdBMixin:
                 color=top_rank.color_embed,
             )
 
+        if all_results:
+            embed.title += ' (all results, hypothetical)'
         discord_common.attach_image(embed, discord_file)
         await ctx.send(embed=embed, file=discord_file)
 

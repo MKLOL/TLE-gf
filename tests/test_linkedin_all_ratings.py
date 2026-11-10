@@ -124,3 +124,28 @@ class TestAllRatings(_QueensCommandsBase):
         rows = cog._minigame_rating_rows(100, game, improved=True, all_results=True)
         assert {r.user_id for r in rows} == {'300', '301', '302'}
         assert list(db.conn.iterdump()) == before
+
+    @pytest.mark.parametrize('command', ['rating', 'performance'])
+    @pytest.mark.parametrize('named', [False, True])
+    @pytest.mark.parametrize('beta', [False, True])
+    def test_personal_graph_all_results(self, db, monkeypatch, game, named, beta, command):
+        cog, ctx, expected = self.seed(db, monkeypatch, game)
+        ctx.author.name = 'nifeshe'
+        before = list(db.conn.iterdump())
+        captured = {}
+        def plot(series, **kwargs):
+            captured['series'] = series
+            return SimpleNamespace(filename='plot.png')
+        monkeypatch.setattr(module, 'plot_akari_' + command, plot)
+        args = (['nifeshe'] if named else []) + ['+all']
+        if beta:
+            args.append('+beta')
+        asyncio.run(getattr(Minigames, game.name + '_' + command).__wrapped__(
+            cog, ctx, *args))
+        histories = {}
+        cog._minigame_rating_engine(game, beta)(
+            expected, histories=histories,
+            **cog._minigame_compute_kwargs(game, improved=beta))
+        assert captured['series'][0][0] == histories['300']
+        assert 'hypothetical' in ctx.sent['embed'].title
+        assert list(db.conn.iterdump()) == before

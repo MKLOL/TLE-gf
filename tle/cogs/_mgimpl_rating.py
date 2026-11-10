@@ -180,11 +180,12 @@ class ImplRatingMixin:
                             include_decay=False, excluded_ids=None,
                             included_ids=None, weekdays=None,
                             date_bounds=None, extra_compute_kwargs=None,
-                            improved=False):
+                            improved=False, all_results=False):
         rows = self._filtered_minigame_result_rows(
             guild_id, game, excluded_ids=excluded_ids,
             included_ids=included_ids, weekdays=weekdays,
-            date_bounds=date_bounds)
+            date_bounds=date_bounds,
+            **({"all_results": True} if all_results else {}))
         histories = {}
         states = self._minigame_rating_engine(game, improved)(
             rows, histories=histories,

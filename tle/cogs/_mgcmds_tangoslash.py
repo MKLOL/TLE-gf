@@ -276,7 +276,8 @@ class TangoSlashMixin:
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
         recalculate='Recalculate ratings from the filtered result set',
         decay='Show inactivity days on the graph',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        all_results='Hypothetical rating including unrated linked results')
     async def slash_tango_rating(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
@@ -285,6 +286,7 @@ class TangoSlashMixin:
         recalculate: Optional[bool] = False,
         decay: bool = False,
         beta: bool = False,
+        all_results: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -294,7 +296,8 @@ class TangoSlashMixin:
                 include_decay=bool(decay),
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                recalculate=bool(recalculate), improved=beta)
+                recalculate=bool(recalculate), improved=beta,
+                **({"all_results": True} if all_results else {}))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
@@ -303,13 +306,15 @@ class TangoSlashMixin:
         member='Player (defaults to you)',
         weekdays='Tango days: mon,wed, weekday, or weekend',
         date_filter='Rating date filter, e.g. d>=01062026 d<08062026',
-        beta='Use the beta testing rating system')
+        beta='Use the beta testing rating system',
+        all_results='Hypothetical performance including unrated linked results')
     async def slash_tango_performance(
         self, interaction: discord.Interaction,
         member: Optional[discord.Member] = None,
         weekdays: Optional[str] = None,
         date_filter: Optional[str] = None,
         beta: bool = False,
+        all_results: bool = False,
     ):
         await interaction.response.defer()
         target = member or interaction.user
@@ -318,7 +323,8 @@ class TangoSlashMixin:
                 _SlashCtx(interaction), TANGO_GAME, [target],
                 weekdays=self._slash_queens_weekdays(weekdays),
                 date_bounds=self._slash_queens_date_bounds(date_filter),
-                improved=beta)
+                improved=beta,
+                **({"all_results": True} if all_results else {}))
         except Exception as _slash_exc:
             await self._slash_handle_error(interaction, _slash_exc)
 
