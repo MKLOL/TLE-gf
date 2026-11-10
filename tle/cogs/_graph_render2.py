@@ -21,9 +21,11 @@ from tle.util import discord_common
 from tle.util import graph_common as gc
 
 from tle.cogs._graph_helpers import GraphCogError, _rating_at_percentile
+from tle.cogs._codeforces_helpers import _gitgudDecodeExactScoreDelta
 
 # A user is considered active if the duration since his last contest is not more than this
 CONTEST_ACTIVE_TIME_CUTOFF = 90 * 24 * 60 * 60  # 90 days
+_HOWGUD_MAX_BINS = 100
 
 
 async def _rating_hist(ctx, ratings, mode, binsize, title):
@@ -242,13 +244,32 @@ async def howgud(cog, ctx, *members: discord.Member):
     if len(members) > 5:
         raise GraphCogError('Please specify at most 5 gudgitters.')
 
-    deltas = [[x[0] for x in cf_common.user_db.howgud(member.id)] for member in members]
+    deltas = []
+    omitted = 0
+    for member in members:
+        stored = [row[0] for row in cf_common.user_db.howgud(member.id)]
+        # Tagged challenges store exact payouts near -10**9, not problem
+        # deltas. Treating those sentinels as ratings creates millions of
+        # histogram bars and blocks the bot's event loop until it runs out
+        # of memory. The original deltas cannot be recovered from the payout.
+        recorded = [delta for delta in stored
+                    if _gitgudDecodeExactScoreDelta(delta) is None]
+        omitted += len(stored) - len(recorded)
+        deltas.append(recorded)
+    if not any(deltas):
+        raise GraphCogError(
+            'No completed challenges with recorded problem deltas to plot. '
+            'Tagged challenges do not retain their problem deltas.')
     labels = [gc.StrWrap(f'{member.display_name}: {len(delta)}')
               for member, delta in zip(members, deltas)]
 
     #get bins dynamically
     min_delta = min([min(delta, default=0) for delta in deltas])
     max_delta = max([max(delta, default=0) for delta in deltas])
+    # Bound the allocation before building bin edges or invoking Matplotlib,
+    # including for unexpected historical values outside the reserved range.
+    if (max_delta - min_delta) // 100 + 1 > _HOWGUD_MAX_BINS:
+        raise GraphCogError('Problem delta range is too large to plot safely.')
     hist_bins = list(range(min_delta - 50, max_delta + 50 + 1, 100))
 
     plt.clf()
@@ -260,6 +281,10 @@ async def howgud(cog, ctx, *members: discord.Member):
 
     discord_file = gc.get_current_figure_as_file()
     embed = discord_common.cf_color_embed(title='Histogram of gudgitting')
+    if omitted:
+        embed.description = (
+            f'Omitted {omitted} tagged challenge(s) whose problem deltas '
+            'are unavailable.')
     discord_common.attach_image(embed, discord_file)
     discord_common.set_author_footer(embed, ctx.author)
     await ctx.send(embed=embed, file=discord_file)
