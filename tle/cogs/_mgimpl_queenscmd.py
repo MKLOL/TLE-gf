@@ -183,10 +183,8 @@ class ImplQueensCmdMixin:
     async def _cmd_queens_ratings(self, ctx, game, *, show_all=False,
                                   excluded_ids=None, included_ids=None,
                                   weekdays=None, date_bounds=None,
-                                  improved=False, weekly=False, all_results=False):
+                                  improved=False, weekly=False):
         self._require_enabled(ctx.guild.id, game)
-        if weekly and all_results:
-            raise MinigameCogError('`+all` cannot be combined with `+weekly`.')
         if weekly and improved:
             raise MinigameCogError(
                 '`+weekly` and `+beta` are separate testing rating '
@@ -196,20 +194,19 @@ class ImplQueensCmdMixin:
                 ctx.guild.id, game,
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds)
-        elif not improved and not all_results:
+        elif not improved:
             self._recompute_minigame_ratings(ctx.guild.id, game)
             rows = None
         else:
             rows = None
         if not weekly and (
-                all_results or improved or excluded_ids or included_ids
+                improved or excluded_ids or included_ids
                 or weekdays is not None or date_bounds is not None):
             rows = self._minigame_rating_rows(
                 ctx.guild.id, game,
                 excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds,
-                improved=improved,
-                **({"all_results": True} if all_results else {}))
+                improved=improved)
         elif not weekly and rows is None:
             rows = cf_common.user_db.get_minigame_ratings(
                 ctx.guild.id, game.name)
@@ -247,8 +244,6 @@ class ImplQueensCmdMixin:
                 f'{game.display_name} {"Weekly Ratings" if weekly else "Ratings"}'
                 f'{_queens_improved_title_suffix(improved)}'
                 f'{_queens_filter_suffix(weekdays=weekdays, date_bounds=date_bounds)}')
-        if all_results:
-            title += ' + All (hypothetical)'
         if shown:
             discord_file = _mg()._get_akari_rating_table_image_file(
                 ctx.guild, shown, linked_ids,
@@ -320,7 +315,7 @@ class ImplQueensCmdMixin:
                                  include_decay=False,
                                  excluded_ids=None, included_ids=None,
                                  weekdays=None, date_bounds=None,
-                                 recalculate=False, improved=False, all_results=False):
+                                 recalculate=False, improved=False):
         """Per-user rating graph for a LinkedIn game.
 
         ``include_decay=True`` (the ``+decay`` arg) threads inactivity days
@@ -328,7 +323,7 @@ class ImplQueensCmdMixin:
         stay the marker anchors, and solo days remain omitted either way.
         """
         self._require_enabled(ctx.guild.id, game)
-        if not improved and not all_results:
+        if not improved:
             self._recompute_minigame_ratings(ctx.guild.id, game)
         if require_registered:
             for member in members:
@@ -336,7 +331,7 @@ class ImplQueensCmdMixin:
                     ctx.guild.id, game, member)
 
         replay_date_bounds = date_bounds if recalculate else None
-        filtered = bool(all_results or improved or excluded_ids or included_ids or weekdays is not None
+        filtered = bool(improved or excluded_ids or included_ids or weekdays is not None
                         or replay_date_bounds is not None)
         per_member = []
         for member in members:
@@ -346,8 +341,7 @@ class ImplQueensCmdMixin:
                     include_decay=include_decay,
                     excluded_ids=excluded_ids, included_ids=included_ids,
                     weekdays=weekdays, date_bounds=replay_date_bounds,
-                    improved=improved,
-                    **({"all_results": True} if all_results else {}))
+                    improved=improved)
             else:
                 row = cf_common.user_db.get_minigame_rating(
                     ctx.guild.id, game.name, member.id)
@@ -431,7 +425,5 @@ class ImplQueensCmdMixin:
                 color=top_rank.color_embed,
             )
 
-        if all_results:
-            embed.title += ' (all results, hypothetical)'
         discord_common.attach_image(embed, discord_file)
         await ctx.send(embed=embed, file=discord_file)

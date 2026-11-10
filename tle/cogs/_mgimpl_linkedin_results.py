@@ -18,8 +18,6 @@ class ImplLinkedInResultsMixin:
 
     async def _cmd_queens_results(
             self, ctx, game, args, *, show_all=False, default_date=None):
-        all_results = any(str(arg).strip().casefold() == '+all' for arg in args)
-        args = tuple(arg for arg in args if str(arg).strip().casefold() != '+all')
         show_unrated = any(
             str(arg).strip().casefold() == '+unrated' for arg in args)
         args = tuple(arg for arg in args
@@ -36,9 +34,9 @@ class ImplLinkedInResultsMixin:
                 raise MinigameCogError(
                     '`+weekly` shows the current week and cannot be combined '
                     'with a puzzle/date selector.')
-            if improved or show_unrated or all_results:
+            if improved or show_unrated:
                 raise MinigameCogError(
-                    '`+weekly` cannot be combined with `+beta`, `+unrated`, or `+all`.')
+                    '`+weekly` cannot be combined with `+beta` or `+unrated`.')
             return await self._cmd_queens_current_week_results(
                 ctx, game, excluded_ids=excluded_ids, included_ids=included_ids,
                 weekdays=weekdays, date_bounds=date_bounds,
@@ -47,15 +45,13 @@ class ImplLinkedInResultsMixin:
             debug = ' debug' if show_all else ''
             raise MinigameCogError(
                 f'Usage: `;{game.name} results{debug} '
-                '[date|number | +weekly [+days=N]] [+unrated] [+all] [+beta] '
+                '[date|number | +weekly [+days=N]] [+unrated] [+beta] '
                 '[+exclude=…] [+include=…] [+dow=…] [d>=date] [d<date]`.')
         date_arg = (remaining[0] if remaining
                     else (default_date or _queens_current_puzzle_date()).isoformat())
         kwargs = dict(
             excluded_ids=excluded_ids, included_ids=included_ids,
             weekdays=weekdays, date_bounds=date_bounds, improved=improved)
-        if all_results:
-            kwargs['all_results'] = True
         if show_all:
             kwargs['show_all'] = True
         else:
