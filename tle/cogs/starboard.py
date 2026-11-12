@@ -72,9 +72,9 @@ class Starboard(
 
     @starboard.command(brief='Add an emoji to the starboard')
     @commands.has_role(constants.TLE_ADMIN)
-    async def add(self, ctx, emoji: str = constants._DEFAULT_STAR, threshold: int = 3, color: str = None):
-        """Add an emoji to the starboard with optional threshold and color.
-        Example: ;starboard add ⭐ 3 #ffaa10"""
+    async def add(self, ctx, emoji: str = constants._DEFAULT_STAR, threshold: int = None, color: str = None):
+        """Add an emoji with optional threshold (⭐ defaults to 4; others to 3) and color.
+        Example: ;starboard add ⭐ 4 #ffaa10"""
         await self._impl_add(ctx, emoji, threshold, color)
 
     @starboard.command(brief='Delete an emoji from starboard')

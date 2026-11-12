@@ -31,13 +31,16 @@ emoji/alias configuration always wins, and a destination without a configured
 channel is skipped.
 
 Each fallback emoji must independently reach the destination's configured
-threshold (for example, 3 on ⭐ and 4 on 💊). Existing aliases still pool as
-before. Two elephants plus two pills cannot qualify together. One post per
-board shows separate counts, such as `⭐ 3 :chocoGasp: 3`, or just
-`:chocoGasp: 3`. After a post qualifies, its other reactions and subsequent
+threshold (4 on ⭐ by default, and 4 on the configured 💊 board). Existing aliases
+still pool as before. Two elephants plus two pills cannot qualify together. One post per
+board shows separate counts, such as `⭐ 4 :chocoGasp: 4`, or just
+`:chocoGasp: 4`. After a post qualifies, its other reactions and subsequent
 count decreases remain visible, except that ⭐/💊 only appear at or above their
 configured thresholds. Leaderboard totals count each person once per
 board and message, including reactions made on the board post itself.
+
+Migration 1.67.0 raises existing ⭐ boards set to 3 to 4 on startup; other
+configured thresholds and existing posts are preserved.
 
 ## Installation
 > If you want to run the bot inside a docker container follow these [instructions](/Docker.md)

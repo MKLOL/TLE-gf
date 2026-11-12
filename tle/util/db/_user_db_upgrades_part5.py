@@ -144,3 +144,15 @@ def upgrade_1_66_0(db):
         WHERE revoked_at IS NULL AND expires_at > ?''',
         (PERMANENT_EXPIRY, time.time()))
     db.commit()
+
+
+@registry.register('1.67.0', 'Raise the default starboard threshold to four')
+def upgrade_1_67_0(db):
+    """Raise existing ⭐ boards at three, preserving other custom thresholds."""
+    exists = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'starboard_emoji_v1'").fetchone()
+    if exists:
+        db.execute('UPDATE starboard_emoji_v1 SET threshold = 4 '
+                   'WHERE emoji = ? AND threshold = 3', ('\N{WHITE MEDIUM STAR}',))
+    db.commit()

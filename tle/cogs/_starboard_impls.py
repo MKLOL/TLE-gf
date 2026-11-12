@@ -25,6 +25,8 @@ class ImplMixin:
     # --- Admin config command impls ---
 
     async def _impl_add(self, ctx, emoji, threshold, color):
+        if threshold is None:
+            threshold = 4 if emoji == constants._DEFAULT_STAR else 3
         if threshold < 1:
             raise StarboardCogError('Threshold must be at least 1')
         color_val = constants._DEFAULT_STAR_COLOR
