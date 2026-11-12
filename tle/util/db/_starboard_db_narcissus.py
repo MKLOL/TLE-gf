@@ -51,7 +51,7 @@ class StarboardNarcissusDbMixin:
             (str(original_msg_id), emoji)).fetchone()
         if row is None or not row.author_id or row.author_id == '__UNKNOWN__':
             return
-        family = self.get_emoji_family(row.guild_id, emoji)
+        family = self.get_starboard_reactor_emojis(row.guild_id, emoji, original_msg_id)
         placeholders = ','.join('?' * len(family))
         live = self.conn.execute(
             f'SELECT 1 FROM ('
@@ -108,6 +108,9 @@ class StarboardNarcissusDbMixin:
         guild_id = str(guild_id)
         if emoji_family is None:
             emoji_family = [emoji]
+        fallbacks = [raw for _, group in
+                     self.get_starboard_reaction_groups(guild_id, emoji)[1:] for raw in group]
+        emoji_family = list(dict.fromkeys(emoji_family + fallbacks))
         time_clauses, time_params = self._snowflake_time_filter(
             'n.original_msg_id', dlo, dhi)
         extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''

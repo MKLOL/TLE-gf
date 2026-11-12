@@ -176,21 +176,20 @@ class BackfillMixin:
                             await asyncio.sleep(0.5)
                             continue
 
-                        count = sum(r.count for r in original_msg.reactions
-                                    if _emoji_str(r) == msg.emoji)
-                        # Collect reactors before the count update so the
-                        # sticky narcissus hook sees a live self-reaction.
-                        for r in original_msg.reactions:
-                            if _emoji_str(r) == msg.emoji:
-                                user_ids = [str(user.id) async for user in r.users()]
-                                cf_common.user_db.bulk_add_reactors(
-                                    msg.original_msg_id, msg.emoji, user_ids
-                                )
-                                break
-                        # Never clobber proxy reactors, which are invisible
-                        # on the original message's own reactions.
-                        count = max(count, cf_common.user_db.get_merged_reactor_count(
-                            msg.original_msg_id, [msg.emoji]))
+                        family = cf_common.user_db.get_starboard_reactor_emojis(
+                            guild.id, msg.emoji, msg.original_msg_id,
+                            (_emoji_str(r) for r in original_msg.reactions))
+                        reactors = []
+                        for reaction in original_msg.reactions:
+                            raw = _emoji_str(reaction)
+                            if raw in family:
+                                async for user in reaction.users():
+                                    reactors.append((raw, str(user.id)))
+                        cf_common.user_db.replace_reactors(
+                            msg.original_msg_id, family, reactors)
+                        # Proxy rows remain separate and survive physical resync.
+                        count = cf_common.user_db.get_merged_reactor_count(
+                            msg.original_msg_id, family)
                         cf_common.user_db.update_starboard_author_and_count(
                             msg.original_msg_id, msg.emoji,
                             str(original_msg.author.id), count,

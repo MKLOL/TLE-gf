@@ -21,6 +21,23 @@ The features of the bot are split into a number of cogs, each handling their own
 - **Starboard** Commands related to the starboard, which adds messages to a specific channel when enough users react with a ⭐️.
 - **CacheControl** Commands related to data caching.
 
+### Starboard fallback reactions
+
+Unconfigured reactions automatically use the configured ⭐ or 💊 board. A local
+heuristic reads custom emoji names or Unicode names: death, mockery and pill
+cues prefer 💊; ambiguous names default to ⭐. Only `reverse` negates a cue.
+There is no server-emote list, AI call, or automatic alias creation. Explicit
+emoji/alias configuration always wins, and a destination without a configured
+channel is skipped.
+
+Each fallback emoji must independently reach the destination's configured
+threshold (for example, 3 on ⭐ and 4 on 💊). Existing aliases still pool as
+before. Two elephants plus two pills cannot qualify together. One post per
+board shows separate counts, such as `⭐ 3 :chocoGasp: 3`, or just
+`:chocoGasp: 3`. After a post qualifies, its other reactions and subsequent
+count decreases remain visible; leaderboard totals count each person once per
+board and message, including reactions made on the board post itself.
+
 ## Installation
 > If you want to run the bot inside a docker container follow these [instructions](/Docker.md)
 

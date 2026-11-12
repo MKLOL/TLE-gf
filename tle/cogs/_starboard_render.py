@@ -144,13 +144,26 @@ async def resolve_forward_snapshot(message, resolve_channel):
         return None
 
 
-def _starboard_content(emoji_str, count, jump_url):
+def _reaction_header(emoji_str, count, reaction_counts=None):
+    """Keep emoji counts separate and leave room for an author and jump URL."""
+    counts = reaction_counts or [(emoji_str, count)]
+    parts = []
+    for index, (emoji, value) in enumerate(counts):
+        part = f'{emoji} **{value}**'
+        if len(' '.join(parts + [part])) > 1500:
+            parts.append(f'(+{len(counts) - index} more)')
+            break
+        parts.append(part)
+    return ' '.join(parts)
+
+
+def _starboard_content(emoji_str, count, jump_url, reaction_counts=None):
     """Build the header line for a starboard message.
 
     Format: ⭐ **5** | jump_url
     The jump URL is auto-linked by Discord in message content.
     """
-    return f'{emoji_str} **{count}** | {jump_url}'
+    return f'{_reaction_header(emoji_str, count, reaction_counts)} | {jump_url}'
 
 
 def _period_start(period, now):
@@ -238,7 +251,7 @@ def _parse_starboard_args(
 
 
 async def build_starboard_message(message, emoji_str, count, color,
-                                  forward_snapshot=None):
+                                  forward_snapshot=None, *, reaction_counts=None):
     """Build content, embeds, and files for a starboard message.
 
     Returns (content, embeds, files) where:
@@ -259,7 +272,8 @@ async def build_starboard_message(message, emoji_str, count, color,
         f'Forwarded by {message.author.display_name}'
         if is_forward else message.author.display_name
     )
-    content = _starboard_content(emoji_str, count, message.jump_url)
+    header = _reaction_header(emoji_str, count, reaction_counts)
+    content = f'{header} | {message.jump_url}'
     embeds = []
     files = []
 
@@ -298,7 +312,7 @@ async def build_starboard_message(message, emoji_str, count, color,
     if has_media_files:
         safe_name = discord.utils.escape_mentions(forwarder_label)
         content = (
-            f'{emoji_str} **{count}** \u00b7 **{safe_name}** '
+            f'{header} \u00b7 **{safe_name}** '
             f'| {message.jump_url}'
         )
         # An explicit spoiler flag is required, not optional: discord.py

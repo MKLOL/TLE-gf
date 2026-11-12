@@ -73,6 +73,9 @@ class StarboardQueriesDbMixin:
         guild_id = str(guild_id)
         if emoji_family is None:
             emoji_family = [emoji]
+        fallbacks = [raw for _, group in
+                     self.get_starboard_reaction_groups(guild_id, emoji)[1:] for raw in group]
+        emoji_family = list(dict.fromkeys(emoji_family + fallbacks))
         time_clauses, time_params = self._snowflake_time_filter('m.original_msg_id', dlo, dhi)
         extra = (' AND ' + ' AND '.join(time_clauses)) if time_clauses else ''
         placeholders = ','.join('?' * len(emoji_family))

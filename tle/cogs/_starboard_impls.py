@@ -180,9 +180,10 @@ class ImplMixin:
 
         fixed = []
         for entry in entries:
-            emoji_family = cf_common.user_db.get_emoji_family(ctx.guild.id, entry.emoji)
-            old_count = cf_common.user_db.get_merged_reactor_count(message_id, emoji_family)
-            new_count = await self._resync_reactors(message, emoji_family)
+            _, old_count = cf_common.user_db.get_starboard_reaction_counts(
+                ctx.guild.id, message_id, entry.emoji)
+            _, new_count = await self._sync_board_reactions(
+                message, ctx.guild.id, entry.emoji, force=True)
             cf_common.user_db.update_starboard_author_and_count(
                 message_id, entry.emoji, str(message.author.id), new_count,
                 channel_id=channel_id,

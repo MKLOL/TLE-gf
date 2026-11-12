@@ -18,12 +18,13 @@ from tle.util.db._starboard_db_config import GuildConfigDbMixin
 from tle.util.db._starboard_db_narcissus import StarboardNarcissusDbMixin
 from tle.util.db._starboard_db_proxy import StarboardProxyDbMixin
 from tle.util.db._starboard_db_queries import StarboardQueriesDbMixin
+from tle.util.db._starboard_db_routing import StarboardRoutingDbMixin
 from tle.util.db._starboard_db_backfill import (
     StarboardBackfillDbMixin, create_pending_backfill_index,
 )
 
 
-class StarboardDbMixin(StarboardQueriesDbMixin, StarboardProxyDbMixin,
+class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, StarboardProxyDbMixin,
                        StarboardNarcissusDbMixin, GuildConfigDbMixin,
                        StarboardBackfillDbMixin):
     """Mixin providing all starboard DB methods. Expects self.conn to be a sqlite3 connection.
@@ -211,8 +212,7 @@ class StarboardDbMixin(StarboardQueriesDbMixin, StarboardProxyDbMixin,
         """Remove an emoji from a guild's starboard config, its tracked messages, reactors, and aliases."""
         guild_id = str(guild_id)
         # Collect the emoji family (main + aliases) so we clean up all reactor rows
-        alias_emojis = self.get_aliases_for_emoji(guild_id, emoji)
-        all_emojis = [emoji] + alias_emojis
+        all_emojis = self.get_starboard_reactor_emojis(guild_id, emoji)
         placeholders = ','.join('?' * len(all_emojis))
         # Clean up reactors for messages belonging to this guild+emoji (including alias reactors)
         for table in ('starboard_reactors', 'starboard_proxy_reactors'):

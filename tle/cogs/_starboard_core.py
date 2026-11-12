@@ -14,9 +14,9 @@ from discord.ext import commands
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.util import discord_common
-from tle.util import paginator
-from tle.util import ranking
 from tle.cogs._starboard_helpers import _emoji_str
+from tle.cogs._starboard_ranking import RankingMixin
+from tle.cogs._starboard_reactions import ReactionGroupsMixin
 from tle.cogs._starboard_render import (
     _starboard_content,
     _is_starboard_eligible,
@@ -35,7 +35,7 @@ class StarboardCogError(commands.CommandError):
     pass
 
 
-class CoreMixin:
+class CoreMixin(ReactionGroupsMixin, RankingMixin):
     """Reaction engine, starboard message updates, and command impl helpers.
 
     Expects the host class to provide: ``self.bot``, ``self.locks`` (dict),
@@ -92,7 +92,7 @@ class CoreMixin:
         if channel is not None and getattr(channel, 'nsfw', False):
             return
         raw_emoji = _emoji_str(payload.emoji)
-        main_emoji, entry = self._resolve_emoji(payload.guild_id, raw_emoji)
+        main_emoji, entry = self._resolve_reaction(payload.guild_id, raw_emoji)
         if entry is None:
             return
         if entry.channel_id is None:
@@ -134,7 +134,7 @@ class CoreMixin:
         if channel is not None and getattr(channel, 'nsfw', False):
             return
         raw_emoji = _emoji_str(payload.emoji)
-        main_emoji, entry = self._resolve_emoji(payload.guild_id, raw_emoji)
+        main_emoji, entry = self._resolve_reaction(payload.guild_id, raw_emoji)
         if entry is None:
             return
         logger.debug(f'Reaction remove: raw_emoji={raw_emoji} main_emoji={main_emoji} '
@@ -170,9 +170,9 @@ class CoreMixin:
                 except discord.NotFound:
                     logger.warning(f'Reaction remove: channel {source_channel_id} not found')
                     return
-                emoji_family = cf_common.user_db.get_emoji_family(guild_id, main_emoji)
-                count = cf_common.user_db.get_merged_reactor_count(original_msg_id, emoji_family)
                 message = await channel.fetch_message(original_msg_id)
+                _, count = cf_common.user_db.get_starboard_reaction_counts(
+                    guild_id, original_msg_id, main_emoji)
                 cf_common.user_db.update_starboard_author_and_count(
                     original_msg_id, main_emoji, str(message.author.id), count
                 )
@@ -263,17 +263,18 @@ class CoreMixin:
                     original_message = await source_ch.fetch_message(int(original_msg_id))
                 forward_snapshot = await resolve_forward_snapshot(
                     original_message, self._resolve_channel)
-                render_args = (original_message, emoji_str, count, entry.color)
-                if forward_snapshot is not None:
-                    render_args += (forward_snapshot,)
-                content, embeds, files = await self.build_starboard_message(*render_args)
+                content, embeds, files = await self._build_board_message(
+                    original_message, emoji_str, count, entry.color, guild_id,
+                    forward_snapshot)
                 await sb_msg.edit(content=content, embeds=embeds, attachments=files)
                 logger.info(f'Full re-render starboard message: msg={original_msg_id} '
                             f'emoji={emoji_str} count={count}')
             else:
                 source_channel_id = sb_entry.channel_id or '0'
                 jump_url = f'https://discord.com/channels/{guild_id}/{source_channel_id}/{original_msg_id}'
-                new_content = _starboard_content(emoji_str, count, jump_url)
+                counts, _ = cf_common.user_db.get_starboard_reaction_counts(
+                    guild_id, original_msg_id, emoji_str)
+                new_content = _starboard_content(emoji_str, count, jump_url, counts)
                 await sb_msg.edit(content=new_content)
                 logger.debug(f'Live-updated starboard content: msg={original_msg_id} '
                              f'emoji={emoji_str} count={count}')
@@ -313,93 +314,39 @@ class CoreMixin:
         if not _is_starboard_eligible(message, rendered):
             raise StarboardCogError(f'Cannot starboard message {message.id}: invalid type or empty content')
 
-        if record_reactor:
-            # Track the reactor under the raw emoji they actually used
-            cf_common.user_db.add_reactor(message.id, raw_emoji, payload.user_id)
-
-        # Count = union of unique reactors (original message + starboard posts)
-        # across main + all aliases
-        emoji_family = cf_common.user_db.get_emoji_family(payload.guild_id, emoji_str)
-        reaction_count = cf_common.user_db.get_merged_reactor_count(message.id, emoji_family)
-
-        # Self-healing: if Discord shows more reactions than the DB knows about
-        # (e.g. reactions added while the bot had a bug), sync from Discord.
-        # Discord's counts only cover reactions physically on this message, so
-        # compare against the physical pool — proxy reactors live elsewhere.
-        emoji_family_set = set(emoji_family)
-        discord_count = sum(r.count for r in message.reactions
-                            if _emoji_str(r) in emoji_family_set)
-        physical_count = cf_common.user_db.get_merged_physical_reactor_count(
-            message.id, emoji_family)
-        if discord_count > physical_count:
-            logger.info(f'Reactor drift on new msg={message.id} emoji={emoji_str}: '
-                        f'db_count={physical_count} discord_count={discord_count}, resyncing')
-            reaction_count = await self._resync_reactors(message, emoji_family)
-
-        logger.debug(f'Message {message.id}: {emoji_str} (family={emoji_family}) '
-                     f'union_count={reaction_count} threshold={threshold}')
-        # Below threshold blocks the *initial* post but must not block updates
-        # to a message that's already on the starboard — otherwise re-adding a
-        # reaction after the count fell below threshold leaves the displayed
-        # count frozen at its last value.
-        if reaction_count < threshold:
-            if not cf_common.user_db.check_exists_starboard_message_v1(message.id, emoji_str):
-                return
-
         lock = self.locks.get(payload.guild_id)
         if lock is None:
             self.locks[payload.guild_id] = lock = asyncio.Lock()
 
         async with lock:
-            # Recount inside the lock to avoid stale values from concurrent removes
-            reaction_count = cf_common.user_db.get_merged_reactor_count(message.id, emoji_family)
+            if record_reactor:
+                cf_common.user_db.add_reactor(message.id, raw_emoji, payload.user_id)
+            counts, reaction_count = await self._sync_board_reactions(
+                message, payload.guild_id, emoji_str)
             already_exists = cf_common.user_db.check_exists_starboard_message_v1(message.id, emoji_str)
             if already_exists:
-                # Self-healing: if the physical DB count exceeds visible Discord
-                # reactions, resync from Discord to purge ghost entries.  Proxy
-                # reactors are excluded — they legitimately exceed what is
-                # visible on the original message.
-                emoji_family_set = set(emoji_family)
-                discord_count = sum(r.count for r in message.reactions
-                                    if _emoji_str(r) in emoji_family_set)
-                physical_count = cf_common.user_db.get_merged_physical_reactor_count(
-                    message.id, emoji_family)
-                if physical_count > discord_count:
-                    logger.info(f'Reactor drift detected for msg={message.id} emoji={emoji_str}: '
-                                f'db_count={physical_count} discord_count={discord_count}, resyncing')
-                    reaction_count = await self._resync_reactors(message, emoji_family)
                 cf_common.user_db.update_starboard_author_and_count(
-                    message.id, emoji_str, str(message.author.id), reaction_count
-                )
-                logger.debug(f'Updated existing starboard entry: msg={message.id} emoji={emoji_str} '
-                             f'author={message.author.id} count={reaction_count}')
+                    message.id, emoji_str, str(message.author.id), reaction_count)
                 await self._update_starboard_message(
                     payload.guild_id, message.id, emoji_str, reaction_count,
-                    original_message=message,
-                )
+                    original_message=message)
                 return
 
-            if reaction_count < threshold:
-                return  # Concurrent remove dropped count below threshold
+            # Configured aliases pool as before. Every fallback is a separate
+            # group: two sub-threshold emojis can never jointly qualify.
+            if not any(count >= threshold for _, count in counts):
+                return
 
-            render_args = (message, emoji_str, reaction_count, color)
-            if forward_snapshot is not None:
-                render_args += (forward_snapshot,)
-            content, embeds, files = await self.build_starboard_message(*render_args)
+            content, embeds, files = await self._build_board_message(
+                message, emoji_str, reaction_count, color, payload.guild_id,
+                forward_snapshot)
             starboard_message = await starboard_channel.send(
-                content=content, embeds=embeds, files=files,
-            )
+                content=content, embeds=embeds, files=files)
             cf_common.user_db.add_starboard_message_v1(
                 message.id, starboard_message.id, guild.id, emoji_str,
                 author_id=str(message.author.id),
                 channel_id=str(channel.id)
             )
-            # Collect all current reactors for each emoji in the family
-            for r in message.reactions:
-                r_emoji = _emoji_str(r)
-                if r_emoji in emoji_family:
-                    user_ids = [str(user.id) async for user in r.users()]
-                    cf_common.user_db.bulk_add_reactors(message.id, r_emoji, user_ids)
             # Count update runs after reactor collection so the sticky
             # narcissus hook sees a self-react that predates the post.
             cf_common.user_db.update_starboard_star_count(message.id, emoji_str, reaction_count)
@@ -407,74 +354,6 @@ class CoreMixin:
                         f'guild={guild.id} emoji={emoji_str} author={message.author} ({message.author.id}) '
                         f'channel={channel.id} count={reaction_count} '
                         f'(triggered by user {payload.user_id})')
-
-    # --- Leaderboard page builders ---
-
-    @staticmethod
-    def _get_user_id(row):
-        """Extract user ID from a leaderboard row (author_id or user_id)."""
-        return getattr(row, 'author_id', None) or row.user_id
-
-    @staticmethod
-    def _get_count(row):
-        """Extract count from a leaderboard row."""
-        for attr in ('message_count', 'total_stars', 'stars_given', 'self_stars'):
-            val = getattr(row, attr, None)
-            if val is not None:
-                return val
-        return 0
-
-    @staticmethod
-    def _row_suffix(row):
-        """Suffix for rows carrying an `unreacted` column (narcissus): how
-        many sticky self-stars had their reaction sneakily removed."""
-        unreacted = getattr(row, 'unreacted', None)
-        return f' ({unreacted} unreacted)' if unreacted else ''
-
-    def _get_personal_rank_line(self, ctx, ranked, unit):
-        """Get the invoking user's rank as a string for embedding. `ranked`
-        is the output of `ranking.rank_items` — `(rank, row)` pairs in display
-        order, so tied users share a rank."""
-        user_id_str = str(ctx.author.id)
-        for rank, row in ranked:
-            if self._get_user_id(row) == user_id_str:
-                count = self._get_count(row)
-                return (f'\nYour rank: **#{rank}** with **{count}** {unit}'
-                        f'{self._row_suffix(row)}')
-        return '\nYou are not on this leaderboard yet.'
-
-    def _make_leaderboard_pages(self, ctx, rows, emoji, title, unit):
-        """Build paginated embed pages from leaderboard rows."""
-        # Rank the whole list once with standard competition ranking so tied
-        # counts share a rank rather than being split by the query's secondary
-        # sort; ties also number correctly across page boundaries.
-        ranked = ranking.rank_items(rows, self._get_count)
-        personal = self._get_personal_rank_line(ctx, ranked, unit)
-        per_page = 10
-        chunks = paginator.chunkify(ranked, per_page)
-        pages = []
-        for chunk in chunks:
-            lines = []
-            for rank, row in chunk:
-                user_id = self._get_user_id(row)
-                count = self._get_count(row)
-                member = ctx.guild.get_member(int(user_id))
-                name = member.mention if member else f'<@{user_id}>'
-                lines.append(f'**#{rank}** {name} — {count} {unit}{self._row_suffix(row)}')
-            lines.append(personal)
-            embed = discord.Embed(
-                title=f'{emoji} {title}',
-                description='\n'.join(lines),
-                color=discord_common.random_cf_color()
-            )
-            pages.append((None, embed))
-        return pages
-
-    def _paginate_leaderboard(self, ctx, rows, emoji, title, unit):
-        """Build leaderboard pages and start the paginator."""
-        pages = self._make_leaderboard_pages(ctx, rows, emoji, title, unit)
-        paginator.paginate(self.bot, ctx.channel, pages, wait_time=300,
-                           set_pagenum_footers=True, author_id=ctx.author.id)
 
     # --- Leaderboard guard / lookup ---
 
