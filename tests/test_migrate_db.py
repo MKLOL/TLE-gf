@@ -5,6 +5,7 @@ import pytest
 
 from tle.util.db.user_db_conn import namedtuple_factory
 from tle.util.db.starboard_db import StarboardDbMixin
+from tle.util.db._starboard_db_qualified import create_starboard_qualified_schema
 from tle.util.db.migration_db import MigrationDbMixin
 
 
@@ -116,6 +117,7 @@ class FakeMigrateDb(StarboardDbMixin, MigrationDbMixin):
                 PRIMARY KEY (original_msg_id, emoji)
             )
         ''')
+        create_starboard_qualified_schema(self.conn)
         self.conn.commit()
 
     def close(self):

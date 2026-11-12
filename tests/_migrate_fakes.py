@@ -11,6 +11,7 @@ import time
 import pytest
 
 import discord
+from tle.util.db._starboard_db_qualified import create_starboard_qualified_schema
 from tle.cogs._migrate_helpers import (
     parse_old_bot_message,
     serialize_embed_fallback,
@@ -182,6 +183,7 @@ class _FakeMigrateDb(StarboardDbMixin, MigrationDbMixin):
                 key TEXT PRIMARY KEY, value TEXT NOT NULL)''',
         ]:
             self.conn.execute(sql)
+        create_starboard_qualified_schema(self.conn)
         self.conn.commit()
 
     def kvs_set(self, key, value):

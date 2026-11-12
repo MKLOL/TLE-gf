@@ -19,12 +19,16 @@ from tle.util.db._starboard_db_narcissus import StarboardNarcissusDbMixin
 from tle.util.db._starboard_db_proxy import StarboardProxyDbMixin
 from tle.util.db._starboard_db_queries import StarboardQueriesDbMixin
 from tle.util.db._starboard_db_routing import StarboardRoutingDbMixin
+from tle.util.db._starboard_db_qualified import (
+    StarboardQualifiedDbMixin, create_starboard_qualified_schema,
+)
 from tle.util.db._starboard_db_backfill import (
     StarboardBackfillDbMixin, create_pending_backfill_index,
 )
 
 
-class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, StarboardProxyDbMixin,
+class StarboardDbMixin(StarboardQualifiedDbMixin, StarboardRoutingDbMixin,
+                       StarboardQueriesDbMixin, StarboardProxyDbMixin,
                        StarboardNarcissusDbMixin, GuildConfigDbMixin,
                        StarboardBackfillDbMixin):
     """Mixin providing all starboard DB methods. Expects self.conn to be a sqlite3 connection.
@@ -125,6 +129,7 @@ class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, Starboa
         ''')
         self._create_narcissus_tables()
         create_pending_backfill_index(self.conn)
+        create_starboard_qualified_schema(self.conn)
 
     # --- Old starboard methods (kept for migration compatibility) ---
 
@@ -272,7 +277,7 @@ class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, Starboa
         return rc
 
     def add_starboard_message_v1(self, original_msg_id, starboard_msg_id, guild_id, emoji,
-                                 author_id=None, channel_id=None):
+                                 author_id=None, channel_id=None, qualified_emojis=()):
         """Track a new starboard message in v1 table."""
         self.conn.execute(
             'INSERT OR IGNORE INTO starboard_message_v1 '
@@ -282,6 +287,7 @@ class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, Starboa
              str(author_id) if author_id else None,
              str(channel_id) if channel_id else None)
         )
+        self._insert_starboard_qualifications(original_msg_id, emoji, qualified_emojis)
         self.conn.commit()
 
     def check_exists_starboard_message_v1(self, original_msg_id, emoji):
@@ -371,6 +377,7 @@ class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, Starboa
         )
         self.conn.commit()
         self._maybe_record_narcissus(original_msg_id, emoji)
+        self.remember_starboard_qualifications(original_msg_id, emoji)
 
     def update_starboard_author_and_count(self, original_msg_id, emoji, author_id, count,
                                           channel_id=None):
@@ -389,6 +396,7 @@ class StarboardDbMixin(StarboardRoutingDbMixin, StarboardQueriesDbMixin, Starboa
             )
         self.conn.commit()
         self._maybe_record_narcissus(original_msg_id, emoji)
+        self.remember_starboard_qualifications(original_msg_id, emoji)
 
     # --- Reactor tracking ---
 

@@ -35,13 +35,14 @@ class ReactionGroupsMixin:
         return cf_common.user_db.get_starboard_reaction_counts(guild_id, message.id, main)
 
     def _board_header_counts(self, guild_id, message_id, main):
-        """Only display qualifying groups, without changing admission or totals."""
+        """Keep past qualifiers visible; never reveal an unqualified group."""
         counts, _ = cf_common.user_db.get_starboard_reaction_counts(guild_id, message_id, main)
         if main in (STAR, PILL):
             entry = cf_common.user_db.get_starboard_entry(guild_id, main)
             if entry is not None:
+                qualified = cf_common.user_db.get_starboard_qualified_emojis(message_id, main)
                 counts = [(emoji, count) for emoji, count in counts
-                          if count >= entry.threshold]
+                          if count >= entry.threshold or emoji in qualified]
         return counts
 
     async def _build_board_message(self, message, main, count, color, guild_id,

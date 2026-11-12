@@ -156,3 +156,16 @@ def upgrade_1_67_0(db):
         db.execute('UPDATE starboard_emoji_v1 SET threshold = 4 '
                    'WHERE emoji = ? AND threshold = 3', ('\N{WHITE MEDIUM STAR}',))
     db.commit()
+
+
+@registry.register('1.68.0', 'Remember which starboard reaction groups qualified')
+def upgrade_1_68_0(db):
+    from tle.util.db._starboard_db_qualified import create_starboard_qualified_schema
+    from tle.util.db.starboard_db import StarboardDbMixin
+    create_starboard_qualified_schema(db)
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                  "AND name = 'starboard_message_v1'").fetchone():
+        view = StarboardDbMixin()
+        view.conn = db
+        view.seed_starboard_qualifications()
+    db.commit()

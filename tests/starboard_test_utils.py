@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from tle.util.db.user_db_conn import namedtuple_factory
 from tle.util.db.starboard_db import StarboardDbMixin
+from tle.util.db._starboard_db_qualified import create_starboard_qualified_schema
 
 
 class FakeUserDb(StarboardDbMixin):
@@ -98,6 +99,7 @@ class FakeUserDb(StarboardDbMixin):
                 PRIMARY KEY (guild_id, user_id)
             )
         ''')
+        create_starboard_qualified_schema(self.conn)
         self.conn.commit()
 
     def close(self):

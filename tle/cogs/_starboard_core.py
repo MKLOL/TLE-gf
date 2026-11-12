@@ -345,7 +345,10 @@ class CoreMixin(ReactionGroupsMixin, RankingMixin):
             cf_common.user_db.add_starboard_message_v1(
                 message.id, starboard_message.id, guild.id, emoji_str,
                 author_id=str(message.author.id),
-                channel_id=str(channel.id)
+                channel_id=str(channel.id),
+                # Preserve the admission snapshot if someone unreacted while
+                # Discord was sending the post (before a tracked row existed).
+                qualified_emojis=[emoji for emoji, count in counts if count >= threshold],
             )
             # Count update runs after reactor collection so the sticky
             # narcissus hook sees a self-react that predates the post.

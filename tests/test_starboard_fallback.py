@@ -193,11 +193,11 @@ def test_removals_and_restart_keep_separate_counts(board):
     h.restart()
     h.react(GASP, [1, 2])
     asyncio.run(h.remove(GASP, 3))
-    assert h.channels[STAR_CHANNEL].sent[0].content == h.message.jump_url
+    assert h.channels[STAR_CHANNEL].sent[0].content == f'{GASP} **2** | {h.message.jump_url}'
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 2
     h.react(GASP, [1])
     asyncio.run(h.remove(GASP, 2))
-    assert h.channels[STAR_CHANNEL].sent[0].content == h.message.jump_url
+    assert h.channels[STAR_CHANNEL].sent[0].content == f'{GASP} **1** | {h.message.jump_url}'
 
 
 def test_concurrent_qualifying_emojis_create_one_post(board):

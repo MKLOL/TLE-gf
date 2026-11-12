@@ -1,7 +1,7 @@
 """Resolve fallback reactions without turning them into configured aliases.
 
-Raw physical/proxy reactors already persist emoji identities. Deriving board
-membership from those rows avoids a second ledger or a schema migration.
+Board membership follows current routing; qualification history retains
+previously displayed groups even after their last reaction is removed.
 """
 from tle.util.starboard_routing import STAR, PILL, fallback_board
 
@@ -48,13 +48,16 @@ class StarboardRoutingDbMixin:
     def get_starboard_reaction_counts(self, guild_id, original_msg_id, main_emoji):
         """Independent raw counts plus the distinct-user board total.
 
-        Rendering filters groups below the configured threshold separately;
-        existing posts remain tracked even when their counts decrease.
+        Rendering uses qualification history to hide groups that never met
+        threshold while keeping historical qualifiers visible, including zero.
         The leaderboard total counts a person once across all board reactions.
         """
-        groups = self.get_starboard_reaction_groups(guild_id, main_emoji, original_msg_id)
+        qualified = self.get_starboard_qualified_emojis(original_msg_id, main_emoji)
+        groups = self.get_starboard_reaction_groups(
+            guild_id, main_emoji, original_msg_id, candidates=qualified)
         counts = [(emoji, self.get_merged_reactor_count(original_msg_id, family))
                   for emoji, family in groups]
         total = self.get_merged_reactor_count(
             original_msg_id, [emoji for _, family in groups for emoji in family])
-        return [(emoji, count) for emoji, count in counts if count] or [(main_emoji, 0)], total
+        return [(emoji, count) for emoji, count in counts
+                if count or emoji in qualified] or [(main_emoji, 0)], total

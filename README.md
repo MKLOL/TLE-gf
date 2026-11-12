@@ -36,13 +36,17 @@ Each fallback emoji must independently reach the destination's configured
 threshold (4 on ⭐ by default, and 4 on the configured 💊 board). Existing aliases
 still pool as before. Two elephants plus two pills cannot qualify together. One post per
 board shows separate counts, such as `⭐ 4 :chocoGasp: 4`, or just
-`:chocoGasp: 4`. Every displayed group, including each fallback emoji, must
-meet the board's configured threshold. Existing posts remain when counts drop;
-groups below threshold disappear from the header. Leaderboard totals count each person once per
+`:chocoGasp: 4`. Each group must first meet the board's configured threshold to
+appear. Once it qualifies on that message, its live count stays visible even
+below threshold or at zero, including across restarts. Other groups that never
+qualified remain hidden. Leaderboard totals count each person once per
 board and message, including reactions made on the board post itself.
 
 Migration 1.67.0 raises existing ⭐ boards set to 3 to 4 on startup; other
 configured thresholds and existing posts are preserved.
+Migration 1.68.0 adds per-message qualification history. Existing single-family
+posts retain their main count; mixed legacy posts can only recover groups that
+still meet threshold, because older versions did not store past crossings.
 
 ## Installation
 > If you want to run the bot inside a docker container follow these [instructions](/Docker.md)

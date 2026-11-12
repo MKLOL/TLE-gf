@@ -1,4 +1,4 @@
-"""All reaction groups disappear below threshold without removing the post."""
+"""Groups must first qualify, then keep their live counts below threshold."""
 import asyncio
 
 import pytest
@@ -25,7 +25,7 @@ def test_reported_header_hides_two_stars(board):
 @pytest.mark.parametrize('main,fallback,threshold,channel', [
     (STAR, GASP, 3, STAR_CHANNEL), (PILL, '💀', 4, PILL_CHANNEL),
 ])
-def test_symbol_appears_at_threshold_and_disappears_below_it(
+def test_symbol_appears_at_threshold_and_remains_below_it(
         board, monkeypatch, full_render, main, fallback, threshold, channel):
     from tle.cogs import _starboard_core
     monkeypatch.setattr(_starboard_core, 'FULL_RE_RENDER', full_render)
@@ -42,9 +42,10 @@ def test_symbol_appears_at_threshold_and_disappears_below_it(
 
     h.react(main, range(1, threshold))
     asyncio.run(h.remove(main, threshold))
-    assert post.content == f'{fallback} **{threshold}** | {h.message.jump_url}'
+    assert post.content == (
+        f'{main} **{threshold - 1}** {fallback} **{threshold}** | {h.message.jump_url}')
     assert len(h.channels[channel].sent) == 1
-    # Hidden symbols still contribute to distinct-user statistics.
+    # Header eligibility does not change distinct-user statistics.
     assert db.get_starboard_message_v1(MESSAGE, main).star_count == threshold * 2 - 1
 
 
@@ -64,7 +65,7 @@ def test_header_uses_configured_threshold_and_alias_union(board):
 
 
 @pytest.mark.parametrize('full_render', [True, False])
-def test_existing_post_with_no_visible_counts_keeps_only_jump_url(
+def test_existing_post_keeps_its_count_below_threshold(
         board, monkeypatch, full_render):
     from tle.cogs import _starboard_core
     monkeypatch.setattr(_starboard_core, 'FULL_RE_RENDER', full_render)
@@ -74,14 +75,14 @@ def test_existing_post_with_no_visible_counts_keeps_only_jump_url(
     post = h.channels[STAR_CHANNEL].sent[0]
     h.react(STAR, [1, 2])
     asyncio.run(h.remove(STAR, 3))
-    assert post.content == h.message.jump_url
+    assert post.content == f'{STAR} **2** | {h.message.jump_url}'
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 2
     h.react(STAR, [1, 2, 3])
     asyncio.run(h.add(STAR, 3))
     assert post.content == f'{STAR} **3** | {h.message.jump_url}'
 
 
-def test_video_keeps_author_when_symbol_is_hidden(board):
+def test_video_keeps_author_and_count_after_dropping_below_threshold(board):
     h, _ = board
     h.message.attachments = [_FakeAttachment('clip.mp4', 'https://example.test/clip.mp4')]
     h.react(STAR, [1, 2, 3])
@@ -89,7 +90,7 @@ def test_video_keeps_author_when_symbol_is_hidden(board):
     h.react(STAR, [1, 2])
     asyncio.run(h.remove(STAR, 3))
     assert h.channels[STAR_CHANNEL].sent[0].content == (
-        f'**{h.message.author.display_name}** | {h.message.jump_url}')
+        f'{STAR} **2** · **{h.message.author.display_name}** | {h.message.jump_url}')
 
 
 @pytest.mark.parametrize('full_render', [True, False])
@@ -98,7 +99,7 @@ def test_video_keeps_author_when_symbol_is_hidden(board):
     (STAR, GASP, STAR_CHANNEL, 4),
     (STAR, ELEPHANT, STAR_CHANNEL, 5),
 ])
-def test_each_fallback_only_appears_when_it_meets_threshold(
+def test_each_fallback_only_appears_after_it_has_met_threshold(
         board, monkeypatch, full_render, main, fallback, channel, threshold):
     from tle.cogs import _starboard_core
     monkeypatch.setattr(_starboard_core, 'FULL_RE_RENDER', full_render)
@@ -119,7 +120,8 @@ def test_each_fallback_only_appears_when_it_meets_threshold(
         f'{main} **{threshold}** {fallback} **{threshold}** | {h.message.jump_url}')
     h.react(fallback, range(10, 10 + threshold - 1))
     asyncio.run(h.remove(fallback, 10 + threshold - 1))
-    assert post.content == expected_main
+    assert post.content == (
+        f'{main} **{threshold}** {fallback} **{threshold - 1}** | {h.message.jump_url}')
     assert len(h.channels[channel].sent) == 1
     assert db.get_starboard_message_v1(MESSAGE, main).star_count == 2 * threshold - 1
 

@@ -55,6 +55,10 @@ class MigrateCompleteMixin:
                  str(entry.author_id) if entry.author_id else None,
                  str(entry.source_channel_id) if entry.source_channel_id else None)
             )
+            # This entry was already admitted on the source board; preserve
+            # its displayed group even if all reactors have since left.
+            db._insert_starboard_qualifications(
+                entry.original_msg_id, resolved_emoji, [resolved_emoji])
             if star_count > 0:
                 conn.execute(
                     'UPDATE starboard_message_v1 SET star_count = ? '
