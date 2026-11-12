@@ -23,26 +23,14 @@ from tle.cogs._codeforces_helpers import (
 from tle.cogs._codeforces_gitgud import CodeforcesGitgudMixin
 from tle.cogs._codeforces_problems import CodeforcesProblemsMixin
 from tle.cogs._codeforces_virtual import CodeforcesVirtualMixin
-from tle.cogs._codeforces_hint import HintClient, send_hint
 
 
 class Codeforces(CodeforcesGitgudMixin, CodeforcesProblemsMixin,
                  CodeforcesVirtualMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.hint_client = HintClient()
         self.converter = commands.MemberConverter()
         self.logger = logging.getLogger(self.__class__.__name__)
-
-    @commands.command(brief='Show one spoiler-hidden Codeforces hint',
-                      usage='<problem ID or link> [hint number]')
-    async def hint(self, ctx, *args: str):
-        """Show a LeekCF hint, starting with hint 1; the last is the full solution.
-
-        Examples: ;hint 1850A, ;hint 1850 A 2, ;hint 1850/A 2,
-        ;hint https://codeforces.com/contest/2284/problem/C1
-        """
-        await send_hint(ctx, self.hint_client, args)
 
     @commands.command(brief='Upsolve a problem')
     @cf_common.user_guard(group='gitgud')
