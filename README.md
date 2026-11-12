@@ -178,3 +178,12 @@ ratings. Both `/queens results` and `/tango results` offer `weekly` and
 GuessThe.Game keeps its pairwise results format and supports the same filter
 with `;gg results @user1 @user2 +weekly +days=3`.
 `+current` is no longer supported; use `results +weekly` for live results.
+
+### Codeforces hints
+
+`;hint 1850A` shows the first hint behind a spoiler. Use `;hint 1850A 2`
+for hint 2; the last hint is labeled as the full solution. The command also
+accepts `1850 A`, `1850/A`, and Codeforces contest or problemset links.
+Hints come from the free [LeekCF Hinter API](https://leekcf-hinter-api.leekcf.workers.dev),
+require no API key, and are cached for five minutes. Only the requested hint
+is shown. Hints may be unavailable for uncovered or ongoing contests.
