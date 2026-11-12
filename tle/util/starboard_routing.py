@@ -13,7 +13,7 @@ STAR = '\N{WHITE MEDIUM STAR}'
 PILL = '\N{PILL}'
 _CUSTOM = re.compile(r'<a?:([A-Za-z0-9_]+):[0-9]+>')
 _CAMEL = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
-_NEGATIONS = ('reverse',)
+_NEGATIONS = ('reverse', 'nostar')
 _PILL_WORDS = frozenset({
     'pill', 'pills', 'skull', 'clown', 'dead', 'death', 'dying',
     'dumb', 'idiot', 'stupid', 'copium', 'cope', 'gun', 'pistol',
@@ -48,10 +48,7 @@ def fallback_board(emoji):
         is_flag = len(emoji) == 2 and all('\U0001f1e6' <= c <= '\U0001f1ff' for c in emoji)
     words = re.findall(r'[a-z]+', name.casefold())
     compact = ''.join(words)
-    # "No star" is an opt-out, not a general-purpose "no" negation.
-    if compact == 'nostar':
-        return None
-    negated = any(word in _NEGATIONS for word in words)
+    negated = compact in _NEGATIONS or any(word in _NEGATIONS for word in words)
     for prefix in _NEGATIONS:
         if compact.startswith(prefix):
             remainder = compact[len(prefix):]
@@ -59,5 +56,5 @@ def fallback_board(emoji):
                 negated = True
                 break
     if negated:
-        return None  # Reverse reactions opt out of both boards.
+        return None  # Negated reactions opt out of both boards.
     return PILL if is_flag or _has_cue(words, _PILL_WORDS) else STAR
