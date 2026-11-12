@@ -35,7 +35,8 @@ threshold (for example, 3 on ⭐ and 4 on 💊). Existing aliases still pool as
 before. Two elephants plus two pills cannot qualify together. One post per
 board shows separate counts, such as `⭐ 3 :chocoGasp: 3`, or just
 `:chocoGasp: 3`. After a post qualifies, its other reactions and subsequent
-count decreases remain visible; leaderboard totals count each person once per
+count decreases remain visible, except that ⭐/💊 only appear at or above their
+configured thresholds. Leaderboard totals count each person once per
 board and message, including reactions made on the board post itself.
 
 ## Installation

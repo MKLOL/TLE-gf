@@ -272,7 +272,7 @@ class CoreMixin(ReactionGroupsMixin, RankingMixin):
             else:
                 source_channel_id = sb_entry.channel_id or '0'
                 jump_url = f'https://discord.com/channels/{guild_id}/{source_channel_id}/{original_msg_id}'
-                counts, _ = cf_common.user_db.get_starboard_reaction_counts(
+                counts = self._board_header_counts(
                     guild_id, original_msg_id, emoji_str)
                 new_content = _starboard_content(emoji_str, count, jump_url, counts)
                 await sb_msg.edit(content=new_content)

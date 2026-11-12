@@ -146,7 +146,7 @@ async def resolve_forward_snapshot(message, resolve_channel):
 
 def _reaction_header(emoji_str, count, reaction_counts=None):
     """Keep emoji counts separate and leave room for an author and jump URL."""
-    counts = reaction_counts or [(emoji_str, count)]
+    counts = [(emoji_str, count)] if reaction_counts is None else reaction_counts
     parts = []
     for index, (emoji, value) in enumerate(counts):
         part = f'{emoji} **{value}**'
@@ -163,7 +163,8 @@ def _starboard_content(emoji_str, count, jump_url, reaction_counts=None):
     Format: ⭐ **5** | jump_url
     The jump URL is auto-linked by Discord in message content.
     """
-    return f'{_reaction_header(emoji_str, count, reaction_counts)} | {jump_url}'
+    header = _reaction_header(emoji_str, count, reaction_counts)
+    return f'{header} | {jump_url}' if header else jump_url
 
 
 def _period_start(period, now):
@@ -273,7 +274,7 @@ async def build_starboard_message(message, emoji_str, count, color,
         if is_forward else message.author.display_name
     )
     header = _reaction_header(emoji_str, count, reaction_counts)
-    content = f'{header} | {message.jump_url}'
+    content = f'{header} | {message.jump_url}' if header else message.jump_url
     embeds = []
     files = []
 
@@ -312,7 +313,7 @@ async def build_starboard_message(message, emoji_str, count, color,
     if has_media_files:
         safe_name = discord.utils.escape_mentions(forwarder_label)
         content = (
-            f'{header} \u00b7 **{safe_name}** '
+            (f'{header} \u00b7 ' if header else '') + f'**{safe_name}** '
             f'| {message.jump_url}'
         )
         # An explicit spoiler flag is required, not optional: discord.py
