@@ -17,7 +17,7 @@ _NEGATIONS = ('reverse',)
 _PILL_WORDS = frozenset({
     'pill', 'pills', 'skull', 'clown', 'dead', 'death', 'dying',
     'dumb', 'idiot', 'stupid', 'copium', 'cope', 'gun', 'pistol',
-    'kms', 'rip',
+    'kms', 'rip', 'flag',
 })
 
 
@@ -37,11 +37,15 @@ def fallback_board(emoji):
     custom = _CUSTOM.fullmatch(emoji)
     if custom:
         name = _CAMEL.sub(' ', custom[1])
+        is_flag = custom[1].casefold().startswith('flag')
     else:
         # Unicode names provide the same vocabulary without a symbol map.
         if emoji.isascii():
             return None
         name = ' '.join(unicodedata.name(c, '') for c in emoji)
+        # Country flags are pairs of regional indicators; their Unicode
+        # character names contain no "flag" word. Other flags do.
+        is_flag = len(emoji) == 2 and all('\U0001f1e6' <= c <= '\U0001f1ff' for c in emoji)
     words = re.findall(r'[a-z]+', name.casefold())
     compact = ''.join(words)
     negated = any(word in _NEGATIONS for word in words)
@@ -54,4 +58,4 @@ def fallback_board(emoji):
                 break
     if negated:
         return None if _has_cue(words + [stripped], {'star'}) else STAR
-    return PILL if _has_cue(words, _PILL_WORDS) else STAR
+    return PILL if is_flag or _has_cue(words, _PILL_WORDS) else STAR

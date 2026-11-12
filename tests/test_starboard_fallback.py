@@ -22,6 +22,11 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('<:RoadTrip:913>', STAR), ('<:spill:914>', STAR),
     ('<:MysteryCreature:915>', STAR), ('<:Despair:916>', STAR),
     ('1️⃣', STAR), ('not-an-emoji', None),
+    ('<:flag_us:920>', PILL), ('<a:FlagVN:921>', PILL),
+    ('<:flagth:922>', PILL), ('<:reverse_flag:923>', STAR),
+    ('🇻🇳', PILL), ('🇺🇸', PILL), ('🇹🇭', PILL), ('🇪🇺', PILL),
+    ('🏳️', PILL), ('🏴', PILL), ('🏳️‍🌈', PILL), ('🏴‍☠️', PILL),
+    ('🏁', PILL), ('🚩', PILL), ('🇻', STAR),
 ])
 def test_generic_name_cues(emoji, expected):
     assert fallback_board(emoji) == expected
@@ -69,14 +74,15 @@ def test_mixed_header_discovered_on_first_event_and_updated_in_place(board):
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 5
 
 
-def test_pill_fallback_needs_four_and_posts_to_pillboard(board):
+@pytest.mark.parametrize('emoji', ['💀', '🇻🇳', '<:flagth:922>'])
+def test_pill_fallback_needs_four_and_posts_to_pillboard(board, emoji):
     h, db = board
-    h.react('💀', [1, 2, 3])
-    asyncio.run(h.add('💀', 3))
+    h.react(emoji, [1, 2, 3])
+    asyncio.run(h.add(emoji, 3))
     assert not h.channels[PILL_CHANNEL].sent
-    h.react('💀', [1, 2, 3, 4])
-    asyncio.run(h.add('💀', 4))
-    assert h.channels[PILL_CHANNEL].sent[0].content.startswith('💀 **4** |')
+    h.react(emoji, [1, 2, 3, 4])
+    asyncio.run(h.add(emoji, 4))
+    assert h.channels[PILL_CHANNEL].sent[0].content.startswith(f'{emoji} **4** |')
     assert not h.channels[STAR_CHANNEL].sent
     assert db.get_starboard_message_v1(MESSAGE, PILL).star_count == 4
 
