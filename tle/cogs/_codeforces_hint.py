@@ -158,9 +158,9 @@ async def send_hint(ctx, client, args):
         label += ' — full solution'
     link = f'https://codeforces.com/problemset/problem/{contest}/{index}'
     header = f'**{contest}{index} — {label}**\n<{link}>\n'
-    footer = f'\nHints: <{API}> (LeekCF Hinter)'
+    footer = ''
     if number < len(hints):
-        footer += f' · Next: `;hint {contest}{index} {number + 1}`'
+        footer = f'\nNext: `;hint {contest}{index} {number + 1}`'
     parts = spoiler_chunks(hints[number - 1])
     for i, part in enumerate(parts):
         text = (header if i == 0 else f'**{contest}{index} — {label} (continued)**\n') + part
