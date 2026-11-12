@@ -1,4 +1,4 @@
-"""Board symbols disappear below threshold without removing a valid post."""
+"""All reaction groups disappear below threshold without removing the post."""
 import asyncio
 
 import pytest
@@ -90,3 +90,44 @@ def test_video_keeps_author_when_symbol_is_hidden(board):
     asyncio.run(h.remove(STAR, 3))
     assert h.channels[STAR_CHANNEL].sent[0].content == (
         f'**{h.message.author.display_name}** | {h.message.jump_url}')
+
+
+@pytest.mark.parametrize('full_render', [True, False])
+@pytest.mark.parametrize('main,fallback,channel,threshold', [
+    (PILL, '<:pillfake:12345>', PILL_CHANNEL, 4),
+    (STAR, GASP, STAR_CHANNEL, 4),
+    (STAR, ELEPHANT, STAR_CHANNEL, 5),
+])
+def test_each_fallback_only_appears_when_it_meets_threshold(
+        board, monkeypatch, full_render, main, fallback, channel, threshold):
+    from tle.cogs import _starboard_core
+    monkeypatch.setattr(_starboard_core, 'FULL_RE_RENDER', full_render)
+    h, db = board
+    db.update_starboard_threshold(GUILD_A, main, threshold)
+    h.react(main, range(1, threshold + 1))
+    h.react(fallback, [10, 11])
+    asyncio.run(h.add(main, threshold))
+    post = h.channels[channel].sent[0]
+    expected_main = f'{main} **{threshold}** | {h.message.jump_url}'
+    assert post.content == expected_main
+    # Updating via the fallback itself must not reveal it prematurely.
+    asyncio.run(h.add(fallback, 11))
+    assert post.content == expected_main
+    h.react(fallback, range(10, 10 + threshold))
+    asyncio.run(h.add(fallback, 10 + threshold - 1))
+    assert post.content == (
+        f'{main} **{threshold}** {fallback} **{threshold}** | {h.message.jump_url}')
+    h.react(fallback, range(10, 10 + threshold - 1))
+    asyncio.run(h.remove(fallback, 10 + threshold - 1))
+    assert post.content == expected_main
+    assert len(h.channels[channel].sent) == 1
+    assert db.get_starboard_message_v1(MESSAGE, main).star_count == 2 * threshold - 1
+
+
+def test_qualifying_fallback_does_not_reveal_other_subthreshold_fallbacks(board):
+    h, db = board
+    db.update_starboard_threshold(GUILD_A, STAR, 4)
+    h.react(GASP, [1, 2, 3, 4])
+    h.react(ELEPHANT, [5, 6])
+    asyncio.run(h.add(ELEPHANT, 6))
+    assert h.channels[STAR_CHANNEL].sent[0].content == f'{GASP} **4** | {h.message.jump_url}'

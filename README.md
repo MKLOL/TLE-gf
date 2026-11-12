@@ -34,9 +34,9 @@ Each fallback emoji must independently reach the destination's configured
 threshold (4 on ⭐ by default, and 4 on the configured 💊 board). Existing aliases
 still pool as before. Two elephants plus two pills cannot qualify together. One post per
 board shows separate counts, such as `⭐ 4 :chocoGasp: 4`, or just
-`:chocoGasp: 4`. After a post qualifies, its other reactions and subsequent
-count decreases remain visible, except that ⭐/💊 only appear at or above their
-configured thresholds. Leaderboard totals count each person once per
+`:chocoGasp: 4`. Every displayed group, including each fallback emoji, must
+meet the board's configured threshold. Existing posts remain when counts drop;
+groups below threshold disappear from the header. Leaderboard totals count each person once per
 board and message, including reactions made on the board post itself.
 
 Migration 1.67.0 raises existing ⭐ boards set to 3 to 4 on startup; other

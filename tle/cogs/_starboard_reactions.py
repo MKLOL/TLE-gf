@@ -35,13 +35,13 @@ class ReactionGroupsMixin:
         return cf_common.user_db.get_starboard_reaction_counts(guild_id, message.id, main)
 
     def _board_header_counts(self, guild_id, message_id, main):
-        """Hide sub-threshold board symbols without changing admission or totals."""
+        """Only display qualifying groups, without changing admission or totals."""
         counts, _ = cf_common.user_db.get_starboard_reaction_counts(guild_id, message_id, main)
         if main in (STAR, PILL):
             entry = cf_common.user_db.get_starboard_entry(guild_id, main)
             if entry is not None:
                 counts = [(emoji, count) for emoji, count in counts
-                          if emoji != main or count >= entry.threshold]
+                          if count >= entry.threshold]
         return counts
 
     async def _build_board_message(self, message, main, count, color, guild_id,

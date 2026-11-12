@@ -46,11 +46,11 @@ class StarboardRoutingDbMixin:
             guild_id, main_emoji, original_msg_id, candidates) for emoji in family]
 
     def get_starboard_reaction_counts(self, guild_id, original_msg_id, main_emoji):
-        """Independent header counts plus the distinct-user board total.
+        """Independent raw counts plus the distinct-user board total.
 
-        Once a post qualifies, keep displaying its remaining reactions even
-        below threshold, matching the existing keep-post-on-unreact behavior.
-        The leaderboard total counts a person once across the board.
+        Rendering filters groups below the configured threshold separately;
+        existing posts remain tracked even when their counts decrease.
+        The leaderboard total counts a person once across all board reactions.
         """
         groups = self.get_starboard_reaction_groups(guild_id, main_emoji, original_msg_id)
         counts = [(emoji, self.get_merged_reactor_count(original_msg_id, family))

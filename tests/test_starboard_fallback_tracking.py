@@ -22,7 +22,7 @@ def test_proxy_deduplicates_same_emoji_and_survives_physical_removal(board):
     asyncio.run(h.remove(GASP, 3))
     assert post.content.startswith(f'{GASP} **3** |')
     asyncio.run(h.remove(GASP, 3, channel=STAR_CHANNEL, message=post.id))
-    assert post.content.startswith(f'{GASP} **2** |')
+    assert post.content == h.message.jump_url
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 2
 
 
@@ -40,7 +40,7 @@ def test_proxy_fallback_can_put_original_on_other_board(board):
     assert db.get_starboard_message_v1(MESSAGE, PILL).star_count == 4
     assert not db.get_starboard_entries_for_message(star_post.id)
     asyncio.run(h.remove('💀', 4, channel=STAR_CHANNEL, message=star_post.id))
-    assert pill_post.content.startswith('💀 **3** |')
+    assert pill_post.content == h.message.jump_url
 
 
 def test_stats_count_fallback_users_once_and_keep_sticky_self_reaction(board):
