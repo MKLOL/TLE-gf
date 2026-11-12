@@ -17,7 +17,7 @@ _NEGATIONS = ('reverse',)
 _PILL_WORDS = frozenset({
     'pill', 'pills', 'skull', 'clown', 'dead', 'death', 'dying',
     'dumb', 'idiot', 'stupid', 'copium', 'cope', 'gun', 'pistol',
-    'kms', 'rip', 'flag',
+    'kms', 'rip', 'flag', 'lying',
 })
 
 

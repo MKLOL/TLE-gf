@@ -27,6 +27,10 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('🇻🇳', PILL), ('🇺🇸', PILL), ('🇹🇭', PILL), ('🇪🇺', PILL),
     ('🏳️', PILL), ('🏴', PILL), ('🏳️‍🌈', PILL), ('🏴‍☠️', PILL),
     ('🏁', PILL), ('🚩', PILL), ('🇻', STAR),
+    ('<:lying:930>', PILL), ('<:toxicpie_lying_face:931>', PILL),
+    ('<a:LyingFace:932>', PILL), ('<:lyingcat:933>', PILL),
+    ('🤥', PILL), ('<:reverse_lying:934>', STAR),
+    ('<:flying:935>', STAR), ('<:truthful_face:936>', STAR),
 ])
 def test_generic_name_cues(emoji, expected):
     assert fallback_board(emoji) == expected
@@ -74,7 +78,7 @@ def test_mixed_header_discovered_on_first_event_and_updated_in_place(board):
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 5
 
 
-@pytest.mark.parametrize('emoji', ['💀', '🇻🇳', '<:flagth:922>'])
+@pytest.mark.parametrize('emoji', ['💀', '🇻🇳', '<:flagth:922>', '<:lying:930>', '🤥'])
 def test_pill_fallback_needs_four_and_posts_to_pillboard(board, emoji):
     h, db = board
     h.react(emoji, [1, 2, 3])

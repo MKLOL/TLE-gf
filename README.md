@@ -24,7 +24,7 @@ The features of the bot are split into a number of cogs, each handling their own
 ### Starboard fallback reactions
 
 Unconfigured reactions automatically use the configured ⭐ or 💊 board. A local
-heuristic reads custom emoji names or Unicode names: death, mockery, flag and pill
+heuristic reads custom emoji names or Unicode names: death, mockery, lying, flag and pill
 cues prefer 💊; ambiguous names default to ⭐. Only `reverse` negates a cue.
 There is no server-emote list, AI call, or automatic alias creation. Explicit
 emoji/alias configuration always wins, and a destination without a configured
