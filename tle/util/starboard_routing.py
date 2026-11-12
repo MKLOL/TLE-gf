@@ -48,6 +48,9 @@ def fallback_board(emoji):
         is_flag = len(emoji) == 2 and all('\U0001f1e6' <= c <= '\U0001f1ff' for c in emoji)
     words = re.findall(r'[a-z]+', name.casefold())
     compact = ''.join(words)
+    # "No star" is an opt-out, not a general-purpose "no" negation.
+    if compact == 'nostar':
+        return None
     negated = any(word in _NEGATIONS for word in words)
     for prefix in _NEGATIONS:
         if compact.startswith(prefix):

@@ -27,6 +27,7 @@ Unconfigured reactions automatically use the configured ⭐ or 💊 board. A loc
 heuristic reads custom emoji names or Unicode names: death, mockery, lying, flag and pill
 cues prefer 💊; ambiguous names default to ⭐. Only `reverse` negates a cue,
 excluding that reaction from both boards rather than redirecting it to ⭐.
+The `nostar` / `no_star` cue also opts out of both boards.
 There is no server-emote list, AI call, or automatic alias creation. Explicit
 emoji/alias configuration always wins, and a destination without a configured
 channel is skipped.

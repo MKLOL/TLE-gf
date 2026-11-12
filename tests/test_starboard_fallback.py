@@ -18,7 +18,8 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('<:reversepill:905>', None), ('<:reverse_star:906>', None),
     ('<:not_pill:907>', PILL), ('<:anti_skull:908>', PILL),
     ('<:no_pill:909>', PILL), ('<:un_skull:910>', PILL),
-    ('<:nostar:911>', STAR), ('<:catSob:912>', STAR),
+    ('<:nostar:911>', None), ('<:catSob:912>', STAR),
+    ('<a:NoStar:940>', None), ('<:no_star:941>', None), ('<:nostarch:942>', STAR),
     ('<:RoadTrip:913>', STAR), ('<:spill:914>', STAR),
     ('<:MysteryCreature:915>', STAR), ('<:Despair:916>', STAR),
     ('1️⃣', STAR), ('not-an-emoji', None),
@@ -91,24 +92,25 @@ def test_pill_fallback_needs_four_and_posts_to_pillboard(board, emoji):
     assert db.get_starboard_message_v1(MESSAGE, PILL).star_count == 4
 
 
-@pytest.mark.parametrize('reverse', [
+@pytest.mark.parametrize('ignored', [
     '<:reverse_pill:1473049768635666574>', '<:reversepill:99>', '<a:reverseSkull:100>',
+    '<:nostar:911>', '<a:NoStar:940>', '<:no_star:941>',
 ])
-def test_reverse_never_qualifies_for_either_board(board, reverse):
+def test_opt_out_never_qualifies_for_either_board(board, ignored):
     h, db = board
-    h.react(reverse, [1, 2, 3, 4])
-    asyncio.run(h.add(reverse, 4))
+    h.react(ignored, [1, 2, 3, 4])
+    asyncio.run(h.add(ignored, 4))
     assert not h.channels[STAR_CHANNEL].sent
     assert not h.channels[PILL_CHANNEL].sent
-    assert db.get_reactors(MESSAGE, reverse) == []
+    assert db.get_reactors(MESSAGE, ignored) == []
 
 
-def test_previously_stored_reverse_reactions_are_excluded_from_discovery(board):
+@pytest.mark.parametrize('ignored', ['<:reverse_pill:1473049768635666574>', '<:nostar:911>'])
+def test_previously_stored_opt_out_reactions_are_excluded_from_discovery(board, ignored):
     h, db = board
-    reverse = '<:reverse_pill:1473049768635666574>'
-    h.react(reverse, [10, 11, 12, 13])
+    h.react(ignored, [10, 11, 12, 13])
     for user in (10, 11, 12, 13):
-        db.add_reactor(MESSAGE, reverse, user)
+        db.add_reactor(MESSAGE, ignored, user)
     db.update_starboard_threshold(GUILD_A, STAR, 4)
     h.react(STAR, [1])
     asyncio.run(h.add(STAR, 1))
@@ -119,17 +121,17 @@ def test_previously_stored_reverse_reactions_are_excluded_from_discovery(board):
     assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 4
 
 
-def test_reverse_proxy_reaction_is_ignored(board):
+@pytest.mark.parametrize('ignored', ['<:reverse_pill:1473049768635666574>', '<:nostar:911>'])
+def test_opt_out_proxy_reaction_is_ignored(board, ignored):
     h, db = board
     h.react(GASP, [1, 2, 3, 4])
     asyncio.run(h.add(GASP, 4))
     post = h.channels[STAR_CHANNEL].sent[0]
     content = post.content
-    reverse = '<:reverse_pill:1473049768635666574>'
     for user in (10, 11, 12, 13):
-        asyncio.run(h.add(reverse, user, channel=STAR_CHANNEL, message=post.id))
+        asyncio.run(h.add(ignored, user, channel=STAR_CHANNEL, message=post.id))
     assert post.content == content
-    assert db.get_proxy_reactors(MESSAGE, reverse) == []
+    assert db.get_proxy_reactors(MESSAGE, ignored) == []
     assert not h.channels[PILL_CHANNEL].sent
 
 
