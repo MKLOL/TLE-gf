@@ -14,8 +14,8 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('<:chocoGasp:123>', STAR), ('🐘', STAR), ('💀', PILL), ('☠️', PILL),
     ('🤡', PILL), ('<a:brandNewClownDance:901>', PILL),
     ('<:spaceclown:901>', PILL), ('<:Robot_Dumb_42:902>', PILL),
-    ('<:reverse_pill:903>', STAR), ('<:reverseSkull:904>', STAR),
-    ('<:reversepill:905>', STAR), ('<:reverse_star:906>', None),
+    ('<:reverse_pill:903>', None), ('<:reverseSkull:904>', None),
+    ('<:reversepill:905>', None), ('<:reverse_star:906>', None),
     ('<:not_pill:907>', PILL), ('<:anti_skull:908>', PILL),
     ('<:no_pill:909>', PILL), ('<:un_skull:910>', PILL),
     ('<:nostar:911>', STAR), ('<:catSob:912>', STAR),
@@ -23,13 +23,13 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('<:MysteryCreature:915>', STAR), ('<:Despair:916>', STAR),
     ('1️⃣', STAR), ('not-an-emoji', None),
     ('<:flag_us:920>', PILL), ('<a:FlagVN:921>', PILL),
-    ('<:flagth:922>', PILL), ('<:reverse_flag:923>', STAR),
+    ('<:flagth:922>', PILL), ('<:reverse_flag:923>', None),
     ('🇻🇳', PILL), ('🇺🇸', PILL), ('🇹🇭', PILL), ('🇪🇺', PILL),
     ('🏳️', PILL), ('🏴', PILL), ('🏳️‍🌈', PILL), ('🏴‍☠️', PILL),
     ('🏁', PILL), ('🚩', PILL), ('🇻', STAR),
     ('<:lying:930>', PILL), ('<:toxicpie_lying_face:931>', PILL),
     ('<a:LyingFace:932>', PILL), ('<:lyingcat:933>', PILL),
-    ('🤥', PILL), ('<:reverse_lying:934>', STAR),
+    ('🤥', PILL), ('<:reverse_lying:934>', None),
     ('<:flying:935>', STAR), ('<:truthful_face:936>', STAR),
 ])
 def test_generic_name_cues(emoji, expected):
@@ -91,12 +91,45 @@ def test_pill_fallback_needs_four_and_posts_to_pillboard(board, emoji):
     assert db.get_starboard_message_v1(MESSAGE, PILL).star_count == 4
 
 
-def test_reverse_only_routes_to_starboard(board):
-    h, _ = board
-    reverse = '<:reverse_pill:99>'
-    h.react(reverse, [1, 2, 3])
-    asyncio.run(h.add(reverse, 3))
-    assert h.channels[STAR_CHANNEL].sent[0].content.startswith(reverse)
+@pytest.mark.parametrize('reverse', [
+    '<:reverse_pill:1473049768635666574>', '<:reversepill:99>', '<a:reverseSkull:100>',
+])
+def test_reverse_never_qualifies_for_either_board(board, reverse):
+    h, db = board
+    h.react(reverse, [1, 2, 3, 4])
+    asyncio.run(h.add(reverse, 4))
+    assert not h.channels[STAR_CHANNEL].sent
+    assert not h.channels[PILL_CHANNEL].sent
+    assert db.get_reactors(MESSAGE, reverse) == []
+
+
+def test_previously_stored_reverse_reactions_are_excluded_from_discovery(board):
+    h, db = board
+    reverse = '<:reverse_pill:1473049768635666574>'
+    h.react(reverse, [10, 11, 12, 13])
+    for user in (10, 11, 12, 13):
+        db.add_reactor(MESSAGE, reverse, user)
+    db.update_starboard_threshold(GUILD_A, STAR, 4)
+    h.react(STAR, [1])
+    asyncio.run(h.add(STAR, 1))
+    assert not h.channels[STAR_CHANNEL].sent
+    h.react(STAR, [1, 2, 3, 4])
+    asyncio.run(h.add(STAR, 4))
+    assert h.channels[STAR_CHANNEL].sent[0].content == f'{STAR} **4** | {h.message.jump_url}'
+    assert db.get_starboard_message_v1(MESSAGE, STAR).star_count == 4
+
+
+def test_reverse_proxy_reaction_is_ignored(board):
+    h, db = board
+    h.react(GASP, [1, 2, 3, 4])
+    asyncio.run(h.add(GASP, 4))
+    post = h.channels[STAR_CHANNEL].sent[0]
+    content = post.content
+    reverse = '<:reverse_pill:1473049768635666574>'
+    for user in (10, 11, 12, 13):
+        asyncio.run(h.add(reverse, user, channel=STAR_CHANNEL, message=post.id))
+    assert post.content == content
+    assert db.get_proxy_reactors(MESSAGE, reverse) == []
     assert not h.channels[PILL_CHANNEL].sent
 
 

@@ -25,7 +25,8 @@ The features of the bot are split into a number of cogs, each handling their own
 
 Unconfigured reactions automatically use the configured ⭐ or 💊 board. A local
 heuristic reads custom emoji names or Unicode names: death, mockery, lying, flag and pill
-cues prefer 💊; ambiguous names default to ⭐. Only `reverse` negates a cue.
+cues prefer 💊; ambiguous names default to ⭐. Only `reverse` negates a cue,
+excluding that reaction from both boards rather than redirecting it to ⭐.
 There is no server-emote list, AI call, or automatic alias creation. Explicit
 emoji/alias configuration always wins, and a destination without a configured
 channel is skipped.

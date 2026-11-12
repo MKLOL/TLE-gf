@@ -49,13 +49,12 @@ def fallback_board(emoji):
     words = re.findall(r'[a-z]+', name.casefold())
     compact = ''.join(words)
     negated = any(word in _NEGATIONS for word in words)
-    stripped = compact
     for prefix in _NEGATIONS:
         if compact.startswith(prefix):
             remainder = compact[len(prefix):]
             if _has_cue([remainder], _PILL_WORDS | {'star'}):
-                negated, stripped = True, remainder
+                negated = True
                 break
     if negated:
-        return None if _has_cue(words + [stripped], {'star'}) else STAR
+        return None  # Reverse reactions opt out of both boards.
     return PILL if is_flag or _has_cue(words, _PILL_WORDS) else STAR
