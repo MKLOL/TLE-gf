@@ -17,17 +17,17 @@ _NEGATIONS = ('reverse', 'nostar')
 _PILL_WORDS = frozenset({
     'pill', 'pills', 'skull', 'clown', 'dead', 'death', 'dying',
     'dumb', 'idiot', 'stupid', 'copium', 'cope', 'gun', 'pistol',
-    'kms', 'rip', 'flag', 'lying', 'aubergine', 'eggplant',
+    'kms', 'rip', 'flag', 'lying', 'wind', 'egg', 'aubergine',
 })
 
 
 def _has_cue(words, cues):
-    # Long cues also work at compound-name edges (e.g. lowercase catclown).
-    # Short words require a boundary: "rip" must not match "trip".
+    # Cues work at compound-name starts (eggplant) and long-cue ends (catclown).
+    # Short suffixes require a boundary: "rip" must not match "trip".
     # Require a plausible other word in compounds: "spill" is not "pill".
-    return any(word in (cue, cue + 's') or (len(cue) >= 4 and
+    return any(word in (cue, cue + 's') or (len(cue) >= 3 and
                len(word) >= len(cue) + 3 and
-               (word.startswith(cue) or word.endswith(cue)))
+               (word.startswith(cue) or (len(cue) >= 4 and word.endswith(cue))))
                for word in words for cue in cues)
 
 
