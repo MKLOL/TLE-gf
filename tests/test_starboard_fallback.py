@@ -41,6 +41,9 @@ from tle.util.starboard_routing import STAR, PILL, fallback_board
     ('<:reverseeggplant:959>', None), ('<:beggar:960>', STAR),
     ('💉', PILL), ('<:syringe:961>', PILL), ('<a:SyringeDance:962>', PILL),
     ('<:reverse_syringe:963>', None),
+    ('<:fuck:970>', PILL), ('<:holyfuck:971>', PILL),
+    ('<a:greenholyfuck:972>', PILL), ('<:HolyFuck:973>', PILL),
+    ('<:reverse_fuck:974>', None),
 ])
 def test_generic_name_cues(emoji, expected):
     assert fallback_board(emoji) == expected
@@ -91,6 +94,7 @@ def test_mixed_header_discovered_on_first_event_and_updated_in_place(board):
 @pytest.mark.parametrize('emoji', [
     '💀', '🇻🇳', '<:flagth:922>', '<:lying:930>', '🤥', '🍆',
     '🎐', '<:wind_chime:953>', '🥚', '<:eggdance:957>', '💉', '<:syringe:961>',
+    '<:fuck:970>', '<:holyfuck:971>',
 ])
 def test_pill_fallback_needs_four_and_posts_to_pillboard(board, emoji):
     h, db = board
