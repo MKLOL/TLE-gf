@@ -13,6 +13,7 @@ import discord
 from tle import constants
 from tle.util import codeforces_common as cf_common
 from tle.cogs._starboard_attachments import _attachment_is_spoiler
+from tle.cogs._starboard_stickers import sticker_media
 from tle.cogs._starboard_images import (
     CARRIED_EMBED_TYPES, carried_image_urls, preview_image_urls,
 )
@@ -94,7 +95,8 @@ def _is_forward_message(message):
 def _has_renderable_content(message):
     return bool(getattr(message, 'content', None)
                 or getattr(message, 'attachments', None)
-                or getattr(message, 'embeds', None))
+                or getattr(message, 'embeds', None)
+                or getattr(message, 'stickers', None))
 
 def _is_starboard_eligible(message, rendered=None):
     is_forward = _is_forward_message(message)
@@ -301,6 +303,8 @@ async def build_starboard_message(message, emoji_str, count, color,
     # That image belongs to the carried card, not the header/gallery too.
     carried_urls = carried_image_urls(rendered.embeds)
     image_urls = [url for url in image_urls if url not in carried_urls]
+    sticker_urls, sticker_note = sticker_media(rendered)
+    image_urls.extend(sticker_urls)
     image_url = image_urls[0] if image_urls else None
     has_video = bool(video_attachments)
     has_audio = bool(audio_attachments)
@@ -395,6 +399,10 @@ async def build_starboard_message(message, emoji_str, count, color,
                         ref_image_url = e.thumbnail.url
                         break
 
+            ref_sticker_urls, ref_sticker_note = sticker_media(ref_msg)
+            ref_image_url = ref_image_url or next(iter(ref_sticker_urls), None)
+            if ref_sticker_note:
+                reply_embed.add_field(name='Sticker', value=ref_sticker_note, inline=False)
             if ref_image_url:
                 reply_embed.set_image(url=ref_image_url)
 
@@ -402,7 +410,7 @@ async def build_starboard_message(message, emoji_str, count, color,
             # An embed with just an author header + timestamp looks
             # empty and ugly.  Use local variables rather than embed
             # attributes to avoid discord.py API differences.
-            if ref_msg.content or ref_image_url or ref_other_attachments:
+            if ref_msg.content or ref_image_url or ref_other_attachments or ref_sticker_note:
                 embeds.append(reply_embed)
         except Exception:
             logger.debug(f'Could not fetch referenced message {message.reference.message_id}')
@@ -410,7 +418,7 @@ async def build_starboard_message(message, emoji_str, count, color,
     # --- Main embed ---
     # For media-only messages (no text), skip the main embed entirely.
     has_text = bool(rendered.content)
-    has_other = bool(other_attachments)
+    has_other = bool(other_attachments) or bool(sticker_note)
     need_embed = not has_media_files or has_text or has_other or image_url
 
     if need_embed:
@@ -430,6 +438,8 @@ async def build_starboard_message(message, emoji_str, count, color,
 
         if image_url:
             embed.set_image(url=image_url)
+        if sticker_note:
+            embed.add_field(name='Sticker', value=sticker_note, inline=False)
 
         for att in other_attachments:
             safe_name = att.filename.replace('`', '\u02CB')
