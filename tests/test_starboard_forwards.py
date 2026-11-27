@@ -389,3 +389,44 @@ def test_empty_forward_without_snapshot_or_source_is_rejected(db, monkeypatch):
             emoji_str=PILL,
             payload=_Payload(),
         ))
+
+
+@pytest.mark.parametrize('emoji', [PILL, '\N{WHITE MEDIUM STAR}'])
+def test_cross_guild_image_only_forward_posts_without_source_access(db, monkeypatch, emoji):
+    """A snapshot of a reply needs neither outer text nor access to its guild."""
+    from tle.util import codeforces_common as cf_common
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(cf_common, 'user_db', db)
+    db.add_starboard_emoji(GUILD_A, emoji, 4, 0xffaa10)
+    db.set_starboard_channel(GUILD_A, emoji, '888')
+    image_url = 'https://cdn.example.com/forwarded.png'
+    snapshot = _Snapshot(attachments=[_FakeAttachment('forwarded.png', image_url)])
+    snapshot.type = discord.MessageType.reply
+    reference = _FakeReference(message_id=1575610267109433384)
+    reference.type = discord.MessageReferenceType.forward
+    reference.channel_id = 1275845498485477409
+    reference.guild_id = 1275845498485477406
+    message = _ForwardedMessage(snapshot, reference=reference,
+                                reactions=[_Reaction(emoji, range(1, 8))])
+    message.flags = SimpleNamespace(value=16384)
+    source_channel = _SourceChannel(_Payload.channel_id, message)
+    board_channel = _StarboardChannel(888)
+    bot = _Bot(_Guild(GUILD_A, board_channel), source_channel)
+    bot.fetch_channel = AsyncMock(side_effect=AssertionError('Source guild is inaccessible'))
+    cog = Starboard.__new__(Starboard)
+    cog.bot, cog.locks = bot, {}
+    payload = _Payload()
+    payload.emoji = emoji
+
+    _run(cog._handle_reaction_add(payload))
+
+    bot.fetch_channel.assert_not_called()
+    assert len(board_channel.sent) == 1
+    sent = board_channel.sent[0]
+    assert sent['content'] == f'{emoji} **7** | {message.jump_url}'
+    assert len(sent['embeds']) == 1
+    assert sent['embeds'][0].image_url == image_url
+    assert sent['embeds'][0].timestamp == snapshot.created_at
+    assert sent['embeds'][0].author_data['name'] == 'Forwarded by TestUser'
+    assert db.get_starboard_message_v1(message.id, emoji).star_count == 7
